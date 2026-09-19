@@ -10,6 +10,13 @@ Items are grouped by focus area and can be prioritized into structured version m
 
 Because MP3MetaFix is tailored for processing AI-generated music downloads from platforms like [Suno.com](https://suno.com), specialized workflow enhancements can streamline tagging and organization:
 
+- [ ] **Synchronized Lyrics (.lrc) Exporter & Interactive Karaoke Mode**:
+  - **Interactive Karaoke Teleprompter**: Live scrolling lyrics display synchronized to audio playback for singer-songwriters and vocalists.
+  - **"Tap-to-Sync" Timing Editor**: Intuitive editor allowing users to tap <kbd>Space</kbd> or click to stamp precise timestamps onto each lyric line as the song plays.
+  - **Export & Tagging**: Export to standard time-stamped `.lrc` sidecar files or embed directly into the ID3 `SYLT` (Synchronized Lyrics) frame.
+- [ ] **Generation Lineage & Prompt Graph Tracker**:
+  - Track AI generation parentage (*v1 -> extend -> full song -> stems*).
+  - Store seed numbers, style prompts, and variation lineage in custom `TXXX:SUNO_ID` or `COMM` frames.
 - [ ] **Suno Metadata Auto-Parser**:
   - Paste a Suno track URL, share link, or prompt text box to automatically parse and populate:
     - Track Title & Subtitle / Variation name (e.g., *Full Song*, *Part 2*, *Extended*)
@@ -87,14 +94,20 @@ Expand the underlying audio engine beyond MP3:
 
 ---
 
-## ✂️ 6. Audio Utilities & Editing Tools
+## ✂️ 6. Audio Analysis, Visualization & Editing Tools
 
+- [ ] **Interactive Audio Waveform Display**:
+  - Render a dynamic, multi-color audio waveform using the Web Audio API / Canvas.
+  - Visual peak inspection, energy markers (Intro, Verse, Chorus Drop, Outro), and direct click-to-seek navigation.
+- [ ] **Automatic BPM & Musical Key Detection**:
+  - Auto-calculate musical tempo (BPM) and harmonic key (e.g. *8A / A minor*) using audio signal analysis.
+  - Automatically write standard ID3 `TBPM` and `TKEY` frames for DJ and playlist curation.
 - [ ] **Lossless Silence Trimming**:
   - Auto-detect and trim lead-in and tail silence commonly present on AI-generated audio without re-encoding the audio stream.
 - [ ] **Audio Fading (Fade-in / Fade-out)**:
   - Smooth 1–3 second fade-out tool for abrupt endings in generated tracks.
-- [ ] **Volume Normalization / ReplayGain**:
-  - Calculate and write standard ReplayGain / EBU R128 volume tags.
+- [ ] **Loudness Normalization & ReplayGain**:
+  - Calculate and write standard ReplayGain / EBU R128 volume tags and Spotify/YouTube mastering targets (-14 LUFS).
 
 ---
 
@@ -126,6 +139,24 @@ Expand the underlying audio engine beyond MP3:
   - Optional MusicBrainz / AcoustID fingerprinting for commercial and remix identification.
 - [ ] **PWA (Progressive Web App)**:
   - Offline capability and installation as a standalone progressive desktop app.
+
+---
+
+## 🏗️ 9. Architectural Foundations for File Storage & Manipulation Fork
+
+Foundational abstractions designed to enable seamless forking into a broader self-hosted file management, media asset storage, and manipulation platform:
+
+- [ ] **Pluggable Storage Backend Drivers (`StorageProvider`)**:
+  - Abstract storage interface (`get()`, `put()`, `stream()`, `list()`, `delete()`).
+  - Drivers for Local File System, TrueNAS/SMB/NFS shared mounts, and S3/MinIO Object Storage.
+- [ ] **Embedded SQLite / DuckDB Metadata & Library Catalog**:
+  - Lightweight WAL-mode database layer enabling persistent indexed search, tag filtering, key/BPM queries, deduplication hashing, and smart playlists across stored files.
+- [ ] **Asynchronous Task Worker Queue**:
+  - Non-blocking job runner with real-time SSE progress streaming for heavy batch audio transcoding (e.g. WAV -> MP3 320kbps), multi-gigabyte ZIP packaging, and video remuxing.
+- [ ] **Universal Sidecar & NFO/JSON Exporter**:
+  - Automated generation of `.nfo`, `.json`, and `.xml` companion metadata files compatible with Plex, Jellyfin, Kodi, and media indexers.
+- [ ] **Deep Binary Header & Hex / Frame Inspector**:
+  - In-browser byte inspector for raw container streams, ID3 frame tables, EXIF metadata, and media tracks.
 
 ---
 
