@@ -15,10 +15,14 @@ ExecStart=%INSTALL_DIR%/.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port
 Restart=always
 RestartSec=3
 
-# Hardening options
+# Hardening and Resource Sandboxing options
 ProtectSystem=full
 PrivateTmp=true
 NoNewPrivileges=true
+MemoryMax=512M
+TasksMax=64
+CPUQuota=80%
 
 [Install]
 WantedBy=multi-user.target
+

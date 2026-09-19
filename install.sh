@@ -290,6 +290,9 @@ Environment="MP3METAFIX_TRUST_PROXIES=true"
 ExecStart=${INSTALL_DIR}/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port ${TARGET_PORT} --workers 2
 Restart=always
 RestartSec=3
+MemoryMax=512M
+TasksMax=64
+CPUQuota=80%
 
 [Install]
 WantedBy=default.target

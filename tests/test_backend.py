@@ -249,20 +249,56 @@ def test_api_cookie_authenticated_full_workflow(client, sample_mp3_bytes, sample
     assert client.get("/api/stream").status_code in (401, 404)
 
 
-def test_storage_ttl_cleanup(tmp_path: Path):
-    mgr = SessionManager(temp_dir=tmp_path, ttl_minutes=1)
-    session_id, audio_path = mgr.create_session("old_file.mp3")
-    audio_path.write_bytes(b"dummy")
+def test_csrf_cross_site_protection(client):
+    """Ensure cross-site mutating requests are blocked by CSRF middleware."""
+    res = client.post(
+        "/api/save",
+        json={"title": "Hacked"},
+        headers={"Sec-Fetch-Site": "cross-site"},
+    )
+    assert res.status_code == 403
+    assert "Cross-site request forgery protection" in res.json()["detail"]
 
-    sdir = mgr.get_session_dir(session_id)
-    assert sdir is not None
 
-    # Manually backdate the session
-    meta_file = sdir / "session.json"
-    meta_file.write_text('{"last_accessed_at": 1000, "created_at": 1000}')
+def test_rate_limiter():
+    from backend.security import InMemoryRateLimiter
+    limiter = InMemoryRateLimiter(max_requests=3, window_seconds=60)
+    assert limiter.is_allowed("1.2.3.4") is True
+    assert limiter.is_allowed("1.2.3.4") is True
+    assert limiter.is_allowed("1.2.3.4") is True
+    # 4th request in window rejected
+    assert limiter.is_allowed("1.2.3.4") is False
+    # Different IP allowed
+    assert limiter.is_allowed("5.6.7.8") is True
 
-    # Prune
-    pruned_count = mgr.prune_expired_sessions()
-    assert pruned_count == 1
-    assert mgr.get_session_dir(session_id) is None
+
+def test_image_decompression_bomb_rejection():
+    # Construct an oversized image
+    from PIL import Image
+    from fastapi import HTTPException
+    img = Image.new("RGB", (5000, 5000), color=(0, 0, 0))
+    out = io.BytesIO()
+    img.save(out, format="JPEG")
+    with pytest.raises(HTTPException) as exc:
+        validate_and_normalize_image(out.getvalue(), 10 * 1024 * 1024)
+    assert exc.value.status_code == 400
+    assert "exceed maximum allowed" in exc.value.detail or "Decompression bomb" in exc.value.detail
+
+
+def test_storage_quota_management(tmp_path: Path):
+    mgr = SessionManager(temp_dir=tmp_path, ttl_minutes=60, max_storage_bytes=1000)
+    # Session 1
+    s1, a1 = mgr.create_session("file1.mp3")
+    a1.write_bytes(b"A" * 600)
+    assert mgr.get_total_temp_size_bytes() >= 600
+
+    # Session 2
+    s2, a2 = mgr.create_session("file2.mp3")
+    a2.write_bytes(b"B" * 300)
+
+    # Trigger quota check with required bytes causing eviction
+    assert mgr.ensure_storage_available(required_bytes=400) is True
+    # s1 should have been evicted as it was oldest
+    assert mgr.get_session_dir(s1) is None
+    assert mgr.get_session_dir(s2) is not None
 

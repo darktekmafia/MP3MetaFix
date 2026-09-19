@@ -44,11 +44,13 @@ from backend.config import (
 )
 from backend.security import (
     SecurityHeadersMiddleware,
+    CSRFProtectionMiddleware,
     validate_mp3_magic_bytes,
     validate_and_normalize_image,
     sanitize_filename,
     create_signed_session_token,
     verify_signed_session_token,
+    upload_rate_limiter,
 )
 from backend.storage import (
     storage_manager,
@@ -94,8 +96,9 @@ app = FastAPI(
 if TRUST_PROXIES:
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
 
-# Security headers middleware
+# Security & CSRF headers middleware
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(CSRFProtectionMiddleware)
 
 # CORS setup (allow same-origin by default, expandable if needed)
 app.add_middleware(
@@ -141,10 +144,25 @@ async def get_app_version():
 
 
 @app.post("/api/upload")
-async def upload_mp3(response: Response, file: UploadFile = File(...)):
+async def upload_mp3(request: Request, response: Response, file: UploadFile = File(...)):
     """Upload an MP3 file, validate magic bytes, create authenticated session cookie, and extract metadata."""
+    # 1. Rate Limiting Check
+    client_ip = upload_rate_limiter.get_client_ip(request)
+    if not upload_rate_limiter.is_allowed(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many upload requests. Please slow down.",
+        )
+
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file provided")
+
+    # 2. Storage Quota Check
+    if not storage_manager.ensure_storage_available(required_bytes=10 * 1024 * 1024):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server temporary storage quota exceeded. Please try again later.",
+        )
 
     # Read initial chunk to validate magic bytes without storing entire file in memory
     header_chunk = await file.read(8192)

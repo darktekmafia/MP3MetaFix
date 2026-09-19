@@ -9,7 +9,11 @@ import logging
 import asyncio
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
-from backend.config import TEMP_DIR, SESSION_TTL_MINUTES
+from backend.config import (
+    TEMP_DIR,
+    SESSION_TTL_MINUTES,
+    MAX_GLOBAL_TEMP_STORAGE_BYTES,
+)
 from backend.security import sanitize_filename, get_storage_dir_name
 
 logger = logging.getLogger("mp3metafix.storage")
@@ -17,10 +21,70 @@ logger = logging.getLogger("mp3metafix.storage")
 class SessionManager:
     """Manages isolated session directories and automated TTL lifecycle cleanup."""
 
-    def __init__(self, temp_dir: Path = TEMP_DIR, ttl_minutes: int = SESSION_TTL_MINUTES):
+    def __init__(
+        self,
+        temp_dir: Path = TEMP_DIR,
+        ttl_minutes: int = SESSION_TTL_MINUTES,
+        max_storage_bytes: int = MAX_GLOBAL_TEMP_STORAGE_BYTES,
+    ):
         self.temp_dir = temp_dir
         self.ttl_seconds = ttl_minutes * 60
+        self.max_storage_bytes = max_storage_bytes
         self.temp_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_total_temp_size_bytes(self) -> int:
+        """Calculate total disk space consumed by all sessions in data/temp."""
+        total = 0
+        if not self.temp_dir.exists():
+            return 0
+        try:
+            for dirpath, _, filenames in os.walk(self.temp_dir):
+                for f in filenames:
+                    fp = os.path.join(dirpath, f)
+                    try:
+                        total += os.path.getsize(fp)
+                    except OSError:
+                        pass
+        except Exception as e:
+            logger.warning(f"Could not calculate temp storage size: {e}")
+        return total
+
+    def ensure_storage_available(self, required_bytes: int = 0) -> bool:
+        """Verify storage quota and trigger LRU eviction of oldest sessions if nearing limits."""
+        current_size = self.get_total_temp_size_bytes()
+        if current_size + required_bytes <= self.max_storage_bytes:
+            return True
+
+        logger.warning(f"Temp storage approaching limit ({current_size / (1024*1024):.1f}MB). Running LRU eviction...")
+        # Gather all session dirs with their last_accessed_at timestamp
+        sessions = []
+        if self.temp_dir.exists():
+            for item in self.temp_dir.iterdir():
+                if item.is_dir():
+                    meta_file = item / "session.json"
+                    last_active = item.stat().st_mtime
+                    if meta_file.is_file():
+                        try:
+                            with open(meta_file, "r", encoding="utf-8") as f:
+                                meta = json.load(f)
+                                last_active = meta.get("last_accessed_at", last_active)
+                        except Exception:
+                            pass
+                    sessions.append((last_active, item))
+
+        # Sort oldest first
+        sessions.sort(key=lambda x: x[0])
+        for _, sdir in sessions:
+            try:
+                shutil.rmtree(sdir, ignore_errors=True)
+                current_size = self.get_total_temp_size_bytes()
+                if current_size + required_bytes <= self.max_storage_bytes:
+                    logger.info("Storage quota restored after LRU eviction.")
+                    return True
+            except Exception as e:
+                logger.error(f"Failed to evict old session {sdir}: {e}")
+
+        return (current_size + required_bytes <= self.max_storage_bytes)
 
     def create_session(self, original_filename: str) -> Tuple[str, Path]:
         """Create a new unique session directory for an uploaded file using a decoupled hash."""

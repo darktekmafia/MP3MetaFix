@@ -120,6 +120,12 @@ def validate_mp3_magic_bytes(header_bytes: bytes) -> bool:
     return False
 
 
+# Pillow Decompression Bomb & Resource Protection
+# Cap image pixels to ~10 million (e.g., 3162x3162) to prevent memory exhaustion DoS
+Image.MAX_IMAGE_PIXELS = 10_000_000
+MAX_COVER_ART_DIMENSION = 4096
+
+
 def validate_and_normalize_image(image_bytes: bytes, max_bytes: int) -> Tuple[bytes, str]:
     """Validate image magic bytes, format, and dimensions using Pillow. Returns (clean_bytes, mime_type)."""
     if len(image_bytes) > max_bytes:
@@ -143,15 +149,26 @@ def validate_and_normalize_image(image_bytes: bytes, max_bytes: int) -> Tuple[by
     try:
         with Image.open(io.BytesIO(image_bytes)) as img:
             img.verify()
+    except Image.DecompressionBombError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Decompression bomb detected: Image exceeds maximum pixel limit ({e})",
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Corrupted or invalid image file: {str(e)}",
         )
 
-    # Re-open for conversion/standardization (since verify() closes the stream)
+    # Re-open for conversion/standardization and dimension validation
     try:
         with Image.open(io.BytesIO(image_bytes)) as img:
+            if img.width > MAX_COVER_ART_DIMENSION or img.height > MAX_COVER_ART_DIMENSION:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Image dimensions ({img.width}x{img.height}) exceed maximum allowed ({MAX_COVER_ART_DIMENSION}x{MAX_COVER_ART_DIMENSION})",
+                )
+
             fmt = (img.format or "JPEG").upper()
             if fmt in ("JPEG", "JPG"):
                 mime_type = "image/jpeg"
@@ -215,3 +232,74 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         ]
         response.headers["Content-Security-Policy"] = "; ".join(csp_directives)
         return response
+
+
+class CSRFProtectionMiddleware(BaseHTTPMiddleware):
+    """Middleware preventing Cross-Site Request Forgery (CSRF) on state-changing endpoints."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Only inspect state-mutating requests
+        if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+            # Check Sec-Fetch-Site (supported by modern browsers)
+            fetch_site = request.headers.get("sec-fetch-site", "").lower()
+            if fetch_site == "cross-site":
+                from starlette.responses import JSONResponse
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"detail": "Cross-site request forgery protection blocked this request."},
+                )
+
+            # Check Origin header if present
+            origin = request.headers.get("origin")
+            if origin:
+                origin_host = origin.split("://")[-1].split("/")[0].lower()
+                request_host = request.headers.get("host", "").lower()
+                if origin_host and request_host and origin_host != request_host:
+                    dev_hosts = {"localhost", "127.0.0.1"}
+                    o_clean = origin_host.split(":")[0]
+                    r_clean = request_host.split(":")[0]
+                    if not (o_clean in dev_hosts and r_clean in dev_hosts):
+                        from starlette.responses import JSONResponse
+                        return JSONResponse(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            content={"detail": "Untrusted Origin blocked."},
+                        )
+
+        return await call_next(request)
+
+
+class InMemoryRateLimiter:
+    """Sliding-window in-memory rate limiter per IP address."""
+
+    def __init__(self, max_requests: int = 25, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        import time
+        from collections import defaultdict
+        self.history = defaultdict(list)
+
+    def is_allowed(self, client_ip: str) -> bool:
+        import time
+        now = time.time()
+        window_start = now - self.window_seconds
+
+        req_times = [t for t in self.history[client_ip] if t > window_start]
+        self.history[client_ip] = req_times
+
+        if len(req_times) >= self.max_requests:
+            return False
+
+        self.history[client_ip].append(now)
+        return True
+
+    def get_client_ip(self, request: Request) -> str:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        if request.client and request.client.host:
+            return request.client.host
+        return "127.0.0.1"
+
+
+upload_rate_limiter = InMemoryRateLimiter(max_requests=25, window_seconds=60)
+
