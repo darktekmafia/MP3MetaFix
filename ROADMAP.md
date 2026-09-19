@@ -98,7 +98,21 @@ Expand the underlying audio engine beyond MP3:
 
 ---
 
-## 🌐 7. Integrations, Packaging & Deployment
+## 🎨 7. UI/UX, Themes & Personalization
+
+- [ ] **Light Mode & Dark Mode Support**:
+  - Theme toggle switch in header/settings (Dark, Light, System Default).
+  - Clean, high-contrast light mode palette tailored with subtle glassmorphic cards, crisp borders, and modern typography.
+  - Persistent user preference saved in `localStorage`.
+  - Automatic synchronization with OS `prefers-color-scheme` media queries.
+  - Smooth CSS variable transitions between themes without jarring color jumps or reload flashes.
+- [ ] **UI Density & Customization**:
+  - Compact table view vs spacious editing panel mode.
+  - Customizable default landing tab (e.g. Essential vs Advanced tags vs Lyrics).
+
+---
+
+## 🌐 8. Integrations, Packaging & Deployment
 
 - [ ] **Official Docker & OCI Container Images**:
   - Multi-arch Dockerfile (`linux/amd64`, `linux/arm64`) published to GitHub Container Registry (GHCR) for unRAID, TrueNAS, and Kubernetes deployment.
