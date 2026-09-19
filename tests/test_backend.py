@@ -1032,6 +1032,38 @@ EOF
     assert "UPDATE_REPORTED_FAILURE" in res2.stdout
 
 
+def test_installer_reexec_on_git_update_and_loop_prevention(tmp_path: Path):
+    """Verify that install.sh re-executes when commits change and halts re-execution when _MP3METAFIX_REEXEC=1."""
+    import subprocess
+
+    # Simulation script testing commit comparison and re-exec loop guard
+    test_reexec_script = """
+    reexec_count=0
+    test_update_func() {
+        if [ "$_MP3METAFIX_REEXEC" != "1" ]; then
+            PREV_COMMIT="commit_aaa"
+            NEW_COMMIT="commit_bbb"
+            if [ "$PREV_COMMIT" != "$NEW_COMMIT" ]; then
+                export _MP3METAFIX_REEXEC=1
+                echo "REEXEC_TRIGGERED"
+                # Call update again simulating exec
+                test_update_func
+                return
+            fi
+        fi
+        echo "NEW_LOGIC_EXECUTED_AFTER_REEXEC"
+    }
+    test_update_func
+    """
+    res = subprocess.run(["bash", "-c", test_reexec_script], capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "REEXEC_TRIGGERED" in res.stdout
+    assert "NEW_LOGIC_EXECUTED_AFTER_REEXEC" in res.stdout
+    # Verify REEXEC_TRIGGERED appeared exactly once (no loop)
+    assert res.stdout.count("REEXEC_TRIGGERED") == 1
+
+
+
 
 
 

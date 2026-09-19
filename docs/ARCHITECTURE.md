@@ -124,3 +124,4 @@ MP3MetaFix packages an intelligent, non-destructive migration engine (`scripts/m
 - **Safety Rejection**: Explicitly rejects compound commands, subshells, shell pipelines (`|`), redirects (`>`), and invalid syntax to prevent unit corruption.
 - **Atomic State Updates**: Creates temporary unit files in the target directory, mirrors original POSIX file mode and ownership, and performs atomic replacement via `os.replace`.
 - **Customization Preservation**: Updates only the Uvicorn launch flags (`--no-proxy-headers`, `--host $MP3METAFIX_HOST`, `--port $MP3METAFIX_PORT`) while preserving all administrator-defined environment variables, workers, and sandboxing limits (`MemoryMax`, `TasksMax`, `CPUQuota`).
+- **Self-Re-Executing Updates**: Re-executes the installer process image in-place (`exec bash`) when new commits are pulled, guaranteeing that newly introduced migrations and fixes execute immediately during the initial update run.

@@ -5,6 +5,18 @@ All notable changes to **MP3MetaFix** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-09-19
+
+### Fixed
+- **Self-Updating Installer Seamless Re-Execution**:
+  - Implemented automatic shell re-execution (`exec bash "${INSTALL_DIR}/install.sh" "${ORIG_ARGS[@]}"`) upon pulling new commits in `install.sh --update`.
+  - Ensures the newly fetched installer and migration logic executes immediately during the very first update run without requiring a second manual update.
+  - Added loop protection via commit hash differential checks and `_MP3METAFIX_REEXEC=1` environment guard.
+- **Cache-Busting Asset Refresh**:
+  - Bumped static asset query strings (`?v=0.3.3`) across `frontend/index.html`.
+
+---
+
 ## [0.3.2] - 2026-09-19
 
 ### Fixed

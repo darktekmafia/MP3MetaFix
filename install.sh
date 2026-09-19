@@ -6,6 +6,7 @@
 
 set -e
 
+ORIG_ARGS=("$@")
 APP_NAME="mp3metafix"
 APP_DISPLAY_NAME="MP3MetaFix"
 DEFAULT_PORT=8844
@@ -15,7 +16,7 @@ VERSION_FILE="${INSTALL_DIR}/VERSION"
 if [ -f "$VERSION_FILE" ]; then
     VERSION="$(cat "$VERSION_FILE" | tr -d '[:space:]')"
 else
-    VERSION="0.3.2"
+    VERSION="0.3.3"
 fi
 
 # Colors for output
@@ -458,9 +459,19 @@ do_update() {
 
     # If git repo, pull latest
     if [ -d "${INSTALL_DIR}/.git" ]; then
-        log_info "Checking for git updates..."
-        git -C "$INSTALL_DIR" fetch --tags || true
-        git -C "$INSTALL_DIR" pull origin main || git -C "$INSTALL_DIR" pull || true
+        if [ "$_MP3METAFIX_REEXEC" != "1" ]; then
+            log_info "Checking for git updates..."
+            PREV_COMMIT=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)
+            git -C "$INSTALL_DIR" fetch --tags || true
+            git -C "$INSTALL_DIR" pull origin main || git -C "$INSTALL_DIR" pull || true
+            NEW_COMMIT=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)
+
+            if [ -n "$PREV_COMMIT" ] && [ -n "$NEW_COMMIT" ] && [ "$PREV_COMMIT" != "$NEW_COMMIT" ]; then
+                log_info "Fetched updates (${PREV_COMMIT:0:7} -> ${NEW_COMMIT:0:7}). Re-executing updated installer..."
+                export _MP3METAFIX_REEXEC=1
+                exec bash "${INSTALL_DIR}/install.sh" "${ORIG_ARGS[@]}"
+            fi
+        fi
     fi
 
     # Reload version from disk after git pull to prevent stale version reporting

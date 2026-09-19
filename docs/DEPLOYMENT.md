@@ -156,7 +156,7 @@ cd /opt/mp3metafix
 sudo ./install.sh --update
 ```
 This automatically:
-1. Fetches the newest release and reloads `VERSION`.
+1. Fetches the newest release, seamlessly re-executes the updated installer in-place, and reloads `VERSION`.
 2. Updates Python virtual environment dependencies.
 3. Automatically and safely migrates existing systemd units (`/etc/systemd/system/mp3metafix.service` or `~/.config/systemd/user/mp3metafix.service`) using `scripts/migrate_service.py` to upgrade legacy launch commands to use `--no-proxy-headers` and `$MP3METAFIX_HOST` / `$MP3METAFIX_PORT` without overwriting administrator environment variables, workers, or cgroups.
 4. Executes `systemctl daemon-reload` and restarts the service.

@@ -106,6 +106,7 @@ This document logs the threat model, attack surface analysis, vulnerability vect
   2. Explicit rejection of compound shell commands, pipelines (`|`), redirects (`>`), subshells, or invalid quoting, leaving unparseable units untouched.
   3. Atomic file writes using unguessable directory-local temporary files (`mkstemp`) with explicit preservation of original POSIX file mode (`stat.S_IMODE`) and ownership (`os.chown`).
   4. Tri-state CLI exit codes (`0`=changed, `2`=unchanged, `1`=failed) ensuring the installer propagates failures and prevents reporting false successes.
+  5. Process image replacement (`exec bash`) upon git updates guarded with commit hash checks and `_MP3METAFIX_REEXEC=1` environment variables to prevent infinite restart loops.
 
 
 
