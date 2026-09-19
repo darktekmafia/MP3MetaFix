@@ -286,7 +286,7 @@ Environment="PATH=${INSTALL_DIR}/.venv/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="MP3METAFIX_HOST=127.0.0.1"
 Environment="MP3METAFIX_PORT=${TARGET_PORT}"
 Environment="MP3METAFIX_DATA_DIR=${INSTALL_DIR}/data"
-Environment="MP3METAFIX_TRUST_PROXIES=true"
+Environment="MP3METAFIX_TRUST_PROXIES=false"
 ExecStart=${INSTALL_DIR}/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port ${TARGET_PORT} --workers 2
 Restart=always
 RestartSec=3

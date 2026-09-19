@@ -34,7 +34,9 @@ MAX_ARTWORK_SIZE_MB = int(os.getenv("MP3METAFIX_MAX_ARTWORK_SIZE_MB", "10"))
 MAX_ARTWORK_SIZE_BYTES = MAX_ARTWORK_SIZE_MB * 1024 * 1024
 
 # Reverse Proxy & Trust
-TRUST_PROXIES = os.getenv("MP3METAFIX_TRUST_PROXIES", "true").lower() in ("true", "1", "yes")
+TRUST_PROXIES = os.getenv("MP3METAFIX_TRUST_PROXIES", "false").lower() in ("true", "1", "yes")
+TRUSTED_PROXIES_RAW = os.getenv("MP3METAFIX_TRUSTED_PROXIES", "127.0.0.1,::1")
+TRUSTED_PROXIES = [p.strip() for p in TRUSTED_PROXIES_RAW.split(",") if p.strip()]
 
 # Cryptographic Session & Cookie Config
 def get_secret_key() -> str:
@@ -73,7 +75,7 @@ def get_version() -> str:
     version_file = BASE_DIR / "VERSION"
     if version_file.exists():
         return version_file.read_text().strip()
-    return "0.2.0"
+    return "0.2.2"
 
 def get_git_commit() -> Optional[str]:
     """Retrieve current short Git commit hash if running in a git repository."""

@@ -37,6 +37,7 @@ from backend.config import (
     MAX_UPLOAD_SIZE_BYTES,
     MAX_ARTWORK_SIZE_BYTES,
     TRUST_PROXIES,
+    TRUSTED_PROXIES,
     HOST,
     PORT,
     SESSION_COOKIE_NAME,
@@ -97,9 +98,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Trust reverse proxy headers (X-Forwarded-For, X-Forwarded-Proto)
+# Trust reverse proxy headers (X-Forwarded-For, X-Forwarded-Proto) only from verified proxies
 if TRUST_PROXIES:
-    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=TRUSTED_PROXIES)
 
 # Security & CSRF headers middleware
 app.add_middleware(SecurityHeadersMiddleware)
@@ -156,15 +157,10 @@ async def check_updates(force: bool = False):
 
 @app.post("/api/updates/apply")
 async def apply_update(request: Request):
-    """Execute install.sh --update --headless and stream real-time logs via SSE."""
-    return StreamingResponse(
-        stream_install_update(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+    """In-app update installation is disabled pending administrative authorization and privilege review."""
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="In-app update installation is currently disabled pending administrative authorization review.",
     )
 
 
@@ -448,28 +444,117 @@ async def stream_audio(
     request: Request,
     session_id: str = Depends(get_current_session_id),
 ):
-    """Stream audio with HTTP 206 Partial Content range support for playback preview for the authenticated session."""
+    """Stream audio with deterministic single-range support (HTTP 206 Partial Content).
+    
+    Notes:
+    - Single byte ranges (normal, open-ended, suffix) are supported.
+    - Multipart multi-range requests (comma-separated) are deliberately unsupported and return HTTP 416.
+    - Unsatisfiable or malformed range requests return HTTP 416 with Content-Range: bytes */{file_size}.
+    - Requests without a Range header or with a non-bytes unit return the full representation (HTTP 200).
+    """
     audio_path = storage_manager.get_audio_path(session_id)
-    if not audio_path:
+    if not audio_path or not audio_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio not found")
 
     file_size = audio_path.stat().st_size
     range_header = request.headers.get("range")
 
-    if not range_header:
-        return FileResponse(audio_path, media_type="audio/mpeg")
+    def full_iterator():
+        with open(audio_path, "rb") as f:
+            while chunk := f.read(64 * 1024):
+                yield chunk
 
-    # Range parsing
+    # If no Range header or non-bytes unit, serve the full file (HTTP 200)
+    if not range_header or not range_header.startswith("bytes="):
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Content-Type": "audio/mpeg",
+        }
+        return StreamingResponse(full_iterator(), status_code=200, headers=headers)
+
+    # If file is empty, no sub-range can be satisfied
+    if file_size == 0:
+        return Response(
+            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            headers={"Content-Range": "bytes */0"},
+        )
+
+    raw_ranges = range_header[6:].strip()
+    if not raw_ranges:
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Content-Type": "audio/mpeg",
+        }
+        return StreamingResponse(full_iterator(), status_code=200, headers=headers)
+
+    # Multi-range requests (e.g. bytes=0-100, 200-300) require multipart/byteranges framing and are unsupported.
+    if "," in raw_ranges:
+        return Response(
+            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            headers={"Content-Range": f"bytes */{file_size}"},
+        )
+
+    range_spec = raw_ranges
+    if "-" not in range_spec:
+        return Response(
+            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            headers={"Content-Range": f"bytes */{file_size}"},
+        )
+
+    parts = range_spec.split("-", 1)
+    start_str = parts[0].strip()
+    end_str = parts[1].strip()
+
     try:
-        range_val = range_header.replace("bytes=", "")
-        parts = range_val.split("-")
-        start = int(parts[0]) if parts[0] else 0
-        end = int(parts[1]) if len(parts) > 1 and parts[1] else file_size - 1
-        start = max(0, start)
-        end = min(file_size - 1, end)
-        content_length = end - start + 1
-    except Exception:
-        return FileResponse(audio_path, media_type="audio/mpeg")
+        if start_str and end_str:
+            # Explicit start and end (e.g. bytes=100-500)
+            start = int(start_str)
+            end = int(end_str)
+            if start < 0 or end < 0 or start > end or start >= file_size:
+                return Response(
+                    status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                    headers={"Content-Range": f"bytes */{file_size}"},
+                )
+            end = min(end, file_size - 1)
+        elif start_str and not end_str:
+            # Open-ended range (e.g. bytes=1024-)
+            start = int(start_str)
+            if start < 0 or start >= file_size:
+                return Response(
+                    status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                    headers={"Content-Range": f"bytes */{file_size}"},
+                )
+            end = file_size - 1
+        elif not start_str and end_str:
+            # Suffix range (e.g. bytes=-500 for last 500 bytes)
+            suffix_len = int(end_str)
+            if suffix_len <= 0:
+                return Response(
+                    status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                    headers={"Content-Range": f"bytes */{file_size}"},
+                )
+            start = max(0, file_size - suffix_len)
+            end = file_size - 1
+        else:
+            # Empty range (e.g. bytes=-)
+            return Response(
+                status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+    except ValueError:
+        return Response(
+            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            headers={"Content-Range": f"bytes */{file_size}"},
+        )
+
+    content_length = end - start + 1
+    if content_length <= 0:
+        return Response(
+            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            headers={"Content-Range": f"bytes */{file_size}"},
+        )
 
     def file_iterator():
         with open(audio_path, "rb") as f:

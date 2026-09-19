@@ -56,7 +56,7 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 ### Vector 8: Rate Limiter Header Spoofing & Memory Growth [COMPLETED]
 - **Threat**: Attackers bypassing IP rate limits by sending randomized `X-Forwarded-For` headers, or exhausting server heap memory by connecting once from millions of spoofed IPs to inflate the rate limiter tracking dictionary.
 - **Defense**:
-  1. Strict IP proxy verification in `backend/security.py`: `X-Forwarded-For` is only honored if the connecting socket peer is a verified private/loopback address (`is_trusted_proxy_ip`).
+  1. Strict proxy verification in `backend/security.py`: `X-Forwarded-For` is only honored if the connecting socket peer matches explicitly configured `MP3METAFIX_TRUSTED_PROXIES` (defaulting strictly to loopback `127.0.0.1, ::1`). Direct connections from untrusted LAN IPs have forwarding headers ignored.
   2. Automatic periodic pruning (`_purge_stale`) in `InMemoryRateLimiter` to delete idle IPs and enforce `max_tracked_ips=5000` with LRU eviction.
 
 ### Vector 9: Internal Filesystem Path & Traceback Disclosures [COMPLETED]
@@ -69,7 +69,7 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 
 ### Vector 11: Timestamped Cryptographic Session Tokens [COMPLETED]
 - **Threat**: Captured session cookies being replayed indefinitely across long periods or offline token manipulation attempts.
-- **Defense**: Formatted tokens as `{session_id}.{timestamp}.{HMAC_signature}` in `backend/security.py`. Server validates expiration against `SESSION_COOKIE_MAX_AGE` cryptographically before checking storage state.
+- **Defense**: Formatted tokens strictly as `{session_id}.{timestamp}.{HMAC_signature}` in `backend/security.py`. Server validates expiration against `SESSION_COOKIE_MAX_AGE` cryptographically before checking storage state. Non-expiring 2-part legacy tokens are completely rejected.
 
 ### Vector 12: Multi-Tenant VPS POSIX Permissions Isolation [COMPLETED]
 - **Threat**: On a multi-user Linux VPS or shared host, unprivileged local system users viewing or tampering with temporary audio and image files in `data/temp/`.
@@ -82,6 +82,18 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 ### Vector 14: Default Localhost Binding & Dynamic TLS Cookie Flags [COMPLETED]
 - **Threat**: Unintended exposure of unencrypted HTTP services on public network interfaces (`0.0.0.0`), and transmitting plain session cookies over unencrypted transport.
 - **Defense**: Defaulted `MP3METAFIX_HOST` to `127.0.0.1` (requiring explicit override or reverse proxy) and dynamically attached the `Secure` cookie flag when serving via TLS/HTTPS.
+
+### Vector 15: Single Audio Byte-Range Bounds & Underflow Defense [COMPLETED]
+- **Threat**: Malformed, inverted (`bytes=500-200`), out-of-bounds, or unsupported multi-range headers triggering negative content lengths or undefined chunk behavior during audio streaming.
+- **Defense**: Enforced single byte-range validation in `backend/main.py` supporting normal, open-ended, and suffix ranges, returning standard HTTP `416 Range Not Satisfiable` with `Content-Range: bytes */{size}` for unsatisfiable ranges or unsupported multi-range requests.
+
+### Vector 16: Artwork Processing Error Sanitization [COMPLETED]
+- **Threat**: Image processing errors exposing internal library state, raw byte sequences, or filesystem paths to clients or logs.
+- **Defense**: Configured fixed, sanitized client error messages in `backend/security.py` and restricted server logging to non-sensitive exception class names (`type(e).__name__`).
+
+### Vector 17: Update Installation Endpoint Access Control [PENDING ADMIN DESIGN]
+- **Threat**: Unauthenticated visitors or non-admin users triggering server update scripts and restarts.
+- **Defense**: In-app update execution endpoint (`POST /api/updates/apply`) is disabled (HTTP 403 Forbidden) pending dedicated administrative authentication, concurrency lock design, and service privilege review.
 
 
 

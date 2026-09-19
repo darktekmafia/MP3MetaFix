@@ -79,22 +79,38 @@ def test_validate_and_normalize_image(sample_image_bytes):
     clean_png, png_mime = validate_and_normalize_image(png_out.getvalue(), 10 * 1024 * 1024)
     assert png_mime == "image/png"
 
-    # Test non-image rejection
-    with pytest.raises(Exception):
-        validate_and_normalize_image(b"not an image", 10 * 1024 * 1024)
+    # Test corrupted image rejection with sanitized error message
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc_info:
+        validate_and_normalize_image(b"not an image at all", 10 * 1024 * 1024)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Invalid image format. Only JPEG, PNG, and WebP images are supported."
 
 
 def test_cryptographic_session_tokens():
     import uuid
+    import hmac
+    import hashlib
+    from backend.config import SESSION_SECRET_KEY
+
     valid_id = str(uuid.uuid4())
     token = create_signed_session_token(valid_id)
     assert "." in token
     parts = token.split(".")
     assert len(parts) == 3  # uuid.timestamp.sig
 
-    # Verification passes for legitimate token
+    # Verification passes for legitimate 3-part timestamped token
     verified = verify_signed_session_token(token)
     assert verified == valid_id
+
+    # Legacy 2-part un-timestamped token MUST BE REJECTED
+    legacy_sig = hmac.new(
+        SESSION_SECRET_KEY.encode("utf-8"),
+        valid_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    legacy_2part_token = f"{valid_id}.{legacy_sig}"
+    assert verify_signed_session_token(legacy_2part_token) is None
 
     # Expired token fails
     expired_token = f"{valid_id}.{int(time.time()) - 7200}.{parts[2]}"
@@ -115,6 +131,7 @@ def test_cryptographic_session_tokens():
     # Blank / corrupted token fails
     assert verify_signed_session_token("") is None
     assert verify_signed_session_token("malformed") is None
+    assert verify_signed_session_token("part1.part2") is None
 
 
 def test_storage_dir_hashing():
@@ -331,30 +348,213 @@ def test_metadata_payload_length_limits(client, sample_mp3_bytes):
     assert res_lyrics.status_code == 422
 
 
-def test_rate_limiter_purging_and_anti_spoofing():
-    """Verify rate limiter memory leak defense (auto-purging) and proxy anti-spoofing."""
+def test_rate_limiter_purging():
+    """Verify rate limiter memory leak defense (auto-purging) and helper behavior."""
     from backend.security import InMemoryRateLimiter, is_trusted_proxy_ip
-    from starlette.requests import Request
+    from starlette.datastructures import Headers
 
     limiter = InMemoryRateLimiter(max_requests=2, window_seconds=1, max_tracked_ips=5)
-    
-    # Check that is_trusted_proxy_ip correctly classifies IPs
-    assert is_trusted_proxy_ip("127.0.0.1") is True
-    assert is_trusted_proxy_ip("10.0.0.1") is True
-    assert is_trusted_proxy_ip("192.168.1.50") is True
-    assert is_trusted_proxy_ip("8.8.8.8") is False
-    assert is_trusted_proxy_ip("1.1.1.1") is False
 
-    # Simulate entries
+    # Check is_trusted_proxy_ip helper against default configured loopback
+    assert is_trusted_proxy_ip("127.0.0.1") is True
+    assert is_trusted_proxy_ip("::1") is True
+    assert is_trusted_proxy_ip("10.0.0.1") is False
+    assert is_trusted_proxy_ip("198.51.100.50") is False
+    assert is_trusted_proxy_ip("8.8.8.8") is False
+
+    # Simulate IP entries and verify auto-purging (using RFC 5737 TEST-NET-1 addresses)
     for i in range(10):
-        limiter.is_allowed(f"192.168.1.{i}")
+        limiter.is_allowed(f"192.0.2.{i}")
 
     # Wait for window expiry and trigger purge
     time.sleep(1.1)
-    limiter.is_allowed("192.168.1.99")
-    
+    limiter.is_allowed("192.0.2.99")
+
     # Old expired IPs should have been pruned from memory
     assert len(limiter.history) <= 5
+
+
+@pytest.mark.anyio
+async def test_asgi_proxy_headers_middleware_chain():
+    """Integration test verifying proxy header trust through the actual ASGI middleware stack.
+
+    Uses standard RFC 5737 documentation/test addresses:
+    - TEST_TRUSTED_PROXY_IP = "198.51.100.55" (TEST-NET-2)
+    - TEST_UNTRUSTED_PEER_IP = "192.0.2.123"  (TEST-NET-1)
+    - TEST_FORWARDED_CLIENT_IP = "203.0.113.195" (TEST-NET-3)
+    - TEST_SPOOFED_PREFIX_IP = "192.0.2.1"    (TEST-NET-1)
+
+    Tests that:
+    1. Untrusted direct peers cannot spoof rate-limit identity via X-Forwarded-For.
+    2. Configured reverse proxy (198.51.100.55) correctly resolves client IP.
+    3. Multi-hop X-Forwarded-For with prepended spoofed IPs correctly resolves the untrusted client.
+    4. When proxy trust is disabled, all X-Forwarded-For headers are ignored.
+    """
+    import httpx
+    from fastapi import FastAPI, Request
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+    from backend.security import InMemoryRateLimiter
+
+    TEST_TRUSTED_PROXY = "198.51.100.55"
+    TEST_UNTRUSTED_PEER = "192.0.2.123"
+    TEST_CLIENT_IP = "203.0.113.195"
+    TEST_SPOOFED_IP = "192.0.2.1"
+
+    test_limiter = InMemoryRateLimiter(max_requests=2, window_seconds=60)
+
+    # --- Scenario A: Proxy Trust Enabled with Configured Proxy IP ---
+    app_with_proxy = FastAPI()
+    app_with_proxy.add_middleware(ProxyHeadersMiddleware, trusted_hosts=[TEST_TRUSTED_PROXY])
+
+    @app_with_proxy.post("/api/test-rate-limit")
+    async def rate_limited_endpoint(request: Request):
+        client_ip = test_limiter.get_client_ip(request)
+        allowed = test_limiter.is_allowed(client_ip)
+        return {"client_ip": client_ip, "allowed": allowed}
+
+    # 1. Untrusted peer direct connection: Spoof attempt MUST FAIL
+    transport_untrusted = httpx.ASGITransport(app=app_with_proxy, client=(TEST_UNTRUSTED_PEER, 54321))
+    async with httpx.AsyncClient(transport=transport_untrusted, base_url="http://test") as ac:
+        # Request 1: Claims to be TEST_CLIENT_IP
+        res1 = await ac.post("/api/test-rate-limit", headers={"X-Forwarded-For": TEST_CLIENT_IP})
+        assert res1.status_code == 200
+        assert res1.json()["client_ip"] == TEST_UNTRUSTED_PEER  # Kept as socket peer!
+        assert res1.json()["allowed"] is True
+
+        # Request 2: Claims to be 203.0.113.196
+        res2 = await ac.post("/api/test-rate-limit", headers={"X-Forwarded-For": "203.0.113.196"})
+        assert res2.status_code == 200
+        assert res2.json()["client_ip"] == TEST_UNTRUSTED_PEER
+        assert res2.json()["allowed"] is True
+
+        # Request 3: Claims to be 203.0.113.197 (3rd request from socket peer within window)
+        res3 = await ac.post("/api/test-rate-limit", headers={"X-Forwarded-For": "203.0.113.197"})
+        assert res3.status_code == 200
+        assert res3.json()["client_ip"] == TEST_UNTRUSTED_PEER
+        assert res3.json()["allowed"] is False  # Rate limit enforced on socket peer despite rotating XFF!
+
+    # 2. Trusted reverse proxy connection: Resolves intended client IP
+    proxy_limiter = InMemoryRateLimiter(max_requests=2, window_seconds=60)
+    app_proxy = FastAPI()
+    app_proxy.add_middleware(ProxyHeadersMiddleware, trusted_hosts=[TEST_TRUSTED_PROXY])
+
+    @app_proxy.post("/api/test-proxy")
+    async def proxy_endpoint(request: Request):
+        client_ip = proxy_limiter.get_client_ip(request)
+        allowed = proxy_limiter.is_allowed(client_ip)
+        return {"client_ip": client_ip, "allowed": allowed}
+
+    transport_proxy = httpx.ASGITransport(app=app_proxy, client=(TEST_TRUSTED_PROXY, 54321))
+    async with httpx.AsyncClient(transport=transport_proxy, base_url="http://test") as ac:
+        # Legitimate forwarded client
+        res = await ac.post("/api/test-proxy", headers={"X-Forwarded-For": TEST_CLIENT_IP})
+        assert res.status_code == 200
+        assert res.json()["client_ip"] == TEST_CLIENT_IP
+
+        # Client tried to prepend forged IP before proxy appended TEST_CLIENT_IP
+        res_spoof = await ac.post("/api/test-proxy", headers={"X-Forwarded-For": f"{TEST_SPOOFED_IP}, {TEST_CLIENT_IP}"})
+        assert res_spoof.status_code == 200
+        assert res_spoof.json()["client_ip"] == TEST_CLIENT_IP  # Correctly resolved untrusted client boundary
+
+    # --- Scenario B: Proxy Trust Disabled (Workstation Mode) ---
+    app_workstation = FastAPI()  # No ProxyHeadersMiddleware installed
+
+    @app_workstation.post("/api/test-workstation")
+    async def workstation_endpoint(request: Request):
+        client_ip = test_limiter.get_client_ip(request)
+        return {"client_ip": client_ip}
+
+    transport_workstation = httpx.ASGITransport(app=app_workstation, client=(TEST_TRUSTED_PROXY, 54321))
+    async with httpx.AsyncClient(transport=transport_workstation, base_url="http://test") as ac:
+        res = await ac.post("/api/test-workstation", headers={"X-Forwarded-For": TEST_CLIENT_IP})
+        assert res.status_code == 200
+        assert res.json()["client_ip"] == TEST_TRUSTED_PROXY  # Forwarded headers ignored when disabled
+
+
+def test_audio_stream_ranges(client, sample_mp3_bytes):
+    """Test full RFC 7233 byte-range scenarios for audio streaming preview."""
+    # 1. Upload audio file to establish session
+    upload_res = client.post(
+        "/api/upload",
+        files={"file": ("stream_test.mp3", sample_mp3_bytes, "audio/mpeg")},
+    )
+    assert upload_res.status_code == 200
+    file_size = len(sample_mp3_bytes)
+    assert file_size > 0
+
+    # 2. No Range header -> 200 OK (Full File)
+    res_full = client.get("/api/stream")
+    assert res_full.status_code == 200
+    assert len(res_full.content) == file_size
+    assert res_full.content == sample_mp3_bytes
+
+    # 3. Normal range (bytes=0-99) -> 206 Partial Content (100 bytes)
+    res_range = client.get("/api/stream", headers={"Range": "bytes=0-99"})
+    assert res_range.status_code == 206
+    assert res_range.headers.get("Content-Range") == f"bytes 0-99/{file_size}"
+    assert res_range.headers.get("Content-Length") == "100"
+    assert res_range.content == sample_mp3_bytes[0:100]
+
+    # 4. Open-ended range (bytes=100-) -> 206 Partial Content from 100 to end
+    res_open = client.get("/api/stream", headers={"Range": "bytes=100-"})
+    assert res_open.status_code == 206
+    assert res_open.headers.get("Content-Range") == f"bytes 100-{file_size - 1}/{file_size}"
+    assert int(res_open.headers.get("Content-Length")) == file_size - 100
+    assert res_open.content == sample_mp3_bytes[100:]
+
+    # 5. Suffix range (bytes=-50) -> 206 Partial Content for last 50 bytes
+    res_suffix = client.get("/api/stream", headers={"Range": "bytes=-50"})
+    assert res_suffix.status_code == 206
+    assert res_suffix.headers.get("Content-Range") == f"bytes {file_size - 50}-{file_size - 1}/{file_size}"
+    assert res_suffix.headers.get("Content-Length") == "50"
+    assert res_suffix.content == sample_mp3_bytes[-50:]
+
+    # 6. Suffix range exceeding file size (bytes=-999999) -> 206 full file
+    res_big_suffix = client.get("/api/stream", headers={"Range": "bytes=-999999"})
+    assert res_big_suffix.status_code == 206
+    assert res_big_suffix.headers.get("Content-Range") == f"bytes 0-{file_size - 1}/{file_size}"
+    assert int(res_big_suffix.headers.get("Content-Length")) == file_size
+
+    # 7. Inverted range (bytes=500-200) -> 416 Range Not Satisfiable
+    res_inverted = client.get("/api/stream", headers={"Range": "bytes=500-200"})
+    assert res_inverted.status_code == 416
+    assert res_inverted.headers.get("Content-Range") == f"bytes */{file_size}"
+
+    # 8. Out-of-bounds start (bytes=999999-) -> 416 Range Not Satisfiable
+    res_oob = client.get("/api/stream", headers={"Range": "bytes=999999-"})
+    assert res_oob.status_code == 416
+    assert res_oob.headers.get("Content-Range") == f"bytes */{file_size}"
+
+    # 9. Invalid suffix (bytes=-0) -> 416 Range Not Satisfiable
+    res_invalid_suffix = client.get("/api/stream", headers={"Range": "bytes=-0"})
+    assert res_invalid_suffix.status_code == 416
+    assert res_invalid_suffix.headers.get("Content-Range") == f"bytes */{file_size}"
+
+    # 10. Malformed range syntax (bytes=abc-def and bytes=12345) -> 416 Range Not Satisfiable
+    res_malformed = client.get("/api/stream", headers={"Range": "bytes=abc-def"})
+    assert res_malformed.status_code == 416
+    assert res_malformed.headers.get("Content-Range") == f"bytes */{file_size}"
+
+    res_no_hyphen = client.get("/api/stream", headers={"Range": "bytes=12345"})
+    assert res_no_hyphen.status_code == 416
+    assert res_no_hyphen.headers.get("Content-Range") == f"bytes */{file_size}"
+
+    # 11. Multi-range header (bytes=0-50, 100-150) -> Rejected with 416 Range Not Satisfiable
+    res_multi = client.get("/api/stream", headers={"Range": "bytes=0-50, 100-150"})
+    assert res_multi.status_code == 416
+    assert res_multi.headers.get("Content-Range") == f"bytes */{file_size}"
+
+    # 12. Non-bytes range unit (items=0-10) -> Ignored per RFC 7233, returns 200 OK (Full File)
+    res_other_unit = client.get("/api/stream", headers={"Range": "items=0-10"})
+    assert res_other_unit.status_code == 200
+    assert len(res_other_unit.content) == file_size
+
+
+def test_api_updates_apply_endpoint_disabled(client):
+    """Verify that in-app update installation is disabled and returns 403 Forbidden."""
+    res = client.post("/api/updates/apply")
+    assert res.status_code == 403
+    assert "currently disabled" in res.json()["detail"]
 
 
 def test_api_version_endpoint(client):

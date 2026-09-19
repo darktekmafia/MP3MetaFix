@@ -13,8 +13,11 @@ from starlette.requests import Request
 from starlette.responses import Response
 from fastapi import HTTPException, status
 
-from backend.config import SESSION_SECRET_KEY, SESSION_COOKIE_MAX_AGE
+import logging
+from backend.config import SESSION_SECRET_KEY, SESSION_COOKIE_MAX_AGE, TRUST_PROXIES, TRUSTED_PROXIES
 import time
+
+logger = logging.getLogger("mp3metafix.security")
 
 # Magic byte signatures
 MP3_ID3_SIGNATURE = b"ID3"
@@ -42,55 +45,36 @@ def verify_signed_session_token(token: str, max_age_seconds: int = SESSION_COOKI
         return None
     parts = token.split(".")
     
-    # Support time-bounded format: session_id.timestamp.sig
-    if len(parts) == 3:
-        session_id, ts_str, sig = parts[0], parts[1], parts[2]
-        try:
-            ts = int(ts_str)
-            now = int(time.time())
-            # Enforce timestamp freshness (not in future by more than 60s, and not expired)
-            if ts > now + 60 or (now - ts) > max_age_seconds:
-                return None
-        except ValueError:
-            return None
-
-        # Validate UUID4 structure
-        try:
-            uuid_obj = uuid.UUID(session_id, version=4)
-            if str(uuid_obj) != session_id:
-                return None
-        except (ValueError, TypeError, AttributeError):
-            return None
-
-        expected_sig = hmac.new(
-            SESSION_SECRET_KEY.encode("utf-8"),
-            f"{session_id}.{ts_str}".encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
-
-        if hmac.compare_digest(sig, expected_sig):
-            return session_id
+    # Strictly require time-bounded format: session_id.timestamp.sig
+    if len(parts) != 3:
         return None
 
-    # Fallback for 2-part legacy token: session_id.sig
-    if len(parts) == 2:
-        session_id, sig = parts[0], parts[1]
-        try:
-            uuid_obj = uuid.UUID(session_id, version=4)
-            if str(uuid_obj) != session_id:
-                return None
-        except (ValueError, TypeError, AttributeError):
+    session_id, ts_str, sig = parts[0], parts[1], parts[2]
+    try:
+        ts = int(ts_str)
+        now = int(time.time())
+        # Enforce timestamp freshness (not in future by more than 60s, and not expired)
+        if ts > now + 60 or (now - ts) > max_age_seconds:
             return None
+    except ValueError:
+        return None
 
-        expected_sig = hmac.new(
-            SESSION_SECRET_KEY.encode("utf-8"),
-            session_id.encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
+    # Validate UUID4 structure
+    try:
+        uuid_obj = uuid.UUID(session_id, version=4)
+        if str(uuid_obj) != session_id:
+            return None
+    except (ValueError, TypeError, AttributeError):
+        return None
 
-        if hmac.compare_digest(sig, expected_sig):
-            return session_id
+    expected_sig = hmac.new(
+        SESSION_SECRET_KEY.encode("utf-8"),
+        f"{session_id}.{ts_str}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
+    if hmac.compare_digest(sig, expected_sig):
+        return session_id
     return None
 
 
@@ -183,15 +167,17 @@ def validate_and_normalize_image(image_bytes: bytes, max_bytes: int) -> Tuple[by
     try:
         with Image.open(io.BytesIO(image_bytes)) as img:
             img.verify()
-    except Image.DecompressionBombError as e:
+    except Image.DecompressionBombError:
+        logger.warning("Image decompression bomb rejected: exceeds pixel threshold")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Decompression bomb detected: Image exceeds maximum pixel limit ({e})",
+            detail="Decompression bomb detected: Image exceeds maximum pixel limit.",
         )
     except Exception as e:
+        logger.warning("Corrupted image verification failure: %s", type(e).__name__)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Corrupted or invalid image file: {str(e)}",
+            detail="Corrupted or invalid image file. Please upload a valid JPEG, PNG, or WebP image.",
         )
 
     # Re-open for conversion/standardization and dimension validation
@@ -236,9 +222,10 @@ def validate_and_normalize_image(image_bytes: bytes, max_bytes: int) -> Tuple[by
     except HTTPException:
         raise
     except Exception as e:
+        logger.warning("Image processing failure: %s", type(e).__name__)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to process artwork image: {str(e)}",
+            detail="Failed to process artwork image. Please upload a valid JPEG, PNG, or WebP image.",
         )
 
 
@@ -303,14 +290,22 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
 
 
 import ipaddress
-from backend.config import TRUST_PROXIES
 
 
 def is_trusted_proxy_ip(ip_str: str) -> bool:
-    """Determine whether an IP address is a trusted local/private reverse proxy (loopback or RFC1918)."""
+    """Determine whether an IP address matches explicitly configured trusted reverse proxies."""
+    if not ip_str:
+        return False
     try:
         ip = ipaddress.ip_address(ip_str)
-        return ip.is_loopback or ip.is_private
+        for trusted in TRUSTED_PROXIES:
+            try:
+                net = ipaddress.ip_network(trusted, strict=False)
+                if ip in net:
+                    return True
+            except ValueError:
+                continue
+        return False
     except ValueError:
         return False
 
@@ -370,22 +365,16 @@ class InMemoryRateLimiter:
         return True
 
     def get_client_ip(self, request: Request) -> str:
-        """Securely extract client IP, preventing header spoofing unless behind a verified private proxy."""
-        peer_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
+        """Securely extract client IP from request.client.host.
 
-        if TRUST_PROXIES and is_trusted_proxy_ip(peer_ip):
-            forwarded = request.headers.get("x-forwarded-for")
-            if forwarded:
-                # First entry in X-Forwarded-For is the originating client
-                first_ip = forwarded.split(",")[0].strip()
-                try:
-                    # Validate that it is a syntactically valid IP address
-                    ipaddress.ip_address(first_ip)
-                    return first_ip
-                except ValueError:
-                    pass
-
-        return peer_ip
+        When TRUST_PROXIES is enabled, ProxyHeadersMiddleware at the ASGI layer validates
+        the socket peer against TRUSTED_PROXIES and resolves the client IP from X-Forwarded-For.
+        When TRUST_PROXIES is disabled or the socket peer is untrusted, request.client.host
+        remains the raw socket peer, preventing header spoofing.
+        """
+        if request.client and request.client.host:
+            return request.client.host
+        return "127.0.0.1"
 
 
 upload_rate_limiter = InMemoryRateLimiter(max_requests=25, window_seconds=60)
