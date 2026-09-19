@@ -12,6 +12,10 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 - [x] **4. Origin & Sec-Fetch-Site CSRF Defense**: Block cross-site request forgery and unauthorized external state-changing requests. *(Implemented in `backend/security.py` & `backend/main.py`)*
 - [x] **5. In-Memory Upload Rate Limiting**: Limit rapid-fire upload bursts per client IP. *(Implemented in `backend/security.py` & `backend/main.py`)*
 - [x] **6. Systemd Process Resource Sandboxing**: Bound memory, CPU, and process execution in system service units. *(Implemented in `deploy/mp3metafix.service` & `install.sh`)*
+- [x] **7. Pydantic Model Payload Length Bounds**: Prevent memory/CPU inflation DoS via oversized metadata strings. *(Implemented in `backend/metadata_engine.py`)*
+- [x] **8. Rate Limiter Anti-Spoofing & Memory Leak Defense**: Validate proxy trust subnets and auto-prune stale IP dictionaries. *(Implemented in `backend/security.py`)*
+- [x] **9. Internal Filesystem Path Exception Masking**: Prevent directory structure and OS user disclosure in HTTP error responses. *(Implemented in `backend/main.py`)*
+- [x] **10. MIME Confusion & CSP Content Protections**: Restrict execution contexts on media streams and downloads. *(Implemented in `backend/security.py` & `backend/main.py`)*
 
 ---
 
@@ -40,4 +44,23 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 ### Vector 6: Systemd Process Sandboxing [COMPLETED]
 - **Threat**: Memory leaks or CPU exhaustion affecting host system stability.
 - **Defense**: Added systemd cgroup limits: `MemoryMax=512M`, `TasksMax=64`, `CPUQuota=80%` in `deploy/mp3metafix.service` and `install.sh`.
+
+### Vector 7: Metadata Payload Inflation & Buffer Exhaustion [COMPLETED]
+- **Threat**: An attacker with a valid session transmits multi-megabyte JSON payloads in `POST /api/save` (e.g. 50MB strings in `lyrics` or `title`), forcing Mutagen and Python memory allocators to construct bloated ID3 frames and burn CPU.
+- **Defense**: Configured strict `Field(max_length=...)` bounds in `backend/metadata_engine.py` (Title/Artist/Album: 500 chars, Lyrics: 64KB, Numbers: 50 chars, Comments: 10KB). Pydantic automatically rejects oversized payloads with HTTP 422 before processing.
+
+### Vector 8: Rate Limiter Header Spoofing & Memory Growth [COMPLETED]
+- **Threat**: Attackers bypassing IP rate limits by sending randomized `X-Forwarded-For` headers, or exhausting server heap memory by connecting once from millions of spoofed IPs to inflate the rate limiter tracking dictionary.
+- **Defense**:
+  1. Strict IP proxy verification in `backend/security.py`: `X-Forwarded-For` is only honored if the connecting socket peer is a verified private/loopback address (`is_trusted_proxy_ip`).
+  2. Automatic periodic pruning (`_purge_stale`) in `InMemoryRateLimiter` to delete idle IPs and enforce `max_tracked_ips=5000` with LRU eviction.
+
+### Vector 9: Internal Filesystem Path & Traceback Disclosures [COMPLETED]
+- **Threat**: Triggering parsing or write exceptions to elicit raw Python tracebacks containing absolute server filesystem paths (`/run/media/...`, `/home/...`).
+- **Defense**: Masked raw error strings in HTTP responses across `backend/main.py`. Errors are logged internally to server logs via `logger.exception(...)` while users receive generic, non-disclosing error descriptions.
+
+### Vector 10: MIME Confusion & Content Isolation [COMPLETED]
+- **Threat**: Crafting polyglot audio files containing HTML or script tags and tricking browsers into rendering them in an executable document context.
+- **Defense**: Enforced `X-Content-Type-Options: nosniff`, strict `Content-Type: audio/mpeg`, attachment download semantics, and restrictive `Content-Security-Policy` headers across all endpoints.
+
 

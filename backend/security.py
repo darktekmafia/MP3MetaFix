@@ -268,38 +268,92 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-class InMemoryRateLimiter:
-    """Sliding-window in-memory rate limiter per IP address."""
+import ipaddress
+from backend.config import TRUST_PROXIES
 
-    def __init__(self, max_requests: int = 25, window_seconds: int = 60):
+
+def is_trusted_proxy_ip(ip_str: str) -> bool:
+    """Determine whether an IP address is a trusted local/private reverse proxy (loopback or RFC1918)."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return ip.is_loopback or ip.is_private
+    except ValueError:
+        return False
+
+
+class InMemoryRateLimiter:
+    """Sliding-window in-memory rate limiter per IP address with auto-purging and proxy anti-spoofing."""
+
+    def __init__(self, max_requests: int = 25, window_seconds: int = 60, max_tracked_ips: int = 5000):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        self.max_tracked_ips = max_tracked_ips
         import time
         from collections import defaultdict
         self.history = defaultdict(list)
+        self._last_purge_time = time.time()
+
+    def _purge_stale(self, now: float):
+        """Purge empty and expired IP entries to prevent heap memory exhaustion over time."""
+        window_start = now - self.window_seconds
+        stale_ips = []
+        for ip, timestamps in self.history.items():
+            valid_times = [t for t in timestamps if t > window_start]
+            if not valid_times:
+                stale_ips.append(ip)
+            else:
+                self.history[ip] = valid_times
+
+        for ip in stale_ips:
+            del self.history[ip]
+
+        # If still over max tracked IPs, clear oldest half
+        if len(self.history) > self.max_tracked_ips:
+            sorted_ips = sorted(self.history.items(), key=lambda item: max(item[1]) if item[1] else 0)
+            to_remove = len(sorted_ips) - (self.max_tracked_ips // 2)
+            for ip, _ in sorted_ips[:to_remove]:
+                self.history.pop(ip, None)
+
+        self._last_purge_time = now
 
     def is_allowed(self, client_ip: str) -> bool:
         import time
         now = time.time()
-        window_start = now - self.window_seconds
 
+        # Periodic cleanup every 60 seconds or when storage exceeds max_tracked_ips
+        if now - self._last_purge_time > 60 or len(self.history) > self.max_tracked_ips:
+            self._purge_stale(now)
+
+        window_start = now - self.window_seconds
         req_times = [t for t in self.history[client_ip] if t > window_start]
-        self.history[client_ip] = req_times
 
         if len(req_times) >= self.max_requests:
+            self.history[client_ip] = req_times
             return False
 
-        self.history[client_ip].append(now)
+        req_times.append(now)
+        self.history[client_ip] = req_times
         return True
 
     def get_client_ip(self, request: Request) -> str:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        if request.client and request.client.host:
-            return request.client.host
-        return "127.0.0.1"
+        """Securely extract client IP, preventing header spoofing unless behind a verified private proxy."""
+        peer_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
+
+        if TRUST_PROXIES and is_trusted_proxy_ip(peer_ip):
+            forwarded = request.headers.get("x-forwarded-for")
+            if forwarded:
+                # First entry in X-Forwarded-For is the originating client
+                first_ip = forwarded.split(",")[0].strip()
+                try:
+                    # Validate that it is a syntactically valid IP address
+                    ipaddress.ip_address(first_ip)
+                    return first_ip
+                except ValueError:
+                    pass
+
+        return peer_ip
 
 
 upload_rate_limiter = InMemoryRateLimiter(max_requests=25, window_seconds=60)
+
 

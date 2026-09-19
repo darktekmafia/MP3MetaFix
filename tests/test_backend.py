@@ -302,3 +302,48 @@ def test_storage_quota_management(tmp_path: Path):
     assert mgr.get_session_dir(s1) is None
     assert mgr.get_session_dir(s2) is not None
 
+
+def test_metadata_payload_length_limits(client, sample_mp3_bytes):
+    """Verify that oversized metadata strings are rejected with 422 Unprocessable Entity."""
+    # 1. Upload valid MP3 to get session
+    upload_res = client.post(
+        "/api/upload",
+        files={"file": ("test.mp3", sample_mp3_bytes, "audio/mpeg")},
+    )
+    assert upload_res.status_code == 200
+
+    # 2. Attempt to save metadata with 1000-character title (max is 500)
+    res = client.post("/api/save", json={"title": "A" * 1000})
+    assert res.status_code == 422
+
+    # 3. Attempt to save lyrics with 100,000 characters (max is 65,536)
+    res_lyrics = client.post("/api/save", json={"lyrics": "L" * 100000})
+    assert res_lyrics.status_code == 422
+
+
+def test_rate_limiter_purging_and_anti_spoofing():
+    """Verify rate limiter memory leak defense (auto-purging) and proxy anti-spoofing."""
+    from backend.security import InMemoryRateLimiter, is_trusted_proxy_ip
+    from starlette.requests import Request
+
+    limiter = InMemoryRateLimiter(max_requests=2, window_seconds=1, max_tracked_ips=5)
+    
+    # Check that is_trusted_proxy_ip correctly classifies IPs
+    assert is_trusted_proxy_ip("127.0.0.1") is True
+    assert is_trusted_proxy_ip("10.0.0.1") is True
+    assert is_trusted_proxy_ip("192.168.1.50") is True
+    assert is_trusted_proxy_ip("8.8.8.8") is False
+    assert is_trusted_proxy_ip("1.1.1.1") is False
+
+    # Simulate entries
+    for i in range(10):
+        limiter.is_allowed(f"192.168.1.{i}")
+
+    # Wait for window expiry and trigger purge
+    time.sleep(1.1)
+    limiter.is_allowed("192.168.1.99")
+    
+    # Old expired IPs should have been pruned from memory
+    assert len(limiter.history) <= 5
+
+

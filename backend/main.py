@@ -192,20 +192,22 @@ async def upload_mp3(request: Request, response: Response, file: UploadFile = Fi
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("Upload processing error")
         storage_manager.cleanup_session(session_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save uploaded file: {str(e)}",
+            detail="Failed to save uploaded audio file.",
         )
 
     # Extract metadata & artwork
     try:
         parsed = extract_metadata_and_artwork(audio_path)
     except Exception as e:
+        logger.warning(f"Failed to parse ID3 tags: {e}")
         storage_manager.cleanup_session(session_id)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Could not parse ID3 tags: {str(e)}",
+            detail="Could not parse ID3 tags from the uploaded file.",
         )
 
     session_info = storage_manager.get_session_info(session_id) or {}
@@ -340,9 +342,10 @@ async def save_metadata(
             new_artwork_mime=new_art_mime,
         )
     except Exception as e:
+        logger.exception("Failed to write ID3 tags")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to write ID3 tags: {str(e)}",
+            detail="Failed to write ID3 tags to the audio file.",
         )
 
     # Clean up artwork staging flags
