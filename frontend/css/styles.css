@@ -521,6 +521,38 @@ button {
   height: 14px;
 }
 
+.btn-xs {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.74rem;
+  border-radius: var(--radius-sm);
+  gap: 0.35rem;
+}
+
+.btn-xs svg {
+  width: 13px;
+  height: 13px;
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.text-danger {
+  color: var(--accent-rose) !important;
+}
+
+.text-danger:hover {
+  background: rgba(244, 63, 94, 0.15) !important;
+  color: #fff !important;
+}
+
 /* Workspace Columns */
 .workspace-grid {
   display: grid;
@@ -954,6 +986,58 @@ button {
   font-weight: 600;
   color: var(--text-muted);
   letter-spacing: 0.01em;
+}
+
+.form-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.15rem;
+}
+
+.canned-comment-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.canned-select-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.select-canned-comment {
+  background: rgba(14, 20, 38, 0.85);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--accent-cyan);
+  font-family: var(--font-body);
+  font-size: 0.74rem;
+  font-weight: 500;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+  max-width: 190px;
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.select-canned-comment:hover {
+  border-color: rgba(0, 242, 254, 0.4);
+  background: rgba(18, 26, 50, 0.95);
+}
+
+.select-canned-comment:focus {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 2px rgba(0, 242, 254, 0.2);
+}
+
+.select-canned-comment option {
+  background: #0d1224;
+  color: #fff;
+  padding: 0.4rem;
 }
 
 .form-input, .form-textarea {
@@ -1718,4 +1802,155 @@ button {
   0%, 100% { box-shadow: 0 0 10px rgba(245, 158, 11, 0.2); }
   50% { box-shadow: 0 0 20px rgba(245, 158, 11, 0.45); }
 }
+
+/* ==========================================================================
+   Canned Comments & Quick Presets
+   ========================================================================== */
+.preset-create-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  padding: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.preset-section-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #fff;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.preset-create-form {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .preset-create-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.preset-form-inputs {
+  display: flex;
+  gap: 0.6rem;
+  flex: 1;
+}
+
+@media (max-width: 500px) {
+  .preset-form-inputs {
+    flex-direction: column;
+  }
+}
+
+.preset-form-inputs .form-input {
+  font-size: 0.84rem;
+  padding: 0.45rem 0.75rem;
+}
+
+.presets-list-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.presets-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.presets-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.canned-preset-card {
+  background: rgba(14, 20, 38, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  transition: all var(--transition-fast);
+}
+
+.canned-preset-card:hover {
+  background: rgba(18, 26, 50, 0.8);
+  border-color: rgba(0, 242, 254, 0.25);
+  transform: translateY(-1px);
+}
+
+.preset-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.preset-card-label {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preset-card-text {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  color: var(--accent-cyan);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.9;
+}
+
+.preset-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.preset-empty-state {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+}
+
+.preset-inline-edit {
+  display: flex;
+  gap: 0.5rem;
+  width: 100%;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.preset-inline-edit .form-input {
+  font-size: 0.82rem;
+  padding: 0.35rem 0.6rem;
+  flex: 1;
+  min-width: 140px;
+}
+
 

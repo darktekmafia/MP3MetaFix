@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.2] - 2026-09-19
+
+### Added
+- **Configurable Canned Comments & Quick Presets**:
+  - Added a quick-preset selector dropdown on the **Lyrics & Notes** tab allowing one-click comment prefilling (such as Suno creator profile URLs, AI generation tags, mastering notes, and copyright attribution).
+  - Added quick **"Save Current"** action allowing users to instantly save whatever text is typed into the Comment field as a new reusable preset.
+  - Added **Canned Comments & Presets Manager** modal to add, view, edit inline, delete, and restore default presets with live item counters.
+  - Presets are persisted in `localStorage` (`mp3metafix_canned_comments`) with safe DOM node creation and strict XSS sanitization (`textContent`).
+  - Bumped asset cache-busting queries (`?v=0.2.2`) across `index.html`.
+
+---
+
 ## [0.2.1] - 2026-09-19
 
 ### Fixed

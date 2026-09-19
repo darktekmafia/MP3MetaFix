@@ -69,6 +69,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const filenamePreview = document.getElementById('filenamePreview');
   const presetButtons = document.querySelectorAll('.preset-btn');
   const toastContainer = document.getElementById('toastContainer');
+  const inputComment = document.getElementById('inputComment');
+
+  // --- Canned Comments & Presets Elements ---
+  const selectCannedComment = document.getElementById('selectCannedComment');
+  const btnSaveCannedComment = document.getElementById('btnSaveCannedComment');
+  const btnManageCannedComments = document.getElementById('btnManageCannedComments');
+  const cannedCommentsModal = document.getElementById('cannedCommentsModal');
+  const btnCloseCannedModal = document.getElementById('btnCloseCannedModal');
+  const formAddPreset = document.getElementById('formAddPreset');
+  const inputPresetLabel = document.getElementById('inputPresetLabel');
+  const inputPresetText = document.getElementById('inputPresetText');
+  const cannedPresetsList = document.getElementById('cannedPresetsList');
+  const cannedPresetCount = document.getElementById('cannedPresetCount');
+  const btnResetPresets = document.getElementById('btnResetPresets');
 
   // --- Version & Update Manager Elements ---
   const updateBadge = document.getElementById('updateBadge');
@@ -1323,6 +1337,324 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 1500);
   }
 
+  // --- Canned Comments & Quick Presets Controller ---
+  const CANNED_STORAGE_KEY = 'mp3metafix_canned_comments';
+  const DEFAULT_CANNED_PRESETS = [
+    { id: 'preset-suno-profile', label: 'Suno Profile', text: 'https://suno.com/@username' },
+    { id: 'preset-suno-ai', label: 'Suno AI Tag', text: 'Generated with Suno AI' },
+    { id: 'preset-rights', label: 'Rights Reserved', text: 'All Rights Reserved' },
+    { id: 'preset-master', label: 'Mastering Note', text: 'Mastered for Streaming' }
+  ];
+
+  function getCannedPresets() {
+    try {
+      const stored = localStorage.getItem(CANNED_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse canned presets from localStorage:', e);
+    }
+    return [...DEFAULT_CANNED_PRESETS];
+  }
+
+  function saveCannedPresets(presets) {
+    try {
+      localStorage.setItem(CANNED_STORAGE_KEY, JSON.stringify(presets));
+    } catch (e) {
+      console.warn('Failed to save canned presets to localStorage:', e);
+    }
+  }
+
+  function renderCannedCommentDropdown() {
+    if (!selectCannedComment) return;
+    const presets = getCannedPresets();
+
+    selectCannedComment.innerHTML = '';
+    const placeholderOption = document.createElement('option');
+    placeholderOption.value = '';
+    placeholderOption.disabled = true;
+    placeholderOption.selected = true;
+    placeholderOption.textContent = '⚡ Canned Presets...';
+    selectCannedComment.appendChild(placeholderOption);
+
+    presets.forEach(preset => {
+      const opt = document.createElement('option');
+      opt.value = preset.text;
+      opt.textContent = `${preset.label}: ${preset.text}`;
+      selectCannedComment.appendChild(opt);
+    });
+  }
+
+  function applyCannedComment(text) {
+    if (!inputComment) return;
+    inputComment.value = text;
+    inputComment.dispatchEvent(new Event('input', { bubbles: true }));
+    inputComment.dispatchEvent(new Event('change', { bubbles: true }));
+    showToast('Comment preset applied!', 'success', 2500);
+  }
+
+  function renderCannedPresetsModalList() {
+    if (!cannedPresetsList) return;
+    const presets = getCannedPresets();
+    if (cannedPresetCount) {
+      cannedPresetCount.textContent = presets.length;
+    }
+
+    cannedPresetsList.innerHTML = '';
+
+    if (presets.length === 0) {
+      const emptyCard = document.createElement('div');
+      emptyCard.className = 'preset-empty-state';
+      emptyCard.textContent = 'No presets saved yet. Add your first comment preset above!';
+      cannedPresetsList.appendChild(emptyCard);
+      return;
+    }
+
+    presets.forEach(preset => {
+      const card = document.createElement('div');
+      card.className = 'canned-preset-card';
+      card.dataset.presetId = preset.id;
+
+      const mainGroup = document.createElement('div');
+      mainGroup.className = 'preset-card-main';
+
+      const labelEl = document.createElement('span');
+      labelEl.className = 'preset-card-label';
+      labelEl.textContent = preset.label;
+
+      const textEl = document.createElement('span');
+      textEl.className = 'preset-card-text';
+      textEl.textContent = preset.text;
+
+      mainGroup.appendChild(labelEl);
+      mainGroup.appendChild(textEl);
+
+      const actionsGroup = document.createElement('div');
+      actionsGroup.className = 'preset-card-actions';
+
+      // Use Button
+      const btnApply = document.createElement('button');
+      btnApply.type = 'button';
+      btnApply.className = 'btn btn-primary btn-xs';
+      btnApply.title = 'Apply this preset to Comment field';
+      btnApply.textContent = 'Use';
+      btnApply.addEventListener('click', () => {
+        applyCannedComment(preset.text);
+        closeCannedModal();
+      });
+
+      // Edit Button
+      const btnEdit = document.createElement('button');
+      btnEdit.type = 'button';
+      btnEdit.className = 'btn btn-secondary btn-xs';
+      btnEdit.title = 'Edit preset';
+      btnEdit.textContent = 'Edit';
+      btnEdit.addEventListener('click', () => {
+        showInlineEditPreset(card, preset);
+      });
+
+      // Delete Button
+      const btnDelete = document.createElement('button');
+      btnDelete.type = 'button';
+      btnDelete.className = 'btn btn-danger btn-xs';
+      btnDelete.title = 'Delete preset';
+      btnDelete.textContent = '✕';
+      btnDelete.addEventListener('click', () => {
+        deleteCannedPreset(preset.id);
+      });
+
+      actionsGroup.appendChild(btnApply);
+      actionsGroup.appendChild(btnEdit);
+      actionsGroup.appendChild(btnDelete);
+
+      card.appendChild(mainGroup);
+      card.appendChild(actionsGroup);
+
+      cannedPresetsList.appendChild(card);
+    });
+  }
+
+  function showInlineEditPreset(cardElement, preset) {
+    cardElement.innerHTML = '';
+
+    const editContainer = document.createElement('div');
+    editContainer.className = 'preset-inline-edit';
+
+    const editLabelInput = document.createElement('input');
+    editLabelInput.type = 'text';
+    editLabelInput.className = 'form-input';
+    editLabelInput.value = preset.label;
+    editLabelInput.placeholder = 'Preset Label';
+    editLabelInput.maxLength = 60;
+
+    const editTextInput = document.createElement('input');
+    editTextInput.type = 'text';
+    editTextInput.className = 'form-input';
+    editTextInput.value = preset.text;
+    editTextInput.placeholder = 'Comment Text';
+    editTextInput.maxLength = 255;
+
+    const btnSaveEdit = document.createElement('button');
+    btnSaveEdit.type = 'button';
+    btnSaveEdit.className = 'btn btn-primary btn-xs';
+    btnSaveEdit.textContent = 'Save';
+    btnSaveEdit.addEventListener('click', () => {
+      const newLabel = editLabelInput.value.trim();
+      const newText = editTextInput.value.trim();
+      if (!newLabel || !newText) {
+        showToast('Label and Comment text cannot be empty', 'error');
+        return;
+      }
+      updateCannedPreset(preset.id, newLabel, newText);
+    });
+
+    const btnCancelEdit = document.createElement('button');
+    btnCancelEdit.type = 'button';
+    btnCancelEdit.className = 'btn btn-secondary btn-xs';
+    btnCancelEdit.textContent = 'Cancel';
+    btnCancelEdit.addEventListener('click', () => {
+      renderCannedPresetsModalList();
+    });
+
+    editContainer.appendChild(editLabelInput);
+    editContainer.appendChild(editTextInput);
+    editContainer.appendChild(btnSaveEdit);
+    editContainer.appendChild(btnCancelEdit);
+
+    cardElement.appendChild(editContainer);
+    editLabelInput.focus();
+  }
+
+  function addCannedPreset(label, text) {
+    const trimmedLabel = label.trim();
+    const trimmedText = text.trim();
+    if (!trimmedLabel || !trimmedText) {
+      showToast('Please provide both a label and comment text', 'error');
+      return;
+    }
+
+    const presets = getCannedPresets();
+    presets.unshift({
+      id: 'preset-' + Date.now(),
+      label: trimmedLabel,
+      text: trimmedText
+    });
+
+    saveCannedPresets(presets);
+    renderCannedCommentDropdown();
+    renderCannedPresetsModalList();
+    showToast('New comment preset added!', 'success');
+  }
+
+  function updateCannedPreset(id, newLabel, newText) {
+    const presets = getCannedPresets();
+    const target = presets.find(p => p.id === id);
+    if (target) {
+      target.label = newLabel;
+      target.text = newText;
+      saveCannedPresets(presets);
+      renderCannedCommentDropdown();
+      renderCannedPresetsModalList();
+      showToast('Preset updated!', 'success');
+    }
+  }
+
+  function deleteCannedPreset(id) {
+    let presets = getCannedPresets();
+    presets = presets.filter(p => p.id !== id);
+    saveCannedPresets(presets);
+    renderCannedCommentDropdown();
+    renderCannedPresetsModalList();
+    showToast('Preset deleted', 'info');
+  }
+
+  function resetCannedPresetsToDefaults() {
+    saveCannedPresets(DEFAULT_CANNED_PRESETS);
+    renderCannedCommentDropdown();
+    renderCannedPresetsModalList();
+    showToast('Restored default presets', 'info');
+  }
+
+  function openCannedModal() {
+    if (cannedCommentsModal) {
+      renderCannedPresetsModalList();
+      cannedCommentsModal.classList.remove('hidden');
+    }
+  }
+
+  function closeCannedModal() {
+    if (cannedCommentsModal) {
+      cannedCommentsModal.classList.add('hidden');
+    }
+  }
+
+  // Event Listeners for Canned Comments
+  if (selectCannedComment) {
+    selectCannedComment.addEventListener('change', (e) => {
+      if (e.target.value) {
+        applyCannedComment(e.target.value);
+        e.target.selectedIndex = 0;
+      }
+    });
+  }
+
+  if (btnSaveCannedComment) {
+    btnSaveCannedComment.addEventListener('click', () => {
+      const currentComment = inputComment ? inputComment.value.trim() : '';
+      if (!currentComment) {
+        showToast('Please enter a comment before saving as a preset.', 'info');
+        if (inputComment) inputComment.focus();
+        return;
+      }
+      let defaultLabel = 'Custom Note';
+      if (currentComment.includes('suno.com/')) {
+        defaultLabel = 'Suno Profile';
+      } else if (currentComment.length <= 25) {
+        defaultLabel = currentComment;
+      } else {
+        defaultLabel = currentComment.substring(0, 22) + '...';
+      }
+
+      const userLabel = prompt('Enter a label for this preset:', defaultLabel);
+      if (userLabel !== null) {
+        addCannedPreset(userLabel.trim() || defaultLabel, currentComment);
+      }
+    });
+  }
+
+  if (btnManageCannedComments) {
+    btnManageCannedComments.addEventListener('click', openCannedModal);
+  }
+
+  if (btnCloseCannedModal) {
+    btnCloseCannedModal.addEventListener('click', closeCannedModal);
+  }
+
+  if (formAddPreset) {
+    formAddPreset.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const label = inputPresetLabel ? inputPresetLabel.value : '';
+      const text = inputPresetText ? inputPresetText.value : '';
+      if (label && text) {
+        addCannedPreset(label, text);
+        if (inputPresetLabel) inputPresetLabel.value = '';
+        if (inputPresetText) inputPresetText.value = '';
+      }
+    });
+  }
+
+  if (btnResetPresets) {
+    btnResetPresets.addEventListener('click', () => {
+      if (confirm('Are you sure you want to restore default presets? Any custom presets will be reset.')) {
+        resetCannedPresetsToDefaults();
+      }
+    });
+  }
+
   // Event Listeners for Version & Updater
   if (versionBadge) {
     versionBadge.addEventListener('click', openVersionModal);
@@ -1349,6 +1681,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (versionModal && !versionModal.classList.contains('hidden')) {
         closeVersionModal();
       }
+      if (cannedCommentsModal && !cannedCommentsModal.classList.contains('hidden')) {
+        closeCannedModal();
+      }
     }
   });
 
@@ -1360,7 +1695,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Initial silent background check on startup
+  if (cannedCommentsModal) {
+    cannedCommentsModal.addEventListener('click', (e) => {
+      if (e.target === cannedCommentsModal) {
+        closeCannedModal();
+      }
+    });
+  }
+
+  // Initial setup & silent background update check
+  renderCannedCommentDropdown();
   loadSystemInfo();
   setTimeout(() => {
     checkForUpdates(false, true);

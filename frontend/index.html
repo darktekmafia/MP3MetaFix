@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
   
   <link rel="icon" type="image/svg+xml" href="/assets/mp3metafix.svg">
-  <link rel="stylesheet" href="/css/styles.css?v=0.2.1">
+  <link rel="stylesheet" href="/css/styles.css?v=0.2.2">
 </head>
 <body class="app-body">
   <!-- Dynamic Background Glow Elements -->
@@ -326,8 +326,24 @@
                 <div id="tab-lyrics" class="tab-panel" role="tabpanel">
                   <div class="form-grid">
                     <div class="form-group span-2">
-                      <label for="inputComment" class="form-label">Comment</label>
-                      <input type="text" id="inputComment" name="comment" class="form-input" placeholder="Additional notes or tags">
+                      <div class="form-label-row">
+                        <label for="inputComment" class="form-label">Comment</label>
+                        <div class="canned-comment-toolbar">
+                          <div class="canned-select-wrapper">
+                            <select id="selectCannedComment" class="form-select select-canned-comment" title="Choose a canned comment preset">
+                              <option value="" disabled selected>⚡ Canned Presets...</option>
+                            </select>
+                          </div>
+                          <button type="button" class="btn btn-secondary btn-xs" id="btnSaveCannedComment" title="Save current text in Comment field as a new preset">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                            <span>Save Current</span>
+                          </button>
+                          <button type="button" class="btn btn-icon btn-xs" id="btnManageCannedComments" title="Manage Presets" aria-label="Manage Canned Comments">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                          </button>
+                        </div>
+                      </div>
+                      <input type="text" id="inputComment" name="comment" class="form-input" placeholder="Additional notes, Suno profile URL, or tags">
                     </div>
 
                     <div class="form-group span-2">
@@ -505,6 +521,56 @@
     </div>
   </div>
 
+  <!-- Canned Comments & Presets Modal -->
+  <div id="cannedCommentsModal" class="modal-overlay hidden" role="dialog" aria-labelledby="cannedCommentsModalTitle" aria-modal="true">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </div>
+          <div>
+            <h2 id="cannedCommentsModalTitle" class="modal-title">Canned Comments & Presets</h2>
+            <p class="modal-subtitle">Manage reusable comments, Suno creator URLs, and metadata tags</p>
+          </div>
+        </div>
+        <button class="btn-close" id="btnCloseCannedModal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Add New Preset Form Card -->
+        <div class="preset-create-card">
+          <h4 class="preset-section-title">Add New Preset</h4>
+          <form id="formAddPreset" class="preset-create-form">
+            <div class="preset-form-inputs">
+              <input type="text" id="inputPresetLabel" class="form-input" placeholder="Preset Label (e.g. Suno Profile URL)" required maxlength="60">
+              <input type="text" id="inputPresetText" class="form-input" placeholder="Comment Text (e.g. https://suno.com/@username)" required maxlength="255">
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm" id="btnAddPreset">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              <span>Add Preset</span>
+            </button>
+          </form>
+        </div>
+
+        <!-- Preset Items List -->
+        <div class="presets-list-section">
+          <div class="presets-list-header">
+            <h4 class="preset-section-title">Saved Presets (<span id="cannedPresetCount">0</span>)</h4>
+            <button type="button" class="btn btn-ghost btn-xs text-danger" id="btnResetPresets" title="Restore default presets">
+              Restore Defaults
+            </button>
+          </div>
+          <div class="presets-items-list" id="cannedPresetsList">
+            <!-- Injected dynamically -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- In-App Live Terminal Console Modal -->
   <div id="updaterModal" class="modal-overlay hidden" role="dialog" aria-labelledby="updaterModalTitle" aria-modal="true" data-backdrop="static">
     <div class="modal-card modal-terminal">
@@ -549,6 +615,6 @@
   <!-- Toast Notification Container -->
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
-  <script src="/js/app.js?v=0.2.1"></script>
+  <script src="/js/app.js?v=0.2.2"></script>
 </body>
 </html>

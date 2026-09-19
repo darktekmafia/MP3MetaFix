@@ -1,6 +1,6 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.2.2-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 
@@ -14,6 +14,10 @@
   - Track Title, Artist, Album, Album Artist, Genre, Year / Date
   - Track Number / Total Tracks, Disc Number / Total Discs, BPM, Composer
   - Comments & Unsynchronized Lyrics
+- ⚡ **Configurable Canned Comments & Quick Presets**:
+  - Quick-select preset dropdown to one-click populate comments (e.g. Suno creator profile URLs, attribution tags, mastering notes).
+  - Quick "Save Current" action to save any typed comment as a reusable preset.
+  - Built-in Presets Manager to add, edit, delete, and restore customizable presets persisted in `localStorage`.
 - 🖼️ **Album Artwork Manager**:
   - Extract and inspect embedded APIC cover art.
   - Drag-and-drop cover art replacement (JPEG, PNG, WebP converted & normalized via Pillow).

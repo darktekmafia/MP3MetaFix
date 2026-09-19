@@ -23,6 +23,10 @@ Because MP3MetaFix is tailored for processing AI-generated music downloads from 
     - Style / Prompt tags (e.g. *80s synthwave, female vocals, melancholic*) into Genre and Comments.
 - [ ] **Suno Artwork Importer**:
   - Direct import or drag-and-drop of high-resolution Suno track thumbnail artwork without manual downloading and resizing.
+- [x] **Configurable Canned Comments & Quick Presets [COMPLETED]**:
+  - Quick-select dropdown on the Lyrics & Notes tab to instantly prefill comments.
+  - "Save Current" action to save any typed comment text as a reusable preset.
+  - Preset Manager modal for adding, editing, deleting, and restoring presets saved in `localStorage`.
 - [ ] **AI Music Tagging Presets**:
   - Pre-configured tagging templates tailored for AI generations:
     - Model/Engine tags in comment frame (e.g. `Generated with Suno v3.5 / v4`).
