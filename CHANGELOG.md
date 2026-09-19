@@ -5,19 +5,21 @@ All notable changes to **MP3MetaFix** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-09-19
 
 ### Security & Hardening
-- **Configurable Trusted Proxy Whitelist**:
-  - Replaced wildcard proxy trust with `MP3METAFIX_TRUSTED_PROXIES` whitelist (defaulting strictly to loopback `127.0.0.1, ::1`). Direct connections from untrusted LAN peers have `X-Forwarded-For` and `X-Forwarded-Proto` headers ignored.
+- **Configurable Trusted Proxy Whitelist & Anti-Spoofing**:
+  - Replaced wildcard proxy trust with `MP3METAFIX_TRUSTED_PROXIES` allowlist (defaulting strictly to loopback `127.0.0.1, ::1`). Direct connections from untrusted LAN peers have `X-Forwarded-For` and `X-Forwarded-Proto` headers ignored.
 - **Strict 3-Part Session Token Enforcement**:
   - Removed non-expiring 2-part legacy token fallback in `verify_signed_session_token`, strictly enforcing 3-part `{uuid}.{timestamp}.{sig}` tokens with active TTL verification. Active legacy sessions are invalidated and require re-upload.
-- **Standards-Compliant RFC 7233 Audio Byte-Range Handling**:
-  - Implemented full RFC 7233 byte-range validation in `/api/stream` supporting normal, open-ended, and suffix ranges, returning HTTP `416 Range Not Satisfiable` with `Content-Range: bytes */{size}` for inverted, out-of-bounds, or empty file range requests.
+- **Standards-Compliant Single Audio Byte-Range Handling**:
+  - Implemented single byte-range validation in `/api/stream` supporting normal, open-ended, and suffix ranges, returning HTTP `416 Range Not Satisfiable` with `Content-Range: bytes */{size}` for inverted, out-of-bounds, empty file, or unsupported multi-range requests.
 - **Artwork Error Sanitization**:
   - Replaced dynamic exception string interpolation with fixed, sanitized client error messages in `backend/security.py` and restricted server logging to non-sensitive exception class names (`type(e).__name__`).
-- **Disabled Update Installation Endpoint**:
+- **Disabled In-App Update Installation Endpoint**:
   - Disabled `POST /api/updates/apply` (returning HTTP 403 Forbidden) pending dedicated administrative authorization, cross-process concurrency locking, and unprivileged service restart design.
+- **Cache-Busting Asset Queries**:
+  - Bumped asset cache-busting query strings (`?v=0.3.0`) in `frontend/index.html` to eliminate stale Cloudflare/browser caching.
 
 ---
 
