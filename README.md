@@ -1,6 +1,6 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 

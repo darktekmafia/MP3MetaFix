@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.1] - 2026-09-19
+
+### Fixed
+- **Frontend Element Null-Safety & Cache Desynchronization Resilience**:
+  - Added comprehensive null-safety checks and guards across all DOM event listeners, modal handlers, and the `WaveformVisualizer` component to prevent unhandled TypeError exceptions during stale CDN cache transitions.
+  - Bumped asset cache-busting queries (`?v=0.2.1`) to ensure instant client-side asset freshness across browsers and Cloudflare proxy caching.
+
+---
+
 ## [0.2.0] - 2026-09-19
 
 ### Added

@@ -414,7 +414,7 @@ document.addEventListener('DOMContentLoaded', () => {
       this.currentTimeEl = options.currentTimeEl;
       this.totalTimeEl = options.totalTimeEl;
 
-      this.ctx = this.canvas.getContext('2d');
+      this.ctx = this.canvas ? this.canvas.getContext('2d') : null;
       this.peaks = null;
       this.audioBuffer = null;
       this.audioCtx = null;
@@ -423,95 +423,102 @@ document.addEventListener('DOMContentLoaded', () => {
       this.currentProgress = 0;
       this.animFrameId = null;
 
-      this.initEvents();
-      this.setupResizeObserver();
+      if (this.container && this.canvas && this.audio) {
+        this.initEvents();
+        this.setupResizeObserver();
+      }
     }
 
     initEvents() {
-      // Hover guide and tooltip
-      this.container.addEventListener('mousemove', (e) => this.handleMouseMove(e));
-      this.container.addEventListener('mouseleave', () => this.handleMouseLeave());
+      if (this.container) {
+        // Hover guide and tooltip
+        this.container.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+        this.container.addEventListener('mouseleave', () => this.handleMouseLeave());
 
-      // Drag / Seek interactions with Pointer capture
-      this.container.addEventListener('pointerdown', (e) => {
-        if (!this.audio.src) return;
-        this.isDragging = true;
-        try {
-          this.container.setPointerCapture(e.pointerId);
-        } catch (_) {}
-        this.seekFromPointer(e);
-      });
-
-      this.container.addEventListener('pointermove', (e) => {
-        if (this.isDragging) {
-          this.seekFromPointer(e);
-        }
-      });
-
-      const stopDragging = (e) => {
-        if (this.isDragging) {
-          this.isDragging = false;
+        // Drag / Seek interactions with Pointer capture
+        this.container.addEventListener('pointerdown', (e) => {
+          if (!this.audio || !this.audio.src) return;
+          this.isDragging = true;
           try {
-            this.container.releasePointerCapture(e.pointerId);
+            this.container.setPointerCapture(e.pointerId);
           } catch (_) {}
-        }
-      };
+          this.seekFromPointer(e);
+        });
 
-      this.container.addEventListener('pointerup', stopDragging);
-      this.container.addEventListener('pointercancel', stopDragging);
+        this.container.addEventListener('pointermove', (e) => {
+          if (this.isDragging) {
+            this.seekFromPointer(e);
+          }
+        });
 
-      // Keyboard accessibility
-      this.container.addEventListener('keydown', (e) => {
-        if (!this.audio.src || !this.duration) return;
-        if (e.key === 'ArrowLeft') {
-          e.preventDefault();
-          this.audio.currentTime = Math.max(0, this.audio.currentTime - 5);
+        const stopDragging = (e) => {
+          if (this.isDragging) {
+            this.isDragging = false;
+            try {
+              this.container.releasePointerCapture(e.pointerId);
+            } catch (_) {}
+          }
+        };
+
+        this.container.addEventListener('pointerup', stopDragging);
+        this.container.addEventListener('pointercancel', stopDragging);
+
+        // Keyboard accessibility
+        this.container.addEventListener('keydown', (e) => {
+          if (!this.audio || !this.audio.src || !this.duration) return;
+          if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            this.audio.currentTime = Math.max(0, this.audio.currentTime - 5);
+            this.updateProgress();
+          } else if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            this.audio.currentTime = Math.min(this.duration, this.audio.currentTime + 5);
+            this.updateProgress();
+          } else if (e.key === 'Home') {
+            e.preventDefault();
+            this.audio.currentTime = 0;
+            this.updateProgress();
+          } else if (e.key === 'End') {
+            e.preventDefault();
+            this.audio.currentTime = this.duration;
+            this.updateProgress();
+          } else if (e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            togglePlayPause();
+          }
+        });
+      }
+
+      if (this.audio) {
+        // Audio element bindings
+        this.audio.addEventListener('timeupdate', () => {
+          if (!this.isDragging) {
+            this.updateProgress();
+          }
+        });
+
+        this.audio.addEventListener('play', () => {
+          this.startProgressLoop();
+        });
+
+        this.audio.addEventListener('pause', () => {
+          this.stopProgressLoop();
           this.updateProgress();
-        } else if (e.key === 'ArrowRight') {
-          e.preventDefault();
-          this.audio.currentTime = Math.min(this.duration, this.audio.currentTime + 5);
-          this.updateProgress();
-        } else if (e.key === 'Home') {
-          e.preventDefault();
-          this.audio.currentTime = 0;
-          this.updateProgress();
-        } else if (e.key === 'End') {
-          e.preventDefault();
-          this.audio.currentTime = this.duration;
-          this.updateProgress();
-        } else if (e.key === ' ' || e.key === 'Enter') {
-          e.preventDefault();
-          togglePlayPause();
-        }
-      });
+        });
 
-      // Audio element bindings
-      this.audio.addEventListener('timeupdate', () => {
-        if (!this.isDragging) {
-          this.updateProgress();
-        }
-      });
-
-      this.audio.addEventListener('play', () => {
-        this.startProgressLoop();
-      });
-
-      this.audio.addEventListener('pause', () => {
-        this.stopProgressLoop();
-        this.updateProgress();
-      });
-
-      this.audio.addEventListener('ended', () => {
-        this.stopProgressLoop();
-        pauseAudio();
-        this.currentProgress = 0;
-        if (this.playhead) this.playhead.style.left = '0%';
-        if (this.currentTimeEl) this.currentTimeEl.textContent = '00:00';
-        this.render();
-      });
+        this.audio.addEventListener('ended', () => {
+          this.stopProgressLoop();
+          pauseAudio();
+          this.currentProgress = 0;
+          if (this.playhead) this.playhead.style.left = '0%';
+          if (this.currentTimeEl) this.currentTimeEl.textContent = '00:00';
+          this.render();
+        });
+      }
     }
 
     setupResizeObserver() {
+      if (!this.container) return;
       if (window.ResizeObserver) {
         const ro = new ResizeObserver(() => {
           this.resizeAndRender();
@@ -524,7 +531,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     startProgressLoop() {
       const loop = () => {
-        if (!this.audio.paused && !this.isDragging) {
+        if (this.audio && !this.audio.paused && !this.isDragging) {
           this.updateProgress();
           this.animFrameId = requestAnimationFrame(loop);
         }
@@ -541,35 +548,41 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     handleMouseMove(e) {
-      if (!this.duration && (!this.audio.duration || isNaN(this.audio.duration))) return;
-      const dur = this.duration || this.audio.duration;
+      if (!this.container) return;
+      const dur = this.duration || (this.audio && !isNaN(this.audio.duration) ? this.audio.duration : 0);
+      if (!dur) return;
       const rect = this.container.getBoundingClientRect();
       const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
       const pct = rect.width > 0 ? x / rect.width : 0;
       const hoverTime = pct * dur;
 
-      this.hoverLine.style.opacity = '1';
-      this.hoverLine.style.left = `${x}px`;
+      if (this.hoverLine) {
+        this.hoverLine.style.opacity = '1';
+        this.hoverLine.style.left = `${x}px`;
+      }
 
-      this.tooltip.style.opacity = '1';
-      this.tooltip.textContent = formatTime(hoverTime);
+      if (this.tooltip) {
+        this.tooltip.style.opacity = '1';
+        this.tooltip.textContent = formatTime(hoverTime);
 
-      const tooltipWidth = this.tooltip.offsetWidth || 42;
-      const halfWidth = tooltipWidth / 2;
-      const clampedX = Math.max(halfWidth + 4, Math.min(rect.width - halfWidth - 4, x));
-      this.tooltip.style.left = `${clampedX}px`;
+        const tooltipWidth = this.tooltip.offsetWidth || 42;
+        const halfWidth = tooltipWidth / 2;
+        const clampedX = Math.max(halfWidth + 4, Math.min(rect.width - halfWidth - 4, x));
+        this.tooltip.style.left = `${clampedX}px`;
+      }
     }
 
     handleMouseLeave() {
       if (!this.isDragging) {
-        this.hoverLine.style.opacity = '0';
-        this.tooltip.style.opacity = '0';
+        if (this.hoverLine) this.hoverLine.style.opacity = '0';
+        if (this.tooltip) this.tooltip.style.opacity = '0';
       }
     }
 
     seekFromPointer(e) {
-      const dur = this.duration || this.audio.duration;
-      if (!dur || isNaN(dur) || dur <= 0) return;
+      if (!this.container || !this.audio) return;
+      const dur = this.duration || (!isNaN(this.audio.duration) ? this.audio.duration : 0);
+      if (!dur || dur <= 0) return;
       const rect = this.container.getBoundingClientRect();
       const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
       const pct = rect.width > 0 ? x / rect.width : 0;
@@ -578,18 +591,23 @@ document.addEventListener('DOMContentLoaded', () => {
       this.audio.currentTime = pct * dur;
       this.updateProgress();
 
-      this.hoverLine.style.opacity = '1';
-      this.hoverLine.style.left = `${x}px`;
-      this.tooltip.style.opacity = '1';
-      this.tooltip.textContent = formatTime(this.audio.currentTime);
-      const tooltipWidth = this.tooltip.offsetWidth || 42;
-      const halfWidth = tooltipWidth / 2;
-      const clampedX = Math.max(halfWidth + 4, Math.min(rect.width - halfWidth - 4, x));
-      this.tooltip.style.left = `${clampedX}px`;
+      if (this.hoverLine) {
+        this.hoverLine.style.opacity = '1';
+        this.hoverLine.style.left = `${x}px`;
+      }
+      if (this.tooltip) {
+        this.tooltip.style.opacity = '1';
+        this.tooltip.textContent = formatTime(this.audio.currentTime);
+        const tooltipWidth = this.tooltip.offsetWidth || 42;
+        const halfWidth = tooltipWidth / 2;
+        const clampedX = Math.max(halfWidth + 4, Math.min(rect.width - halfWidth - 4, x));
+        this.tooltip.style.left = `${clampedX}px`;
+      }
     }
 
     updateProgress() {
-      const dur = this.duration || this.audio.duration;
+      if (!this.audio) return;
+      const dur = this.duration || (!isNaN(this.audio.duration) ? this.audio.duration : 0);
       if (isNaN(dur) || dur <= 0) return;
       this.duration = dur;
       this.currentProgress = Math.max(0, Math.min(1, this.audio.currentTime / dur));
@@ -598,7 +616,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (this.playhead) {
         this.playhead.style.left = `${pct}%`;
       }
-      this.container.setAttribute('aria-valuenow', Math.round(pct));
+      if (this.container) {
+        this.container.setAttribute('aria-valuenow', Math.round(pct));
+      }
 
       if (this.currentTimeEl) {
         this.currentTimeEl.textContent = formatTime(this.audio.currentTime);
@@ -695,6 +715,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     resizeAndRender() {
+      if (!this.canvas || !this.ctx || !this.container) return;
       const dpr = window.devicePixelRatio || 1;
       const rect = this.container.getBoundingClientRect();
       const cssWidth = Math.floor(rect.width) || 300;
@@ -708,6 +729,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     render() {
+      if (!this.canvas || !this.ctx || !this.container) return;
       if (!this.peaks || !this.peaks.length) return;
       const rect = this.container.getBoundingClientRect();
       const width = rect.width || 300;
@@ -762,6 +784,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     drawRoundedRect(x, y, w, h, r, fillStyle) {
+      if (!this.ctx) return;
       this.ctx.fillStyle = fillStyle;
       this.ctx.beginPath();
       if (this.ctx.roundRect) {
@@ -783,7 +806,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (this.tooltip) this.tooltip.style.opacity = '0';
       if (this.statusBadge) this.statusBadge.textContent = 'Ready';
       this.showLoader(false);
-      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      if (this.ctx && this.canvas) {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      }
     }
   }
 
@@ -800,14 +825,16 @@ document.addEventListener('DOMContentLoaded', () => {
     totalTimeEl: playerTotalTime
   });
 
-  btnPlayPause.addEventListener('click', togglePlayPause);
+  if (btnPlayPause) {
+    btnPlayPause.addEventListener('click', togglePlayPause);
+  }
 
   function togglePlayPause() {
-    if (!audioElement.src) return;
+    if (!audioElement || !audioElement.src) return;
     if (audioElement.paused) {
       audioElement.play().then(() => {
-        playIcon.classList.add('hidden');
-        pauseIcon.classList.remove('hidden');
+        if (playIcon) playIcon.classList.add('hidden');
+        if (pauseIcon) pauseIcon.classList.remove('hidden');
       }).catch(err => {
         showToast('Playback error: ' + err.message, 'error');
       });
@@ -817,19 +844,24 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function pauseAudio() {
-    audioElement.pause();
-    playIcon.classList.remove('hidden');
-    pauseIcon.classList.add('hidden');
+    if (audioElement) audioElement.pause();
+    if (playIcon) playIcon.classList.remove('hidden');
+    if (pauseIcon) pauseIcon.classList.add('hidden');
   }
 
-  playerVolume.addEventListener('input', (e) => {
-    audioElement.volume = parseFloat(e.target.value);
-  });
+  if (playerVolume) {
+    playerVolume.addEventListener('input', (e) => {
+      if (audioElement) audioElement.volume = parseFloat(e.target.value);
+    });
+  }
 
-  btnMute.addEventListener('click', () => {
-    audioElement.muted = !audioElement.muted;
-    btnMute.style.opacity = audioElement.muted ? '0.4' : '1';
-  });
+  if (btnMute) {
+    btnMute.addEventListener('click', () => {
+      if (!audioElement) return;
+      audioElement.muted = !audioElement.muted;
+      btnMute.style.opacity = audioElement.muted ? '0.4' : '1';
+    });
+  }
 
   function formatTime(seconds) {
     if (isNaN(seconds) || seconds < 0) return '00:00';
@@ -1314,17 +1346,19 @@ document.addEventListener('DOMContentLoaded', () => {
   // Close modals on escape key or backdrop click
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (!versionModal.classList.contains('hidden')) {
+      if (versionModal && !versionModal.classList.contains('hidden')) {
         closeVersionModal();
       }
     }
   });
 
-  versionModal.addEventListener('click', (e) => {
-    if (e.target === versionModal) {
-      closeVersionModal();
-    }
-  });
+  if (versionModal) {
+    versionModal.addEventListener('click', (e) => {
+      if (e.target === versionModal) {
+        closeVersionModal();
+      }
+    });
+  }
 
   // Initial silent background check on startup
   loadSystemInfo();
