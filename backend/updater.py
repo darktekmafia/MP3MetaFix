@@ -197,8 +197,10 @@ async def stream_install_update() -> AsyncGenerator[str, None]:
                 await asyncio.sleep(0.01)
 
         await process.wait()
+        logger.info(f"Update process finished with returncode: {process.returncode}")
 
-        if process.returncode == 0:
+        # Returncode 0 is normal exit; -15 or 143 is SIGTERM from systemd service restart
+        if process.returncode in (0, -15, 143):
             logger.info("In-app update completed successfully.")
             payload = json.dumps({
                 "type": "complete",

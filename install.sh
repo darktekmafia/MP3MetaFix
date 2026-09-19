@@ -388,23 +388,25 @@ do_update() {
     # Update dependencies
     setup_python_env
 
-    # Restart service if running
-    if systemctl --user is-active --quiet mp3metafix.service 2>/dev/null; then
-        log_info "Restarting systemd user service..."
-        systemctl --user restart mp3metafix.service
-        log_success "User service restarted."
-    elif systemctl is-active --quiet mp3metafix.service 2>/dev/null; then
-        log_info "Restarting systemd system service..."
-        sudo systemctl restart mp3metafix.service
-        log_success "System service restarted."
-    fi
-
     detect_environment
     if [ "$ENV_TYPE" = "desktop" ]; then
         install_desktop_integration
     fi
 
     log_success "MP3MetaFix updated to latest version (${VERSION})!"
+
+    # Restart service if running (scheduled detached to allow clean subprocess exit)
+    if systemctl --user is-active --quiet mp3metafix.service 2>/dev/null; then
+        log_info "Scheduling restart of systemd user service..."
+        (sleep 1 && systemctl --user restart mp3metafix.service) >/dev/null 2>&1 &
+        disown 2>/dev/null || true
+        log_success "User service restart scheduled."
+    elif systemctl is-active --quiet mp3metafix.service 2>/dev/null; then
+        log_info "Scheduling restart of systemd system service..."
+        (sleep 1 && (sudo systemctl restart mp3metafix.service 2>/dev/null || systemctl restart mp3metafix.service 2>/dev/null)) >/dev/null 2>&1 &
+        disown 2>/dev/null || true
+        log_success "System service restart scheduled."
+    fi
 }
 
 # Check Status
