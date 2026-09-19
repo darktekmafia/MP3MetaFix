@@ -162,12 +162,12 @@ This automatically:
 4. Executes `systemctl daemon-reload` and restarts the service.
 
 > [!IMPORTANT]
-> **Upgrades from Pre-Handoff Releases (`v0.3.0`–`v0.3.2`)**:
-> When upgrading from a release prior to `v0.3.3`, the initial `./install.sh --update` pulls the updated repository code to disk but executes the legacy installer flow already loaded into memory. To complete the systemd service migration, either:
-> 1. Run `./install.sh --update` a **second time**, or
+> **Upgrades Starting from Legacy Installers (`v0.3.0` & `v0.3.1`)**:
+> When an upgrade is initiated under a legacy installer version (`v0.3.0` or `v0.3.1` running in memory), the initial `./install.sh --update` pulls the updated repository code to disk but completes the legacy flow (which lacked migration logic and process handoff). To apply the systemd service migration on those systems, either:
+> 1. Run `./install.sh --update` a **second time** (which now executes the new installer from disk), or
 > 2. Execute the standalone migration command: `sudo .venv/bin/python scripts/migrate_service.py /etc/systemd/system/mp3metafix.service && sudo systemctl daemon-reload && sudo systemctl restart mp3metafix.service`.
 >
-> All updates starting from **`v0.3.3` onward** include the in-place process handoff and will execute new migrations automatically on the very first update run.
+> *(Note: The standalone installer in `v0.3.2` already included `migrate_existing_services` directly. All updates initiated from `v0.3.3` onward additionally feature the automatic in-place process handoff and execute new migrations immediately during the first update invocation).*
 
 ### Manual Systemd Unit Migration (Optional)
 If you wish to inspect or run the migration script directly without pulling Git updates:

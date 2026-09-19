@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation & Lifecycle
 - **Pre-Handoff vs Handoff-Capable Update Transition Semantics**:
-  - Documented that systems upgrading from legacy pre-handoff versions (`v0.3.0`–`v0.3.2`) require a second `./install.sh --update` execution (or a manual `sudo .venv/bin/python scripts/migrate_service.py /etc/systemd/system/mp3metafix.service` run) because the pre-handoff in-memory installer script completes its old flow before the on-disk code is refreshed.
-  - Verified and tested the automatic in-place re-execution handoff for all upgrades initiated from handoff-capable installers (`v0.3.3+`), ensuring immediate single-invocation migration.
+  - Clarified that systems upgrading from legacy pre-migration versions (`v0.3.0` & `v0.3.1`) require a second `./install.sh --update` invocation (or manual migration execution) because the legacy in-memory script completes its old flow before on-disk code is refreshed.
+  - Noted that `v0.3.2` introduced `scripts/migrate_service.py` directly, and releases `v0.3.3+` feature the in-place process handoff (`exec bash`) for automated single-invocation migration during updates.
 - **Cache-Busting Asset Refresh**:
   - Bumped static asset query strings (`?v=0.3.4`) across `frontend/index.html`.
 
