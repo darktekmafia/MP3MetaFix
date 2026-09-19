@@ -106,6 +106,12 @@ Expand the underlying audio engine beyond MP3:
   - Persistent user preference saved in `localStorage`.
   - Automatic synchronization with OS `prefers-color-scheme` media queries.
   - Smooth CSS variable transitions between themes without jarring color jumps or reload flashes.
+- [ ] **Mobile-First Responsive Design & Touch Optimization (Suno On-the-Go)**:
+  - **Adaptive Viewport Layouts**: Fluid single-column responsive stacking for smartphones and tablets (`< 768px`), collapsible artwork manager, and compact metadata cards.
+  - **Sticky Mobile Bottom Action Bar**: Persistent bottom bar housing the Save/Download action and mini audio playback controls for seamless one-thumb operation while editing long lyrics or metadata fields.
+  - **Touch & Mobile File Pickers**: Enlarged 48px tap targets, mobile file drawer integration, and direct photo library picker for album art.
+  - **Native Web Share API (`navigator.share`)**: One-tap export to send fixed MP3s directly to mobile music players (VLC, Files, Telegram, Discord, audio apps) on Android and iOS.
+  - **MediaSession API Integration**: Display track title, artist, album art, and seek controls in the mobile lockscreen and notification shade during audio preview.
 - [ ] **UI Density & Customization**:
   - Compact table view vs spacious editing panel mode.
   - Customizable default landing tab (e.g. Essential vs Advanced tags vs Lyrics).
