@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Optional
 
 # Base Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -63,11 +64,47 @@ SESSION_SECRET_KEY = get_secret_key()
 SESSION_COOKIE_NAME = "mp3metafix_session"
 SESSION_COOKIE_MAX_AGE = SESSION_TTL_MINUTES * 60
 
-# Version
+# GitHub & Repository Info
+GITHUB_REPO = os.getenv("MP3METAFIX_GITHUB_REPO", "darktekmafia/MP3MetaFix")
+GITHUB_REPO_URL = f"https://github.com/{GITHUB_REPO}"
+
+# Version & Git Metadata
 def get_version() -> str:
     version_file = BASE_DIR / "VERSION"
     if version_file.exists():
         return version_file.read_text().strip()
     return "0.2.0"
+
+def get_git_commit() -> Optional[str]:
+    """Retrieve current short Git commit hash if running in a git repository."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "-C", str(BASE_DIR), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+def get_git_branch() -> Optional[str]:
+    """Retrieve current Git branch name if available."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "-C", str(BASE_DIR), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
 
 VERSION = get_version()

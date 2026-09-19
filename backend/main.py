@@ -62,6 +62,11 @@ from backend.metadata_engine import (
     write_metadata_and_artwork,
     get_embedded_artwork_binary,
 )
+from backend.updater import (
+    get_system_version_info,
+    check_github_updates,
+    stream_install_update,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -139,8 +144,28 @@ async def health_check():
 
 @app.get("/api/version")
 async def get_app_version():
-    """Version inquiry endpoint."""
-    return {"version": VERSION}
+    """Version and system inquiry endpoint returning detailed environment metadata."""
+    return get_system_version_info()
+
+
+@app.get("/api/updates/check")
+async def check_updates(force: bool = False):
+    """Check GitHub repository for new releases and changelog."""
+    return await check_github_updates(force_refresh=force)
+
+
+@app.post("/api/updates/apply")
+async def apply_update(request: Request):
+    """Execute install.sh --update --headless and stream real-time logs via SSE."""
+    return StreamingResponse(
+        stream_install_update(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/upload")

@@ -33,7 +33,14 @@
         </div>
       </div>
       <div class="header-badges">
-        <span class="badge badge-version" id="versionBadge">v0.2.0</span>
+        <button class="badge badge-version badge-btn" id="versionBadge" title="Click to view Version Details & Updates">v0.2.0</button>
+        <button class="badge badge-update hidden" id="updateBadge" title="New version available! Click to inspect"><span class="update-pulse-dot"></span> Update Available</button>
+        <button class="btn btn-icon btn-header" id="btnVersionModal" title="Version & Update Manager" aria-label="Version and Update Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
         <span class="badge badge-status" id="serverStatus"><span class="status-dot"></span> Online</span>
       </div>
     </header>
@@ -359,6 +366,170 @@
         <span>Shortcut: <kbd>Ctrl+S</kbd> to save</span>
       </div>
     </footer>
+  </div>
+
+  <!-- Version & Update Inspector Modal -->
+  <div id="versionModal" class="modal-overlay hidden" role="dialog" aria-labelledby="versionModalTitle" aria-modal="true">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+          </div>
+          <div>
+            <h2 id="versionModalTitle" class="modal-title">System & Version Details</h2>
+            <p class="modal-subtitle">MP3MetaFix Environment & Lifecycle Manager</p>
+          </div>
+        </div>
+        <button class="btn-close" id="btnCloseVersionModal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Current Version Grid -->
+        <div class="version-details-grid">
+          <div class="v-card">
+            <span class="v-label">Installed Version</span>
+            <div class="v-val-group">
+              <span class="v-val-highlight" id="sysVersion">v0.2.0</span>
+              <span class="v-tag" id="sysStatusTag">Production</span>
+            </div>
+          </div>
+          <div class="v-card">
+            <span class="v-label">Git Commit</span>
+            <div class="v-val-group">
+              <code class="v-commit-hash" id="sysGitCommit">--</code>
+              <span class="v-subtext" id="sysGitBranch">main</span>
+            </div>
+          </div>
+          <div class="v-card">
+            <span class="v-label">Runtime Mode</span>
+            <div class="v-val-group">
+              <span class="v-val" id="sysRuntimeMode">Systemd Service</span>
+            </div>
+          </div>
+          <div class="v-card">
+            <span class="v-label">GitHub Repository</span>
+            <div class="v-val-group">
+              <a href="https://github.com/darktekmafia/MP3MetaFix" target="_blank" rel="noopener noreferrer" class="v-link" id="sysRepoLink">
+                darktekmafia/MP3MetaFix
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Updates Status Section -->
+        <div class="update-check-section">
+          <div class="update-check-header">
+            <div>
+              <h3 class="section-heading">Software Updates</h3>
+              <p class="section-subheading" id="updateCheckedAt">Last checked: Just now</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="btnCheckUpdatesNow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" class="spin-on-load">
+                <path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+              <span>Check for Updates</span>
+            </button>
+          </div>
+
+          <!-- State A: Up to date -->
+          <div id="updateUpToDateCard" class="update-result-card update-ok">
+            <div class="update-card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+              </svg>
+            </div>
+            <div class="update-card-content">
+              <h4>MP3MetaFix is up to date</h4>
+              <p id="upToDateMsg">You are running the latest version available.</p>
+            </div>
+          </div>
+
+          <!-- State B: Update Available Card -->
+          <div id="updateAvailableCard" class="update-result-card update-found hidden">
+            <div class="update-found-header">
+              <div class="update-badge-row">
+                <span class="badge badge-pulse">Update Available</span>
+                <span class="v-new-tag" id="availableVersionTag">v0.3.0</span>
+                <span class="v-date" id="availableReleaseDate">--</span>
+              </div>
+              <h4 class="update-release-title" id="availableReleaseTitle">New Release</h4>
+            </div>
+
+            <!-- Scrollable Release Notes -->
+            <div class="release-notes-wrapper">
+              <div class="release-notes-label">Release Notes & Changelog:</div>
+              <div class="release-notes-content" id="availableReleaseNotes">
+                <!-- Injected formatted release notes -->
+              </div>
+            </div>
+
+            <div class="update-action-footer">
+              <p class="update-warning-note">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                Updates run <code>install.sh --update --headless</code> and automatically restart the service.
+              </p>
+              <button class="btn btn-primary" id="btnLaunchUpdater">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span>Install & Restart Now</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-App Live Terminal Console Modal -->
+  <div id="updaterModal" class="modal-overlay hidden" role="dialog" aria-labelledby="updaterModalTitle" aria-modal="true" data-backdrop="static">
+    <div class="modal-card modal-terminal">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <span class="t-dot t-red"></span>
+          <span class="t-dot t-yellow"></span>
+          <span class="t-dot t-green"></span>
+        </div>
+        <div class="terminal-title-center">
+          <span id="updaterModalTitle">MP3MetaFix Live Updater</span>
+        </div>
+        <div class="terminal-status-badge" id="terminalStatusBadge">
+          <span class="status-pulse-dot"></span> In Progress
+        </div>
+      </div>
+
+      <!-- Terminal Output Screen -->
+      <div class="terminal-body" id="terminalLogContainer">
+        <pre id="terminalLogs" class="terminal-logs"></pre>
+      </div>
+
+      <!-- Terminal Footer / Reconnect State -->
+      <div class="terminal-footer">
+        <div class="terminal-progress-info" id="terminalProgressInfo">
+          <span class="spinner-small" id="terminalSpinner"></span>
+          <span id="terminalProgressText">Executing update script...</span>
+        </div>
+        <div class="terminal-actions hidden" id="terminalActions">
+          <button class="btn btn-primary" id="btnReloadAfterUpdate">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            <span>Reload Application</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Toast Notification Container -->

@@ -63,15 +63,38 @@ document.addEventListener('DOMContentLoaded', () => {
   const presetButtons = document.querySelectorAll('.preset-btn');
   const toastContainer = document.getElementById('toastContainer');
 
-  // --- Initialize Health/Version Check ---
-  fetch('/api/version')
-    .then(r => r.json())
-    .then(data => {
-      if (data.version) versionBadge.textContent = `v${data.version}`;
-    })
-    .catch(() => {
-      serverStatus.innerHTML = '<span class="status-dot" style="background:#f43f5e;box-shadow:0 0 8px #f43f5e"></span> Offline';
-    });
+  // --- Version & Update Manager Elements ---
+  const updateBadge = document.getElementById('updateBadge');
+  const btnVersionModal = document.getElementById('btnVersionModal');
+  const versionModal = document.getElementById('versionModal');
+  const btnCloseVersionModal = document.getElementById('btnCloseVersionModal');
+  const sysVersion = document.getElementById('sysVersion');
+  const sysGitCommit = document.getElementById('sysGitCommit');
+  const sysGitBranch = document.getElementById('sysGitBranch');
+  const sysRuntimeMode = document.getElementById('sysRuntimeMode');
+  const sysRepoLink = document.getElementById('sysRepoLink');
+  const updateCheckedAt = document.getElementById('updateCheckedAt');
+  const btnCheckUpdatesNow = document.getElementById('btnCheckUpdatesNow');
+  const updateUpToDateCard = document.getElementById('updateUpToDateCard');
+  const upToDateMsg = document.getElementById('upToDateMsg');
+  const updateAvailableCard = document.getElementById('updateAvailableCard');
+  const availableVersionTag = document.getElementById('availableVersionTag');
+  const availableReleaseDate = document.getElementById('availableReleaseDate');
+  const availableReleaseTitle = document.getElementById('availableReleaseTitle');
+  const availableReleaseNotes = document.getElementById('availableReleaseNotes');
+  const btnLaunchUpdater = document.getElementById('btnLaunchUpdater');
+
+  // Terminal Modal Elements
+  const updaterModal = document.getElementById('updaterModal');
+  const terminalLogs = document.getElementById('terminalLogs');
+  const terminalLogContainer = document.getElementById('terminalLogContainer');
+  const terminalStatusBadge = document.getElementById('terminalStatusBadge');
+  const terminalSpinner = document.getElementById('terminalSpinner');
+  const terminalProgressText = document.getElementById('terminalProgressText');
+  const terminalActions = document.getElementById('terminalActions');
+  const btnReloadAfterUpdate = document.getElementById('btnReloadAfterUpdate');
+
+  let activeUpdateData = null;
 
   // --- Toast Notifications ---
   function showToast(message, type = 'info', duration = 3500) {
@@ -600,4 +623,296 @@ document.addEventListener('DOMContentLoaded', () => {
       fileInput.value = '';
     }
   });
+
+  // =====================================================================
+  // Version Details & In-App Web Updater Controller
+  // =====================================================================
+
+  async function loadSystemInfo() {
+    try {
+      const res = await fetch('/api/version');
+      if (!res.ok) throw new Error('Version API error');
+      const data = await res.json();
+
+      if (data.version) {
+        versionBadge.textContent = `v${data.version}`;
+        sysVersion.textContent = `v${data.version}`;
+      }
+      if (data.git_commit) {
+        sysGitCommit.textContent = data.git_commit;
+      } else {
+        sysGitCommit.textContent = 'Standalone';
+      }
+      if (data.git_branch) {
+        sysGitBranch.textContent = data.git_branch;
+      }
+      if (data.is_systemd_service) {
+        sysRuntimeMode.textContent = 'Systemd Service (Boot)';
+      } else {
+        sysRuntimeMode.textContent = 'Standalone / Local';
+      }
+      if (data.github_repo) {
+        sysRepoLink.textContent = data.github_repo;
+        sysRepoLink.href = data.github_repo_url || `https://github.com/${data.github_repo}`;
+      }
+    } catch (err) {
+      console.warn('Could not load system info:', err);
+      serverStatus.innerHTML = '<span class="status-dot" style="background:#f43f5e;box-shadow:0 0 8px #f43f5e"></span> Offline';
+    }
+  }
+
+  async function checkForUpdates(force = false, silent = false) {
+    const spinner = btnCheckUpdatesNow ? btnCheckUpdatesNow.querySelector('.spin-on-load') : null;
+    if (spinner) spinner.classList.add('spinning');
+    if (btnCheckUpdatesNow) btnCheckUpdatesNow.disabled = true;
+
+    try {
+      const url = force ? '/api/updates/check?force=true' : '/api/updates/check';
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      activeUpdateData = data;
+
+      if (data.checked_at) {
+        updateCheckedAt.textContent = `Last checked: ${data.checked_at}`;
+      }
+
+      if (data.update_available) {
+        // Show notification badge in navbar
+        updateBadge.classList.remove('hidden');
+
+        // Populate update modal card
+        availableVersionTag.textContent = `v${data.latest_version}`;
+        availableReleaseTitle.textContent = data.release_name || `Release v${data.latest_version}`;
+        
+        if (data.published_at) {
+          const dateStr = new Date(data.published_at).toLocaleDateString(undefined, {
+            year: 'numeric', month: 'short', day: 'numeric'
+          });
+          availableReleaseDate.textContent = `Published: ${dateStr}`;
+        } else {
+          availableReleaseDate.textContent = '';
+        }
+
+        // Render release notes safely
+        availableReleaseNotes.textContent = data.release_notes || 'No release notes provided.';
+
+        updateAvailableCard.classList.remove('hidden');
+        updateUpToDateCard.classList.add('hidden');
+
+        if (!silent) {
+          showToast(`Update available: v${data.latest_version}!`, 'info', 4000);
+        }
+      } else {
+        // Up to date
+        updateBadge.classList.add('hidden');
+        updateAvailableCard.classList.add('hidden');
+        updateUpToDateCard.classList.remove('hidden');
+        
+        if (data.error) {
+          upToDateMsg.textContent = data.error;
+        } else {
+          upToDateMsg.textContent = `You are running the latest version (v${data.current_version}).`;
+        }
+
+        if (!silent) {
+          showToast('MP3MetaFix is up to date!', 'success', 3000);
+        }
+      }
+    } catch (err) {
+      console.warn('Update check failed:', err);
+      if (!silent) {
+        showToast('Could not check for updates. Check internet connection.', 'error', 3500);
+      }
+    } finally {
+      if (spinner) spinner.classList.remove('spinning');
+      if (btnCheckUpdatesNow) btnCheckUpdatesNow.disabled = false;
+    }
+  }
+
+  function openVersionModal() {
+    loadSystemInfo();
+    checkForUpdates(false, true);
+    versionModal.classList.remove('hidden');
+  }
+
+  function closeVersionModal() {
+    versionModal.classList.add('hidden');
+  }
+
+  async function startInAppUpdate() {
+    if (state.hasSession) {
+      if (!confirm('You have an active audio editing session. Installing the update will restart the server and discard unsaved edits. Are you sure you want to proceed?')) {
+        return;
+      }
+    } else {
+      if (!confirm('Proceed with in-app update? The server will automatically install updates and restart.')) {
+        return;
+      }
+    }
+
+    closeVersionModal();
+    updaterModal.classList.remove('hidden');
+    terminalLogs.textContent = '';
+    terminalStatusBadge.innerHTML = '<span class="status-pulse-dot"></span> In Progress';
+    terminalProgressText.textContent = 'Initializing update script...';
+    terminalSpinner.classList.remove('hidden');
+    terminalActions.classList.add('hidden');
+
+    function appendLog(text) {
+      const line = document.createTextNode(text + '\n');
+      terminalLogs.appendChild(line);
+      terminalLogContainer.scrollTop = terminalLogContainer.scrollHeight;
+    }
+
+    try {
+      appendLog('>>> Starting MP3MetaFix update worker...');
+      appendLog('>>> Target repo: https://github.com/darktekmafia/MP3MetaFix');
+
+      const response = await fetch('/api/updates/apply', {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned error ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const block of lines) {
+          const trimmed = block.trim();
+          if (trimmed.startsWith('data:')) {
+            try {
+              const jsonStr = trimmed.replace(/^data:\s*/, '');
+              const event = JSON.parse(jsonStr);
+
+              if (event.type === 'log') {
+                appendLog(event.message);
+              } else if (event.type === 'step') {
+                terminalProgressText.textContent = event.message;
+                appendLog(`[STEP] ${event.message}`);
+              } else if (event.type === 'complete') {
+                appendLog(`\n[SUCCESS] ${event.message}`);
+                terminalProgressText.textContent = 'Update applied. Waiting for server reboot...';
+                terminalStatusBadge.innerHTML = '<span class="status-pulse-dot" style="background:#10b981"></span> Reconnecting...';
+                pollServerHealth();
+                return;
+              } else if (event.type === 'error') {
+                appendLog(`\n[ERROR] ${event.message}`);
+                terminalProgressText.textContent = 'Update encountered an error.';
+                terminalStatusBadge.innerHTML = '<span class="status-dot" style="background:#f43f5e"></span> Failed';
+                terminalSpinner.classList.add('hidden');
+                terminalActions.classList.remove('hidden');
+                btnReloadAfterUpdate.textContent = 'Close Terminal';
+                btnReloadAfterUpdate.onclick = () => updaterModal.classList.add('hidden');
+                return;
+              }
+            } catch (e) {
+              appendLog(trimmed);
+            }
+          }
+        }
+      }
+
+      // If stream ended without explicit complete event, start polling
+      pollServerHealth();
+
+    } catch (err) {
+      appendLog(`\n[FATAL] Update failed to execute: ${err.message}`);
+      terminalProgressText.textContent = 'Update execution failed.';
+      terminalStatusBadge.innerHTML = '<span class="status-dot" style="background:#f43f5e"></span> Error';
+      terminalSpinner.classList.add('hidden');
+      terminalActions.classList.remove('hidden');
+      btnReloadAfterUpdate.textContent = 'Close Terminal';
+      btnReloadAfterUpdate.onclick = () => updaterModal.classList.add('hidden');
+    }
+  }
+
+  function pollServerHealth() {
+    let attempts = 0;
+    const maxAttempts = 40; // 60 seconds total
+
+    const interval = setInterval(async () => {
+      attempts++;
+      terminalProgressText.textContent = `Server restarting... reconnecting (attempt ${attempts}/${maxAttempts})...`;
+
+      try {
+        const res = await fetch('/api/health?t=' + Date.now());
+        if (res.ok) {
+          clearInterval(interval);
+          terminalSpinner.classList.add('hidden');
+          terminalProgressText.textContent = 'Server is online with latest update!';
+          terminalStatusBadge.innerHTML = '<span class="status-dot" style="background:#10b981"></span> Complete';
+          terminalActions.classList.remove('hidden');
+          btnReloadAfterUpdate.textContent = 'Reload Application';
+          btnReloadAfterUpdate.onclick = () => {
+            window.location.reload();
+          };
+          showToast('MP3MetaFix updated successfully! Please reload.', 'success', 5000);
+        }
+      } catch (e) {
+        // Server still restarting, keep polling
+      }
+
+      if (attempts >= maxAttempts) {
+        clearInterval(interval);
+        terminalSpinner.classList.add('hidden');
+        terminalProgressText.textContent = 'Server took longer than expected to restart.';
+        terminalActions.classList.remove('hidden');
+        btnReloadAfterUpdate.textContent = 'Manual Reload';
+        btnReloadAfterUpdate.onclick = () => window.location.reload();
+      }
+    }, 1500);
+  }
+
+  // Event Listeners for Version & Updater
+  if (versionBadge) {
+    versionBadge.addEventListener('click', openVersionModal);
+  }
+  if (btnVersionModal) {
+    btnVersionModal.addEventListener('click', openVersionModal);
+  }
+  if (updateBadge) {
+    updateBadge.addEventListener('click', openVersionModal);
+  }
+  if (btnCloseVersionModal) {
+    btnCloseVersionModal.addEventListener('click', closeVersionModal);
+  }
+  if (btnCheckUpdatesNow) {
+    btnCheckUpdatesNow.addEventListener('click', () => checkForUpdates(true, false));
+  }
+  if (btnLaunchUpdater) {
+    btnLaunchUpdater.addEventListener('click', startInAppUpdate);
+  }
+
+  // Close modals on escape key or backdrop click
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (!versionModal.classList.contains('hidden')) {
+        closeVersionModal();
+      }
+    }
+  });
+
+  versionModal.addEventListener('click', (e) => {
+    if (e.target === versionModal) {
+      closeVersionModal();
+    }
+  });
+
+  // Initial silent background check on startup
+  loadSystemInfo();
+  setTimeout(() => {
+    checkForUpdates(false, true);
+  }, 1500);
 });

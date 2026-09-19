@@ -25,10 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **CORS Credential Isolation**: Replaced wildcard CORS headers with regex-validated origin matching (`localhost`, `127.0.0.1`, and explicit origins).
   - **Localhost Default Host Binding & Dynamic TLS Secure Cookies**: Defaulted network binding to `127.0.0.1` and dynamically set `Secure` cookie attributes when accessed over HTTPS.
   - **Systemd Resource Limits**: Added `MemoryMax=512M`, `TasksMax=64`, and `CPUQuota=80%` sandboxing in `mp3metafix.service`.
+- **In-App Web Updater & Version Inspector**:
+  - **Automated Update Checker**: Background check on page load and manual "Check for Updates" querying GitHub Releases/Tags API with 10-minute in-memory caching.
+  - **Version Details Modal**: Detailed inspection card displaying active version, Git commit hash, active branch, runtime mode (Desktop vs Systemd service), and repository link.
+  - **Release Notes & Changelog Viewer**: Formatted multi-line preview of latest release features and bug fixes before installation.
+  - **Live Terminal Console & SSE Log Streaming**: Real-time monospace terminal modal streaming stdout/stderr of `install.sh --update --headless` via Server-Sent Events (`POST /api/updates/apply`).
+  - **Auto-Reconnection & One-Click Reload**: Automatic client healthcheck polling (`/api/health`) as the service restarts, prompting users to reload once back online.
 - **Security Hardening Documentation**:
   - Published comprehensive security guide in `docs/SECURITY_HARDENING.md` detailing threat models, attack vectors, and verification procedures.
 - **Automated Test Suite Expansion**:
-  - Expanded test coverage to 16 automated tests in `tests/test_backend.py` covering rate limiting, CSRF rejection, magic byte filtering, path traversal protection, timestamped HMAC verification, storage quota LRU eviction, and error masking.
+  - Expanded test coverage to 20 automated tests in `tests/test_backend.py` covering rate limiting, CSRF rejection, magic byte filtering, path traversal protection, timestamped HMAC verification, storage quota LRU eviction, error masking, semver comparison, and SSE log streaming.
 
 ---
 

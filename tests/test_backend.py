@@ -357,3 +357,57 @@ def test_rate_limiter_purging_and_anti_spoofing():
     assert len(limiter.history) <= 5
 
 
+def test_api_version_endpoint(client):
+    """Verify GET /api/version returns rich version and repository info."""
+    res = client.get("/api/version")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["version"] == VERSION
+    assert "git_commit" in data
+    assert "github_repo" in data
+    assert "is_git_repo" in data
+    assert data["github_repo"] == "darktekmafia/MP3MetaFix"
+
+
+def test_semver_parsing_and_comparison():
+    """Verify semantic version parsing and newer-version comparison logic."""
+    from backend.updater import parse_semver, is_version_newer
+    
+    assert parse_semver("0.2.0") == (0, 2, 0)
+    assert parse_semver("v0.1.1") == (0, 1, 1)
+    assert parse_semver("v1.0.0-beta") == (1, 0, 0)
+    
+    assert is_version_newer("0.3.0", "0.2.0") is True
+    assert is_version_newer("1.0.0", "0.9.9") is True
+    assert is_version_newer("0.2.1", "0.2.0") is True
+    assert is_version_newer("0.2.0", "0.2.0") is False
+    assert is_version_newer("0.1.0", "0.2.0") is False
+
+
+def test_api_updates_check_endpoint(client, monkeypatch):
+    """Verify GET /api/updates/check returns valid structure even when offline or mocked."""
+    res = client.get("/api/updates/check")
+    assert res.status_code == 200
+    data = res.json()
+    assert "current_version" in data
+    assert "latest_version" in data
+    assert "update_available" in data
+    assert isinstance(data["update_available"], bool)
+
+
+@pytest.mark.anyio
+async def test_stream_install_update_generator():
+    """Verify stream_install_update yields SSE events."""
+    from backend.updater import stream_install_update
+    
+    events = []
+    async for event in stream_install_update():
+        events.append(event)
+        if len(events) >= 2:
+            break
+    assert len(events) > 0
+    assert events[0].startswith("data: ")
+
+
+
+

@@ -34,22 +34,22 @@ Because MP3MetaFix is tailored for processing AI-generated music downloads from 
 
 ---
 
-## 🔄 2. In-App Web Updater & Version Inspector
+## 🔄 2. In-App Web Updater & Version Inspector [COMPLETED]
 
 Provide a complete in-app lifecycle updater directly from the web interface, leveraging `install.sh --update --headless` and GitHub API:
 
-- [ ] **Automated Background Update Checker**:
+- [x] **Automated Background Update Checker**:
   - Background version check on web UI page load comparing local `VERSION` against latest GitHub release/tag.
   - Manual **"Check for Updates"** button in Settings / Header.
   - **"Update Available"** badge in the navbar when a new version is detected.
-- [ ] **Version Details & Release Notes Inspector**:
+- [x] **Version Details & Release Notes Inspector**:
   - **Currently Installed Details**: View active version, build date, Git commit hash, and running mode (Desktop launcher vs Systemd service).
   - **New Version Preview**: Multi-line changelog and release notes modal displaying additions, fixes, and non-breaking/breaking change flags before updating.
-- [ ] **In-Browser Update Execution & Live Console Stream**:
+- [x] **In-Browser Update Execution & Live Console Stream**:
   - **"Update Now"** action triggering `install.sh --update --headless` securely on the server.
   - Live console modal streaming stdout/stderr in real-time (via Server-Sent Events or WebSocket) to monitor git pull, dependency upgrades, and service restart.
   - Safety guards: Disable update trigger while an active MP3 session is being edited.
-- [ ] **Auto-Reconnection & Refresh Prompt**:
+- [x] **Auto-Reconnection & Refresh Prompt**:
   - Automated client-side healthcheck polling (`/api/health`) as `install.sh` restarts the systemd service.
   - Success banner prompting the user to reload the page once the new version is verified online.
 
