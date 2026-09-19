@@ -27,7 +27,28 @@ Because MP3MetaFix is tailored for processing AI-generated music downloads from 
 
 ---
 
-## 🪟 2. Windows Cross-Platform Support
+## 🔄 2. In-App Web Updater & Version Inspector
+
+Provide a complete in-app lifecycle updater directly from the web interface, leveraging `install.sh --update --headless` and GitHub API:
+
+- [ ] **Automated Background Update Checker**:
+  - Background version check on web UI page load comparing local `VERSION` against latest GitHub release/tag.
+  - Manual **"Check for Updates"** button in Settings / Header.
+  - **"Update Available"** badge in the navbar when a new version is detected.
+- [ ] **Version Details & Release Notes Inspector**:
+  - **Currently Installed Details**: View active version, build date, Git commit hash, and running mode (Desktop launcher vs Systemd service).
+  - **New Version Preview**: Multi-line changelog and release notes modal displaying additions, fixes, and non-breaking/breaking change flags before updating.
+- [ ] **In-Browser Update Execution & Live Console Stream**:
+  - **"Update Now"** action triggering `install.sh --update --headless` securely on the server.
+  - Live console modal streaming stdout/stderr in real-time (via Server-Sent Events or WebSocket) to monitor git pull, dependency upgrades, and service restart.
+  - Safety guards: Disable update trigger while an active MP3 session is being edited.
+- [ ] **Auto-Reconnection & Refresh Prompt**:
+  - Automated client-side healthcheck polling (`/api/health`) as `install.sh` restarts the systemd service.
+  - Success banner prompting the user to reload the page once the new version is verified online.
+
+---
+
+## 🪟 3. Windows Cross-Platform Support
 
 A seamless Windows desktop and server experience without requiring WSL:
 
@@ -41,7 +62,7 @@ A seamless Windows desktop and server experience without requiring WSL:
 
 ---
 
-## 📦 3. Batch Processing & Queue Management
+## 📦 4. Batch Processing & Queue Management
 
 - [ ] **Multi-File Upload & Queue**:
   - Drag and drop dozens of MP3 files at once.
@@ -55,7 +76,7 @@ A seamless Windows desktop and server experience without requiring WSL:
 
 ---
 
-## 🎧 4. Multi-Format Audio Expansion
+## 🎧 5. Multi-Format Audio Expansion
 
 Expand the underlying audio engine beyond MP3:
 
@@ -66,7 +87,7 @@ Expand the underlying audio engine beyond MP3:
 
 ---
 
-## ✂️ 5. Audio Utilities & Editing Tools
+## ✂️ 6. Audio Utilities & Editing Tools
 
 - [ ] **Lossless Silence Trimming**:
   - Auto-detect and trim lead-in and tail silence commonly present on AI-generated audio without re-encoding the audio stream.
@@ -77,7 +98,7 @@ Expand the underlying audio engine beyond MP3:
 
 ---
 
-## 🌐 6. Integrations, Packaging & Deployment
+## 🌐 7. Integrations, Packaging & Deployment
 
 - [ ] **Official Docker & OCI Container Images**:
   - Multi-arch Dockerfile (`linux/amd64`, `linux/arm64`) published to GitHub Container Registry (GHCR) for unRAID, TrueNAS, and Kubernetes deployment.
