@@ -95,6 +95,11 @@ detect_environment() {
 
 # Install System Dependencies
 install_system_deps() {
+    if command -v python3 >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+        log_success "System dependencies already satisfied (python3, ffmpeg, curl detected)."
+        return 0
+    fi
+
     log_info "Detecting system package manager (Distro: ${DISTRO_ID})..."
 
     if command -v dnf >/dev/null 2>&1; then
