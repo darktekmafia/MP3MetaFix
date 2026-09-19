@@ -26,4 +26,4 @@ echo "[+] Starting server at http://${HOST}:${PORT}"
 echo "[+] Press Ctrl+C to stop"
 echo "=================================================="
 
-exec .venv/bin/uvicorn backend.main:app --host "$HOST" --port "$PORT" --reload
+exec .venv/bin/uvicorn backend.main:app --host "$HOST" --port "$PORT" --reload --no-proxy-headers

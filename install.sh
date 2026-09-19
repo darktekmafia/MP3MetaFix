@@ -15,7 +15,7 @@ VERSION_FILE="${INSTALL_DIR}/VERSION"
 if [ -f "$VERSION_FILE" ]; then
     VERSION="$(cat "$VERSION_FILE" | tr -d '[:space:]')"
 else
-    VERSION="0.3.0"
+    VERSION="0.3.1"
 fi
 
 # Colors for output
@@ -186,7 +186,7 @@ fi
 # Fallback: Start background server process directly
 echo "Starting MP3MetaFix on ${URL}..."
 cd "$INSTALL_DIR"
-"${INSTALL_DIR}/.venv/bin/uvicorn" backend.main:app --host 127.0.0.1 --port "$PORT" &
+"${INSTALL_DIR}/.venv/bin/uvicorn" backend.main:app --host 127.0.0.1 --port "$PORT" --no-proxy-headers &
 SERVER_PID=$!
 
 # Wait for server ready
@@ -287,7 +287,7 @@ Environment="MP3METAFIX_HOST=127.0.0.1"
 Environment="MP3METAFIX_PORT=${TARGET_PORT}"
 Environment="MP3METAFIX_DATA_DIR=${INSTALL_DIR}/data"
 Environment="MP3METAFIX_TRUST_PROXIES=false"
-ExecStart=${INSTALL_DIR}/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port ${TARGET_PORT} --workers 2
+ExecStart=${INSTALL_DIR}/.venv/bin/uvicorn backend.main:app --host \$MP3METAFIX_HOST --port \$MP3METAFIX_PORT --workers 2 --no-proxy-headers
 Restart=always
 RestartSec=3
 MemoryMax=512M

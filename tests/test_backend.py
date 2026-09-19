@@ -471,6 +471,95 @@ async def test_asgi_proxy_headers_middleware_chain():
         assert res.json()["client_ip"] == TEST_TRUSTED_PROXY  # Forwarded headers ignored when disabled
 
 
+@pytest.mark.anyio
+async def test_cookie_secure_flag_trust_policy():
+    """Verify that cookie Secure flag is governed ONLY by the trusted request scheme.
+
+    Tests that:
+    1. An untrusted direct client sending X-Forwarded-Proto: https cannot trick the server into setting Secure cookies.
+    2. A trusted reverse proxy forwarding X-Forwarded-Proto: https results in Secure cookies.
+    3. When proxy trust is disabled, all X-Forwarded-Proto headers are ignored.
+    """
+    import httpx
+    from fastapi import FastAPI, Request, Response
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    TEST_PROXY = "198.51.100.55"
+    TEST_DIRECT_PEER = "192.0.2.123"
+
+    # --- App with Proxy Trust Enabled for 198.51.100.55 ---
+    app_proxy = FastAPI()
+    app_proxy.add_middleware(ProxyHeadersMiddleware, trusted_hosts=[TEST_PROXY])
+
+    @app_proxy.post("/api/test-cookie")
+    async def cookie_endpoint(request: Request, response: Response):
+        is_https = (request.url.scheme == "https")
+        response.set_cookie(key="test_session", value="tok123", secure=is_https, httponly=True)
+        return {"scheme": request.url.scheme, "secure_cookie": is_https}
+
+    # Case 1: Untrusted direct peer claims X-Forwarded-Proto: https -> MUST BE IGNORED
+    t_untrusted = httpx.ASGITransport(app=app_proxy, client=(TEST_DIRECT_PEER, 54321))
+    async with httpx.AsyncClient(transport=t_untrusted, base_url="http://test") as ac:
+        res = await ac.post("/api/test-cookie", headers={"X-Forwarded-Proto": "https"})
+        assert res.status_code == 200
+        assert res.json()["scheme"] == "http"
+        assert res.json()["secure_cookie"] is False
+        cookie_header = res.headers.get("set-cookie", "")
+        assert "Secure" not in cookie_header
+
+    # Case 2: Trusted proxy forwards X-Forwarded-Proto: https -> APPLIED
+    t_proxy = httpx.ASGITransport(app=app_proxy, client=(TEST_PROXY, 54321))
+    async with httpx.AsyncClient(transport=t_proxy, base_url="http://test") as ac:
+        res = await ac.post("/api/test-cookie", headers={"X-Forwarded-Proto": "https"})
+        assert res.status_code == 200
+        assert res.json()["scheme"] == "https"
+        assert res.json()["secure_cookie"] is True
+        cookie_header = res.headers.get("set-cookie", "")
+        assert "Secure" in cookie_header or "secure" in cookie_header
+
+    # --- App with Proxy Trust Disabled ---
+    app_disabled = FastAPI()
+
+    @app_disabled.post("/api/test-cookie-disabled")
+    async def cookie_disabled_endpoint(request: Request, response: Response):
+        is_https = (request.url.scheme == "https")
+        response.set_cookie(key="test_session", value="tok123", secure=is_https, httponly=True)
+        return {"scheme": request.url.scheme, "secure_cookie": is_https}
+
+    t_disabled = httpx.ASGITransport(app=app_disabled, client=(TEST_PROXY, 54321))
+    async with httpx.AsyncClient(transport=t_disabled, base_url="http://test") as ac:
+        res = await ac.post("/api/test-cookie-disabled", headers={"X-Forwarded-Proto": "https"})
+        assert res.status_code == 200
+        assert res.json()["scheme"] == "http"
+        assert res.json()["secure_cookie"] is False
+        assert "Secure" not in res.headers.get("set-cookie", "")
+
+
+def test_service_launch_commands_configuration():
+    """Verify that service templates and launch scripts dynamically use host/port variables and disable uvicorn default proxy headers."""
+    base_dir = Path(__file__).resolve().parent.parent
+
+    # 1. deploy/mp3metafix.service
+    service_file = base_dir / "deploy" / "mp3metafix.service"
+    content = service_file.read_text(encoding="utf-8")
+    assert "--host $MP3METAFIX_HOST" in content
+    assert "--port $MP3METAFIX_PORT" in content
+    assert "--no-proxy-headers" in content
+    assert "--host 127.0.0.1" not in content
+
+    # 2. install.sh
+    install_sh = base_dir / "install.sh"
+    install_content = install_sh.read_text(encoding="utf-8")
+    assert "--no-proxy-headers" in install_content
+    assert "$MP3METAFIX_HOST" in install_content
+
+    # 3. run.sh
+    run_sh = base_dir / "run.sh"
+    run_content = run_sh.read_text(encoding="utf-8")
+    assert "--no-proxy-headers" in run_content
+    assert '"$HOST"' in run_content
+
+
 def test_audio_stream_ranges(client, sample_mp3_bytes):
     """Test full RFC 7233 byte-range scenarios for audio streaming preview."""
     # 1. Upload audio file to establish session

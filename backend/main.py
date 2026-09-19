@@ -233,11 +233,8 @@ async def upload_mp3(request: Request, response: Response, file: UploadFile = Fi
 
     session_info = storage_manager.get_session_info(session_id) or {}
 
-    # Set secure HttpOnly session cookie (enforce secure flag if request is HTTPS)
-    is_https = (
-        request.url.scheme == "https"
-        or request.headers.get("x-forwarded-proto", "").lower() == "https"
-    )
+    # Set secure HttpOnly session cookie (enforce secure flag only when trusted request scheme is HTTPS)
+    is_https = (request.url.scheme == "https")
     token = create_signed_session_token(session_id)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
@@ -586,10 +583,7 @@ async def delete_session(
 ):
     """Explicitly terminate and purge a session, clearing the session cookie."""
     success = storage_manager.cleanup_session(session_id)
-    is_https = (
-        request.url.scheme == "https"
-        or request.headers.get("x-forwarded-proto", "").lower() == "https"
-    )
+    is_https = (request.url.scheme == "https")
     response.delete_cookie(key=SESSION_COOKIE_NAME, path="/", secure=is_https, httponly=True)
     return {"success": success}
 

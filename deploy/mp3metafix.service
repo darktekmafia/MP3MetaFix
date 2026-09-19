@@ -11,7 +11,7 @@ Environment="MP3METAFIX_HOST=127.0.0.1"
 Environment="MP3METAFIX_PORT=8844"
 Environment="MP3METAFIX_DATA_DIR=%INSTALL_DIR%/data"
 Environment="MP3METAFIX_TRUST_PROXIES=false"
-ExecStart=%INSTALL_DIR%/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8844 --workers 2
+ExecStart=%INSTALL_DIR%/.venv/bin/uvicorn backend.main:app --host $MP3METAFIX_HOST --port $MP3METAFIX_PORT --workers 2 --no-proxy-headers
 Restart=always
 RestartSec=3
 

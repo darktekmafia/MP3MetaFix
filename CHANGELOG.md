@@ -5,6 +5,20 @@ All notable changes to **MP3MetaFix** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-09-19
+
+### Fixed
+- **Uvicorn Default Proxy-Headers Bypass Prevention**:
+  - Added `--no-proxy-headers` to all server launch commands (`deploy/mp3metafix.service`, `install.sh`, `run.sh`), eliminating Uvicorn CLI's implicit proxy middleware that bypassed `TRUST_PROXIES=false`.
+- **Dynamic Systemd Host & Port Binding**:
+  - Configured `deploy/mp3metafix.service` and `install.sh` systemd service templates to use `$MP3METAFIX_HOST` and `$MP3METAFIX_PORT` variables in `ExecStart=`, allowing users to control bind interfaces (e.g. `0.0.0.0`) via environment variables.
+- **Strict Cookie Scheme Resolution**:
+  - Replaced direct `X-Forwarded-Proto` header parsing in cookie handling with trusted `request.url.scheme` validation, ensuring `Secure` flags are set only over verified TLS connections.
+- **Cache-Busting Asset Refresh**:
+  - Bumped static asset query strings (`?v=0.3.1`) across `frontend/index.html` to guarantee fresh script and style caching through Cloudflare and browser caches.
+
+---
+
 ## [0.3.0] - 2026-09-19
 
 ### Security & Hardening
