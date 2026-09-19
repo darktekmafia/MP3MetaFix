@@ -51,8 +51,9 @@
 To install MP3MetaFix so it runs continuously in the background and **starts automatically on system boot**:
 
 ```bash
-# Clone the repository (or navigate to workspace)
-cd /run/media/psychlone/Projects/mp3metafix
+# Clone the repository
+git clone https://github.com/darktekmafia/MP3MetaFix.git
+cd MP3MetaFix
 
 # Run the installer (installs systemd service & desktop integration)
 sudo ./install.sh
@@ -115,7 +116,7 @@ For hosting inside a Proxmox LXC (Ubuntu/Debian) behind Nginx or Caddy:
 
 1. In your LXC container:
    ```bash
-   git clone https://github.com/your-username/mp3metafix.git /opt/mp3metafix
+   git clone https://github.com/darktekmafia/MP3MetaFix.git /opt/mp3metafix
    cd /opt/mp3metafix
    sudo ./install.sh --headless --port 8844
    ```

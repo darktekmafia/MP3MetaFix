@@ -9,7 +9,8 @@ This guide covers deployment options for MP3MetaFix across **Local Fedora 44 Dev
 ### Systemd Background Service (Starts on Boot)
 To install MP3MetaFix as a persistent background service that starts on system boot and integrates into your desktop application menu:
 ```bash
-cd /run/media/psychlone/Projects/mp3metafix
+git clone https://github.com/darktekmafia/MP3MetaFix.git
+cd MP3MetaFix
 sudo ./install.sh
 ```
 This will:
@@ -41,7 +42,7 @@ Create a lightweight unprivileged Ubuntu 24.04 or Debian 12 LXC container in Pro
 Inside the LXC container:
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/mp3metafix.git /opt/mp3metafix
+git clone https://github.com/darktekmafia/MP3MetaFix.git /opt/mp3metafix
 cd /opt/mp3metafix
 
 # Run the installer in headless mode
