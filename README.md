@@ -163,6 +163,12 @@ For in-depth technical documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTU
 
 ---
 
+## 🗺️ Roadmap & Future Implementation
+
+See [ROADMAP.md](ROADMAP.md) for planned features, Suno AI workflow enhancements, Windows support, and multi-format audio ideas.
+
+---
+
 ## 📄 License
 
 MIT License © 2026 MP3MetaFix Contributors
