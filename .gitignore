@@ -122,3 +122,12 @@ desktop.ini
 *.swo
 *~
 *.bak
+
+# ---------------------------------------------------------------------
+# 10. Local Agent Customizations & Untracked Rules
+# ---------------------------------------------------------------------
+.agents/
+AGENTS.md
+GEMINI.md
+.cursor/
+.windsurf/
