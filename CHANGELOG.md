@@ -5,6 +5,17 @@ All notable changes to **MP3MetaFix** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-09-19
+
+### Documentation & Lifecycle
+- **Pre-Handoff vs Handoff-Capable Update Transition Semantics**:
+  - Documented that systems upgrading from legacy pre-handoff versions (`v0.3.0`–`v0.3.2`) require a second `./install.sh --update` execution (or a manual `sudo .venv/bin/python scripts/migrate_service.py /etc/systemd/system/mp3metafix.service` run) because the pre-handoff in-memory installer script completes its old flow before the on-disk code is refreshed.
+  - Verified and tested the automatic in-place re-execution handoff for all upgrades initiated from handoff-capable installers (`v0.3.3+`), ensuring immediate single-invocation migration.
+- **Cache-Busting Asset Refresh**:
+  - Bumped static asset query strings (`?v=0.3.4`) across `frontend/index.html`.
+
+---
+
 ## [0.3.3] - 2026-09-19
 
 ### Fixed

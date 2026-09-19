@@ -1063,6 +1063,139 @@ def test_installer_reexec_on_git_update_and_loop_prevention(tmp_path: Path):
     assert res.stdout.count("REEXEC_TRIGGERED") == 1
 
 
+def test_handoff_capable_installer_executes_new_logic_on_first_run(tmp_path: Path):
+    """Verify that starting from a handoff-capable installer (v0.3.3+), pulling updates executes new logic in a single run."""
+    import subprocess
+
+    origin_dir = tmp_path / "origin"
+    origin_dir.mkdir()
+    repo_dir = tmp_path / "local"
+
+    # Initialize origin git repo
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(origin_dir)], check=True, capture_output=True)
+
+    # Initial commit in a temp working tree
+    init_dir = tmp_path / "init"
+    init_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main", str(init_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(init_dir), "config", "user.name", "TestUser"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "config", "user.email", "test@example.com"], check=True)
+
+    # Handoff-capable install.sh (v0.3.3+)
+    handoff_script = """#!/usr/bin/env bash
+set -e
+ORIG_ARGS=("$@")
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+do_update() {
+    if [ -d "${INSTALL_DIR}/.git" ]; then
+        if [ "$_MP3METAFIX_REEXEC" != "1" ]; then
+            PREV_COMMIT=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)
+            git -C "$INSTALL_DIR" fetch --tags >/dev/null 2>&1 || true
+            git -C "$INSTALL_DIR" pull origin main >/dev/null 2>&1 || git -C "$INSTALL_DIR" pull >/dev/null 2>&1 || true
+            NEW_COMMIT=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)
+            if [ -n "$PREV_COMMIT" ] && [ -n "$NEW_COMMIT" ] && [ "$PREV_COMMIT" != "$NEW_COMMIT" ]; then
+                export _MP3METAFIX_REEXEC=1
+                exec bash "${INSTALL_DIR}/install.sh" "${ORIG_ARGS[@]}"
+            fi
+        fi
+    fi
+    echo "EXECUTING_V033_FLOW"
+}
+
+if [ "$1" = "--update" ]; then
+    do_update
+fi
+"""
+    (init_dir / "install.sh").write_text(handoff_script, encoding="utf-8")
+    (init_dir / "install.sh").chmod(0o755)
+    subprocess.run(["git", "-C", str(init_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "commit", "-m", "init v0.3.3"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "remote", "add", "origin", str(origin_dir)], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "push", "origin", "main"], check=True)
+
+    # Clone to local repo
+    subprocess.run(["git", "clone", str(origin_dir), str(repo_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "TestUser"], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "test@example.com"], check=True)
+
+    # Now add a new release (v0.3.4) to origin
+    new_release_script = handoff_script.replace("EXECUTING_V033_FLOW", "EXECUTING_V034_NEW_FLOW_WITH_MIGRATION")
+    (init_dir / "install.sh").write_text(new_release_script, encoding="utf-8")
+    subprocess.run(["git", "-C", str(init_dir), "commit", "-am", "release v0.3.4"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "push", "origin", "main"], check=True)
+
+    # Run install.sh --update from local repo (which starts as v0.3.3 handoff-capable)
+    res = subprocess.run(["bash", str(repo_dir / "install.sh"), "--update"], capture_output=True, text=True)
+    assert res.returncode == 0
+    # The handoff executed the v0.3.4 logic immediately in the single run!
+    assert "EXECUTING_V034_NEW_FLOW_WITH_MIGRATION" in res.stdout
+    assert "EXECUTING_V033_FLOW" not in res.stdout
+
+
+def test_pre_handoff_installer_transition_behavior(tmp_path: Path):
+    """Verify that a legacy pre-handoff installer (v0.3.0) completes its old flow on first run, and requires a 2nd run for new logic."""
+    import subprocess
+
+    origin_dir = tmp_path / "origin"
+    origin_dir.mkdir()
+    repo_dir = tmp_path / "local"
+
+    # Initialize origin git repo
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(origin_dir)], check=True, capture_output=True)
+
+    # Initial commit with pre-handoff installer (no exec bash)
+    init_dir = tmp_path / "init"
+    init_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main", str(init_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(init_dir), "config", "user.name", "TestUser"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "config", "user.email", "test@example.com"], check=True)
+
+    pre_handoff_script = """#!/usr/bin/env bash
+set -e
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+do_update() {
+    git -C "$INSTALL_DIR" pull origin main >/dev/null 2>&1 || git -C "$INSTALL_DIR" pull >/dev/null 2>&1 || true
+    echo "EXECUTING_LEGACY_PRE_HANDOFF_FLOW"
+}
+
+if [ "$1" = "--update" ]; then
+    do_update
+fi
+"""
+    (init_dir / "install.sh").write_text(pre_handoff_script, encoding="utf-8")
+    subprocess.run(["git", "-C", str(init_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "commit", "-m", "v0.3.0"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "remote", "add", "origin", str(origin_dir)], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "push", "origin", "main"], check=True)
+
+    # Clone local repo
+    subprocess.run(["git", "clone", str(origin_dir), str(repo_dir)], check=True, capture_output=True)
+
+    # Now add v0.3.4 to origin with new migration logic
+    new_script = """#!/usr/bin/env bash
+set -e
+ORIG_ARGS=("$@")
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo "EXECUTING_MODERN_V034_MIGRATION_FLOW"
+"""
+    (init_dir / "install.sh").write_text(new_script, encoding="utf-8")
+    subprocess.run(["git", "-C", str(init_dir), "commit", "-am", "v0.3.4"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "push", "origin", "main"], check=True)
+
+    # First update run from pre-handoff repo: Executes legacy flow because in-memory script was v0.3.0
+    res1 = subprocess.run(["bash", str(repo_dir / "install.sh"), "--update"], capture_output=True, text=True)
+    assert res1.returncode == 0
+    assert "EXECUTING_LEGACY_PRE_HANDOFF_FLOW" in res1.stdout
+
+    # Second update run: Now loads the new script from disk and executes the modern migration flow
+    res2 = subprocess.run(["bash", str(repo_dir / "install.sh"), "--update"], capture_output=True, text=True)
+    assert res2.returncode == 0
+    assert "EXECUTING_MODERN_V034_MIGRATION_FLOW" in res2.stdout
+
+
+
 
 
 
