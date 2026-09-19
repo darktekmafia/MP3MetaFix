@@ -161,6 +161,7 @@ button {
 .brand-title span {
   background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -1460,6 +1461,7 @@ button {
   font-weight: 800;
   background: linear-gradient(135deg, #fff, var(--accent-cyan));
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
