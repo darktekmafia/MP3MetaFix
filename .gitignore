@@ -1,13 +1,17 @@
-# Python
+# =====================================================================
+# MP3MetaFix .gitignore - Public Repository Hardening
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# 1. Python Bytecode & Compilation Artifacts
+# ---------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.pyd
+*.dll
 .Python
-env/
-venv/
-.venv/
-ENV/
 build/
 develop-eggs/
 dist/
@@ -24,32 +28,97 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual Environment in project
-.env
-.env.local
+# ---------------------------------------------------------------------
+# 2. Virtual Environments
+# ---------------------------------------------------------------------
 .venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
 
-# Temporary data & uploaded audio files
+# ---------------------------------------------------------------------
+# 3. Secrets, Keys & Environment Variables
+# ---------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.key
+*.secret
+*.pem
+*.crt
+*.p12
+*.pfx
+.secret_key
+data/.secret_key
+
+# ---------------------------------------------------------------------
+# 4. Runtime Storage, Sessions & User Uploads
+# ---------------------------------------------------------------------
 data/
 temp/
-*.mp3
-*.m4a
-*.flac
-*.wav
-*.ogg
+tmp/
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
 
-# IDEs and Editors
+# ---------------------------------------------------------------------
+# 5. Audio, Video & Image Test Uploads (Root/Scratch)
+# ---------------------------------------------------------------------
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.ogg
+*.opus
+*.aac
+*.wma
+*.aiff
+*.lrc
+
+# ---------------------------------------------------------------------
+# 6. Testing, Quality & Coverage
+# ---------------------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# ---------------------------------------------------------------------
+# 7. Logs & Process Artifacts
+# ---------------------------------------------------------------------
+logs/
+*.log
+*.pid
+nohup.out
+
+# ---------------------------------------------------------------------
+# 8. OS & Desktop Artifacts
+# ---------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------
+# 9. IDEs & Text Editors
+# ---------------------------------------------------------------------
 .idea/
 .vscode/
+*.sublime-project
+*.sublime-workspace
 *.swp
 *.swo
 *~
-.DS_Store
-
-# Test / Coverage
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Logs
-*.log
+*.bak
