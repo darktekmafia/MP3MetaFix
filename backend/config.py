@@ -33,6 +33,34 @@ MAX_ARTWORK_SIZE_BYTES = MAX_ARTWORK_SIZE_MB * 1024 * 1024
 # Reverse Proxy & Trust
 TRUST_PROXIES = os.getenv("MP3METAFIX_TRUST_PROXIES", "true").lower() in ("true", "1", "yes")
 
+# Cryptographic Session & Cookie Config
+def get_secret_key() -> str:
+    env_key = os.getenv("MP3METAFIX_SECRET_KEY")
+    if env_key:
+        return env_key
+    key_file = DATA_DIR / ".secret_key"
+    if key_file.exists():
+        try:
+            return key_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+    import secrets
+    new_key = secrets.token_hex(32)
+    try:
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.write_text(new_key, encoding="utf-8")
+        try:
+            os.chmod(key_file, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return new_key
+
+SESSION_SECRET_KEY = get_secret_key()
+SESSION_COOKIE_NAME = "mp3metafix_session"
+SESSION_COOKIE_MAX_AGE = SESSION_TTL_MINUTES * 60
+
 # Version
 def get_version() -> str:
     version_file = BASE_DIR / "VERSION"

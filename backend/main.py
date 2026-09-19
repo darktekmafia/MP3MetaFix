@@ -18,6 +18,7 @@ from fastapi import (
     status,
     Request,
     BackgroundTasks,
+    Depends,
 )
 from fastapi.responses import (
     FileResponse,
@@ -38,12 +39,16 @@ from backend.config import (
     TRUST_PROXIES,
     HOST,
     PORT,
+    SESSION_COOKIE_NAME,
+    SESSION_COOKIE_MAX_AGE,
 )
 from backend.security import (
     SecurityHeadersMiddleware,
     validate_mp3_magic_bytes,
     validate_and_normalize_image,
     sanitize_filename,
+    create_signed_session_token,
+    verify_signed_session_token,
 )
 from backend.storage import (
     storage_manager,
@@ -102,6 +107,25 @@ app.add_middleware(
 )
 
 
+# --- Authentication Dependency ---
+
+def get_current_session_id(request: Request) -> str:
+    """Extract and cryptographically verify the session ID from HttpOnly cookie or X-Session-Token header."""
+    token = request.cookies.get(SESSION_COOKIE_NAME) or request.headers.get("X-Session-Token")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session missing or expired. Please upload an MP3.",
+        )
+    session_id = verify_signed_session_token(token)
+    if not session_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or forged session token.",
+        )
+    return session_id
+
+
 # --- API Routes ---
 
 @app.get("/api/health")
@@ -117,8 +141,8 @@ async def get_app_version():
 
 
 @app.post("/api/upload")
-async def upload_mp3(file: UploadFile = File(...)):
-    """Upload an MP3 file, validate magic bytes, and extract metadata and artwork."""
+async def upload_mp3(response: Response, file: UploadFile = File(...)):
+    """Upload an MP3 file, validate magic bytes, create authenticated session cookie, and extract metadata."""
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file provided")
 
@@ -168,8 +192,19 @@ async def upload_mp3(file: UploadFile = File(...)):
 
     session_info = storage_manager.get_session_info(session_id) or {}
 
+    # Set secure HttpOnly session cookie
+    token = create_signed_session_token(session_id)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=SESSION_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+
     return {
-        "session_id": session_id,
+        "success": True,
         "original_filename": session_info.get("original_filename", file.filename),
         "metadata": parsed["metadata"],
         "audio_info": parsed["audio_info"],
@@ -177,9 +212,9 @@ async def upload_mp3(file: UploadFile = File(...)):
     }
 
 
-@app.get("/api/artwork/{session_id}")
-async def get_artwork(session_id: str):
-    """Serve embedded or uploaded artwork binary for a session."""
+@app.get("/api/artwork")
+async def get_artwork(session_id: str = Depends(get_current_session_id)):
+    """Serve embedded or uploaded artwork binary for the authenticated session."""
     sdir = storage_manager.get_session_dir(session_id)
     if not sdir:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
@@ -204,9 +239,12 @@ async def get_artwork(session_id: str):
     return Response(content=img_bytes, media_type=mime)
 
 
-@app.post("/api/artwork/{session_id}")
-async def upload_artwork(session_id: str, image: UploadFile = File(...)):
-    """Upload and stage new album art for a session."""
+@app.post("/api/artwork")
+async def upload_artwork(
+    image: UploadFile = File(...),
+    session_id: str = Depends(get_current_session_id),
+):
+    """Upload and stage new album art for the authenticated session."""
     sdir = storage_manager.get_session_dir(session_id)
     if not sdir:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
@@ -231,9 +269,9 @@ async def upload_artwork(session_id: str, image: UploadFile = File(...)):
     }
 
 
-@app.delete("/api/artwork/{session_id}")
-async def remove_artwork_staging(session_id: str):
-    """Mark artwork for removal."""
+@app.delete("/api/artwork")
+async def remove_artwork_staging(session_id: str = Depends(get_current_session_id)):
+    """Mark artwork for removal in the authenticated session."""
     sdir = storage_manager.get_session_dir(session_id)
     if not sdir:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
@@ -252,9 +290,12 @@ async def remove_artwork_staging(session_id: str):
     return {"success": True, "artwork_removed": True}
 
 
-@app.post("/api/save/{session_id}")
-async def save_metadata(session_id: str, meta: MetadataModel):
-    """Commit edited metadata and staged artwork to the MP3 file."""
+@app.post("/api/save")
+async def save_metadata(
+    meta: MetadataModel,
+    session_id: str = Depends(get_current_session_id),
+):
+    """Commit edited metadata and staged artwork to the MP3 file for the authenticated session."""
     audio_path = storage_manager.get_audio_path(session_id)
     sdir = storage_manager.get_session_dir(session_id)
     if not audio_path or not sdir:
@@ -310,22 +351,21 @@ async def save_metadata(session_id: str, meta: MetadataModel):
     refreshed = extract_metadata_and_artwork(audio_path)
     return {
         "success": True,
-        "session_id": session_id,
         "target_filename": target_name,
         "metadata": refreshed["metadata"],
         "artwork": refreshed["artwork"],
     }
 
 
-@app.get("/api/download/{session_id}")
-@app.get("/api/download/{session_id}/{filename:path}")
+@app.get("/api/download")
+@app.get("/api/download/{filename:path}")
 async def download_mp3(
-    session_id: str,
     background_tasks: BackgroundTasks,
     filename: Optional[str] = None,
     cleanup_after: bool = False,
+    session_id: str = Depends(get_current_session_id),
 ):
-    """Download the modified MP3 file with clean Content-Disposition headers and URL path support."""
+    """Download the modified MP3 file with clean Content-Disposition headers for the authenticated session."""
     audio_path = storage_manager.get_audio_path(session_id)
     session_info = storage_manager.get_session_info(session_id)
     if not audio_path or not session_info:
@@ -352,9 +392,12 @@ async def download_mp3(
     )
 
 
-@app.get("/api/stream/{session_id}")
-async def stream_audio(session_id: str, request: Request):
-    """Stream audio with HTTP 206 Partial Content range support for playback preview."""
+@app.get("/api/stream")
+async def stream_audio(
+    request: Request,
+    session_id: str = Depends(get_current_session_id),
+):
+    """Stream audio with HTTP 206 Partial Content range support for playback preview for the authenticated session."""
     audio_path = storage_manager.get_audio_path(session_id)
     if not audio_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio not found")
@@ -399,11 +442,16 @@ async def stream_audio(session_id: str, request: Request):
     return StreamingResponse(file_iterator(), status_code=206, headers=headers)
 
 
-@app.delete("/api/session/{session_id}")
-async def delete_session(session_id: str):
-    """Explicitly terminate and purge a session."""
+@app.delete("/api/session")
+async def delete_session(
+    response: Response,
+    session_id: str = Depends(get_current_session_id),
+):
+    """Explicitly terminate and purge a session, clearing the session cookie."""
     success = storage_manager.cleanup_session(session_id)
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
     return {"success": success}
+
 
 
 # Serve static assets and web frontend

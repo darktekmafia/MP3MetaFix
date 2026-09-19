@@ -10,7 +10,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 from backend.config import TEMP_DIR, SESSION_TTL_MINUTES
-from backend.security import sanitize_filename
+from backend.security import sanitize_filename, get_storage_dir_name
 
 logger = logging.getLogger("mp3metafix.storage")
 
@@ -23,9 +23,10 @@ class SessionManager:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
     def create_session(self, original_filename: str) -> Tuple[str, Path]:
-        """Create a new unique session directory for an uploaded file."""
+        """Create a new unique session directory for an uploaded file using a decoupled hash."""
         session_id = str(uuid.uuid4())
-        session_dir = self.temp_dir / session_id
+        dir_name = get_storage_dir_name(session_id)
+        session_dir = self.temp_dir / dir_name
         session_dir.mkdir(parents=True, exist_ok=True)
 
         clean_name = sanitize_filename(original_filename)
@@ -44,14 +45,17 @@ class SessionManager:
         return session_id, audio_path
 
     def get_session_dir(self, session_id: str) -> Optional[Path]:
-        """Validate session ID format and return session directory if it exists."""
+        """Validate session ID format and return hashed session directory if it exists."""
         try:
             # Validate UUID format to prevent path traversal
             uuid_obj = uuid.UUID(session_id, version=4)
+            if str(uuid_obj) != session_id:
+                return None
         except (ValueError, TypeError, AttributeError):
             return None
 
-        session_dir = self.temp_dir / str(uuid_obj)
+        dir_name = get_storage_dir_name(session_id)
+        session_dir = self.temp_dir / dir_name
         if session_dir.is_dir():
             # Update last accessed time
             self._touch_session(session_dir)

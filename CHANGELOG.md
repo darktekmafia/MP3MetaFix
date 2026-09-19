@@ -10,11 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.1] - 2026-09-19
 
 ### Added
+- **Cryptographic Session Cookies & Zero-Knowledge Storage Architecture**:
+  - Implemented HMAC-SHA256 signed `HttpOnly`, `SameSite=Lax` session cookies (`mp3metafix_session`) to eliminate exposed UUIDs and raw identifiers from URLs and browser JavaScript.
+  - Decoupled server filesystem storage: session directories on disk are now named using one-way deterministic SHA-256 hashes (`SHA-256(secret:uuid)[:32]`).
+  - Refactored API routes to clean, session-bound endpoints (`/api/artwork`, `/api/save`, `/api/stream`, `/api/download/{filename}`, `/api/session`).
+  - Added strict HMAC signature verification, rejecting tampered or forged session tokens with HTTP 401 Unauthorized.
 - **File System Access API & Save Picker**:
   - Implemented the modern Web File System Access API (`window.showSaveFilePicker`), prompting users to choose the exact destination directory and filename upon saving.
   - Added seamless fallback to browser downloads when File System Access API is not supported or declined.
 - **Named Download Route & Enhanced Content-Disposition**:
-  - Added `/api/download/{session_id}/{filename:path}` endpoint to guarantee target filenames are directly reflected in the URL path for all browsers.
+  - Added `/api/download/{filename:path}` endpoint to guarantee target filenames are directly reflected in the URL path for all browsers.
   - Formatted `Content-Disposition` with RFC 5987 UTF-8 encoding (`filename*=UTF-8''...`) along with sanitized ASCII fallback.
   - Exposed `Content-Disposition` header in CORS/Access-Control settings.
 - **Universal Installer & Systemd Service**:

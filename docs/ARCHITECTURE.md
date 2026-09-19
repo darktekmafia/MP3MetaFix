@@ -27,6 +27,9 @@ Because MP3MetaFix accepts arbitrary user uploads and is intended to run exposed
 [ ProxyHeadersMiddleware ] (Handles X-Forwarded-For, X-Forwarded-Proto safely)
         │
         ▼
+[ HMAC-SHA256 Cookie Authenticator ] (Validates HttpOnly signed session token)
+        │
+        ▼
 [ Upload Validator ]
   ├── 1. Chunk-level Magic Bytes Verification (ID3 / MPEG Frame Sync 0xFF 0xFB/FA/F3/F2)
   ├── 2. Upload Size Quota Enforcement (default: 150MB limit streamed)
@@ -34,20 +37,23 @@ Because MP3MetaFix accepts arbitrary user uploads and is intended to run exposed
   └── 4. Client Filename Sanitization (Replaces path traversals, control characters)
         │
         ▼
-[ UUID Isolated Storage ] (/data/temp/{uuid4}/)
+[ Decoupled Hashed Storage ] (/data/temp/{SHA256(secret:uuid4)[:32]}/)
         │
         ▼
 [ Background TTL Purge ] (Periodic async worker purges sessions > 60 minutes)
 ```
 
 ### Key Security Controls:
-1. **Magic Bytes Header Verification**:
+1. **Zero Raw Identifier Exposure**:
+   - Internal session UUIDs and filesystem folder paths are never exposed in browser URLs, JavaScript state, or responses.
+   - Authentication is maintained via an `HttpOnly`, `SameSite=Lax` cookie containing an HMAC-SHA256 signed token (`session_id.signature`).
+2. **Decoupled Hashed Filesystem Storage**:
+   - Physical storage directories on the host filesystem are named using a one-way deterministic cryptographic hash: `SHA-256(server_secret:session_id)[:32]`. Even if an attacker observes a network token, they cannot infer host directory structures.
+3. **Magic Bytes Header Verification**:
    - Files are inspected at the byte level before full persistence. Disguised executable files (e.g. `.exe`, `.elf`, `.php`, `.sh` renamed to `.mp3`) are rejected immediately with `HTTP 400 Bad Request`.
-2. **UUID Storage Isolation**:
-   - Files are never saved using client-supplied names on the server filesystem. Each upload receives a cryptographically secure `UUID4` storage container (`data/temp/<uuid>/audio.mp3`).
-3. **Automated Lifecycle / Temp Pruning**:
+4. **Automated Lifecycle / Temp Pruning**:
    - A background asyncio task executes periodically (every 5 minutes) to prune sessions whose `last_accessed_at` timestamp exceeds the configurable TTL (`MP3METAFIX_SESSION_TTL_MINUTES`, default 60 minutes).
-4. **Header Protection**:
+5. **Header Protection**:
    - `Content-Security-Policy`: Disallows untrusted script execution.
    - `X-Content-Type-Options: nosniff`: Prevents MIME confusion attacks.
    - `X-Frame-Options: SAMEORIGIN`: Protects against clickjacking.

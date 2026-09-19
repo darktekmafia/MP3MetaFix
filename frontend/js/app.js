@@ -5,7 +5,7 @@
 document.addEventListener('DOMContentLoaded', () => {
   // --- State ---
   const state = {
-    sessionId: null,
+    hasSession: false,
     originalFilename: '',
     targetFilename: '',
     hasArtwork: false,
@@ -192,7 +192,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- Load Session Into Editor ---
   function loadSession(data) {
-    state.sessionId = data.session_id;
+    state.hasSession = true;
     state.originalFilename = data.original_filename;
     state.targetFilename = data.original_filename;
     state.hasArtwork = data.artwork.has_artwork;
@@ -231,8 +231,8 @@ document.addEventListener('DOMContentLoaded', () => {
       clearArtworkImage();
     }
 
-    // Audio Player setup
-    audioElement.src = `/api/stream/${data.session_id}`;
+    // Audio Player setup (clean endpoint using cookie session)
+    audioElement.src = '/api/stream';
     audioElement.load();
     playerSeek.value = 0;
     playerCurrentTime.textContent = '00:00';
@@ -305,7 +305,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function uploadArtworkImage(file) {
-    if (!state.sessionId) return;
+    if (!state.hasSession) return;
     if (!file.type.startsWith('image/')) {
       showToast('Please upload an image file (JPEG, PNG, WebP)', 'error');
       return;
@@ -314,7 +314,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const formData = new FormData();
     formData.append('image', file);
 
-    fetch(`/api/artwork/${state.sessionId}`, {
+    fetch('/api/artwork', {
       method: 'POST',
       body: formData,
     })
@@ -331,15 +331,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   btnDownloadArt.addEventListener('click', () => {
-    if (!state.sessionId || !state.hasArtwork) return;
-    window.open(`/api/artwork/${state.sessionId}`, '_blank');
+    if (!state.hasSession || !state.hasArtwork) return;
+    window.open('/api/artwork', '_blank');
   });
 
   btnRemoveArt.addEventListener('click', () => {
-    if (!state.sessionId) return;
+    if (!state.hasSession) return;
     state.artworkRemoved = true;
     clearArtworkImage();
-    fetch(`/api/artwork/${state.sessionId}`, { method: 'DELETE' })
+    fetch('/api/artwork', { method: 'DELETE' })
       .then(() => showToast('Cover art marked for removal', 'info'));
   });
 
@@ -484,7 +484,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- Save & Download Workflow ---
   async function saveMetadata(downloadAfter = false) {
-    if (!state.sessionId) return;
+    if (!state.hasSession) return;
 
     const payload = getFormData();
     payload.custom_filename = filenamePreview.textContent;
@@ -494,7 +494,7 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast('Saving tags and metadata to MP3...', 'info', 2000);
 
     try {
-      const response = await fetch(`/api/save/${state.sessionId}`, {
+      const response = await fetch('/api/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -521,9 +521,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function triggerDownload(filename) {
-    if (!state.sessionId) return;
+    if (!state.hasSession) return;
     const cleanFilename = filename || state.targetFilename || state.originalFilename || 'track.mp3';
-    const downloadUrl = `/api/download/${state.sessionId}/${encodeURIComponent(cleanFilename)}`;
+    const downloadUrl = `/api/download/${encodeURIComponent(cleanFilename)}`;
 
     // Try modern File System Access API (showSaveFilePicker) so browser prompts for exact save location
     if (window.showSaveFilePicker) {
@@ -586,12 +586,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // Discard & New File
   btnNewFile.addEventListener('click', () => {
     if (confirm('Discard current session and upload a new MP3?')) {
-      if (state.sessionId) {
-        fetch(`/api/session/${state.sessionId}`, { method: 'DELETE' }).catch(() => {});
+      if (state.hasSession) {
+        fetch('/api/session', { method: 'DELETE' }).catch(() => {});
       }
       pauseAudio();
       audioElement.src = '';
-      state.sessionId = null;
+      state.hasSession = false;
       editorSection.classList.add('hidden');
       uploadSection.classList.remove('hidden');
       fileInput.value = '';
