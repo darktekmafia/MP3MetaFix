@@ -33,42 +33,73 @@
   - Strict Content Security Policy (CSP), HSTS, `X-Content-Type-Options: nosniff`, and trusted reverse proxy support.
 - 🐧 **Smart Universal Linux Installer (`install.sh`)**:
   - Automatically detects your distro (`dnf`, `apt`, `pacman`).
-  - Automatically detects **Desktop** (adds application launcher `.desktop` and menu icon) vs **Headless LXC/Server** (installs and enables `systemd` service).
-  - Supports `--update`, `--status`, `--uninstall`, and custom ports.
+  - Installs and enables a hardened **systemd background service** (`mp3metafix.service`) to start automatically on system boot.
+  - Automatically registers **Desktop application launcher** (`.desktop`) and high-res icon for GUI environments.
+  - Supports `--update`, `--status`, `--uninstall`, `--no-service`, and custom ports.
 
 ---
 
-## 🚀 Quickstart
+## 🚀 Installation & Service Setup
 
-### 1. Local Development (Fedora 44 / Workstation)
+### 1. Install as a Systemd Service (Recommended)
+
+To install MP3MetaFix so it runs continuously in the background and **starts automatically on system boot**:
+
 ```bash
 # Clone the repository (or navigate to workspace)
 cd /run/media/psychlone/Projects/mp3metafix
 
-# Start development server
-./run.sh
+# Run the installer (installs systemd service & desktop integration)
+sudo ./install.sh
 ```
-Open your browser at `http://127.0.0.1:8844`.
+
+Once installed, MP3MetaFix runs as a native systemd background service:
+- **Web Interface**: Open `http://127.0.0.1:8844` (or your server's IP)
+- **Desktop Launcher**: Available in your Application Menu (GNOME/KDE/XFCE)
+
+#### Service Management Commands
+```bash
+# Check service status
+sudo systemctl status mp3metafix.service
+
+# View live application logs
+sudo journalctl -u mp3metafix.service -f
+
+# Restart or stop the service
+sudo systemctl restart mp3metafix.service
+sudo systemctl stop mp3metafix.service
+```
 
 ---
 
-### 2. Universal Linux Installation
+### 2. Manual / Ad-hoc Development Mode
 
-Run the smart installer:
+If you are developing or testing changes and prefer running a temporary foreground server without installing a system service:
+
 ```bash
-./install.sh
+./run.sh
+```
+The server will run in your active terminal session and stop when you press <kbd>Ctrl</kbd> + <kbd>C</kbd>.
+
+---
+
+### 3. Installer Options & Maintenance
+
+```bash
+./install.sh [OPTIONS]
 ```
 
-#### Installer Options:
 | Flag | Description |
 |------|-------------|
-| `--install` | Default installation (auto-detects Desktop vs Headless) |
-| `--update` | Pulls latest Git updates, updates python dependencies, and restarts service |
-| `--status` | Checks if MP3MetaFix service or endpoint is active |
-| `--uninstall` | Cleans up systemd service, desktop entries, and launchers |
-| `--headless` | Force Headless / Server / LXC mode |
-| `--desktop` | Force Desktop mode (creates app menu launcher & icon) |
+| `--install` | Default: Installs dependencies, sets up systemd service, and adds desktop integration |
+| `--update` | Pulls latest Git updates, updates python dependencies, and restarts the systemd service |
+| `--status` | Checks systemd service status and HTTP endpoint health |
+| `--uninstall` | Stops and removes systemd service, desktop entries, and launchers |
+| `--no-service` | Skips systemd service registration (standalone mode) |
+| `--headless` | Force Headless / Server / LXC mode (skips GUI desktop entries) |
+| `--desktop` | Force Desktop mode (ensures app menu launcher & icon are created) |
 | `--port <PORT>` | Custom port (default: `8844`) |
+| `--user <USER>` | Specify user for systemd service (default: current user) |
 | `--version`, `-v` | Prints current version |
 
 ---

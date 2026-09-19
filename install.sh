@@ -48,11 +48,12 @@ show_help() {
     print_banner
     echo -e "Usage: ${BOLD}./install.sh [OPTIONS]${NC}\n"
     echo "Options:"
-    echo "  --install           Install MP3MetaFix (default action)"
+    echo "  --install           Install MP3MetaFix & systemd service (default action)"
     echo "  --update            Pull latest updates and rebuild dependencies"
     echo "  --uninstall         Remove MP3MetaFix service, desktop launcher, and configs"
     echo "  --status            Check installation and service status"
     echo "  --version, -v       Display application version"
+    echo "  --no-service        Skip installing systemd service"
     echo "  --headless          Force headless server / LXC installation mode"
     echo "  --desktop           Force desktop environment installation mode"
     echo "  --port <PORT>       Custom server port (default: 8844)"
@@ -131,7 +132,12 @@ setup_python_env() {
 install_desktop_integration() {
     log_info "Configuring Desktop Environment Integration..."
 
-    USER_HOME="$HOME"
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    else
+        USER_HOME="$HOME"
+    fi
+
     ICON_DIR="${USER_HOME}/.local/share/icons/hicolor/scalable/apps"
     APPS_DIR="${USER_HOME}/.local/share/applications"
     BIN_DIR="${USER_HOME}/.local/bin"
@@ -152,17 +158,28 @@ INSTALL_DIR="__INSTALL_DIR__"
 PORT="__PORT__"
 URL="http://127.0.0.1:${PORT}"
 
-# Check if MP3MetaFix is already running
+# Check if MP3MetaFix service is active or endpoint is responding
 if curl -s -f "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
-    echo "MP3MetaFix is already running. Opening browser..."
     if command -v xdg-open >/dev/null 2>&1; then
         xdg-open "$URL" >/dev/null 2>&1 &
     fi
     exit 0
 fi
 
-# Start background server
-echo "Starting MP3MetaFix server on ${URL}..."
+# Try starting systemd service if available
+if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled --quiet mp3metafix.service 2>/dev/null; then
+    systemctl start mp3metafix.service 2>/dev/null || sudo systemctl start mp3metafix.service 2>/dev/null || true
+    sleep 0.5
+    if curl -s -f "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+        if command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "$URL" >/dev/null 2>&1 &
+        fi
+        exit 0
+    fi
+fi
+
+# Fallback: Start background server process directly
+echo "Starting MP3MetaFix on ${URL}..."
 cd "$INSTALL_DIR"
 "${INSTALL_DIR}/.venv/bin/uvicorn" backend.main:app --host 127.0.0.1 --port "$PORT" &
 SERVER_PID=$!
@@ -187,6 +204,12 @@ EOF
     sed -i "s|__INSTALL_DIR__|${INSTALL_DIR}|g" "$WRAPPER_SCRIPT"
     sed -i "s|__PORT__|${TARGET_PORT}|g" "$WRAPPER_SCRIPT"
     chmod +x "$WRAPPER_SCRIPT"
+
+    # Ensure correct ownership if run via sudo
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        chown -R "${SUDO_USER}:" "$ICON_DIR/mp3metafix.svg" "$WRAPPER_SCRIPT" 2>/dev/null || true
+    fi
+
     log_success "Installed launcher command: ${WRAPPER_SCRIPT}"
 
     # 3. Create .desktop Entry
@@ -207,6 +230,10 @@ StartupNotify=true
 EOF
     chmod +x "$DESKTOP_FILE"
 
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        chown "${SUDO_USER}:" "$DESKTOP_FILE" 2>/dev/null || true
+    fi
+
     # Update desktop database
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
@@ -218,9 +245,9 @@ EOF
     log_success "Installed Desktop Entry to application menu (${DESKTOP_FILE})."
 }
 
-# Headless / LXC Service Installation
+# Systemd Service Installation
 install_systemd_service() {
-    log_info "Configuring Headless / LXC systemd Service..."
+    log_info "Configuring systemd Service (mp3metafix.service)..."
 
     SERVICE_FILE="/etc/systemd/system/mp3metafix.service"
     SERVICE_TEMPLATE="${INSTALL_DIR}/deploy/mp3metafix.service"
@@ -235,11 +262,17 @@ install_systemd_service() {
     sed "s|%USER%|${SERVICE_USER}|g; s|%INSTALL_DIR%|${INSTALL_DIR}|g; s|8844|${TARGET_PORT}|g" "$SERVICE_TEMPLATE" > "$TEMP_SERVICE"
 
     log_info "Installing systemd unit to ${SERVICE_FILE} (requires sudo)..."
-    sudo cp "$TEMP_SERVICE" "$SERVICE_FILE"
-    rm -f "$TEMP_SERVICE"
-
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now mp3metafix.service
+    if [ "$EUID" -eq 0 ]; then
+        cp "$TEMP_SERVICE" "$SERVICE_FILE"
+        rm -f "$TEMP_SERVICE"
+        systemctl daemon-reload
+        systemctl enable --now mp3metafix.service
+    else
+        sudo cp "$TEMP_SERVICE" "$SERVICE_FILE"
+        rm -f "$TEMP_SERVICE"
+        sudo systemctl daemon-reload
+        sudo systemctl enable --now mp3metafix.service
+    fi
     log_success "MP3MetaFix systemd service enabled and started."
 }
 
@@ -250,11 +283,12 @@ do_install() {
     detect_environment
 
     log_info "Installation Target:"
-    echo "  - Distro: ${DISTRO_ID} (${DISTRO_LIKE})"
-    echo "  - Mode:   ${ENV_TYPE^^}"
-    echo "  - Port:   ${TARGET_PORT}"
-    echo "  - User:   ${SERVICE_USER}"
-    echo "  - Path:   ${INSTALL_DIR}"
+    echo "  - Distro:  ${DISTRO_ID} (${DISTRO_LIKE})"
+    echo "  - Mode:    ${ENV_TYPE^^}"
+    echo "  - Service: systemd (enabled on boot)"
+    echo "  - Port:    ${TARGET_PORT}"
+    echo "  - User:    ${SERVICE_USER}"
+    echo "  - Path:    ${INSTALL_DIR}"
     echo ""
 
     install_system_deps
@@ -262,21 +296,28 @@ do_install() {
 
     # Create data directory
     mkdir -p "${INSTALL_DIR}/data/temp"
-
-    if [ "$ENV_TYPE" = "desktop" ]; then
-        install_desktop_integration
-        echo ""
-        log_success "MP3MetaFix is ready!"
-        echo -e "You can launch it from your ${BOLD}Application Launcher${NC} or by running ${BOLD}mp3metafix${NC} in the terminal."
-        echo -e "Access directly at: ${BOLD}http://127.0.0.1:${TARGET_PORT}${NC}"
-    else
-        install_systemd_service
-        echo ""
-        log_success "MP3MetaFix Headless Server / LXC service installed successfully!"
-        echo -e "Service status: ${BOLD}sudo systemctl status mp3metafix.service${NC}"
-        echo -e "Access directly at: ${BOLD}http://<YOUR-SERVER-IP>:${TARGET_PORT}${NC}"
-        echo -e "Reverse proxy configs are available in ${BOLD}${INSTALL_DIR}/deploy/${NC}"
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        chown -R "${SERVICE_USER}:" "${INSTALL_DIR}/data" "${INSTALL_DIR}/.venv" 2>/dev/null || true
     fi
+
+    # Always install and enable systemd service unless explicit skip
+    if [ "$SKIP_SERVICE" != true ]; then
+        install_systemd_service
+    fi
+
+    # If desktop environment detected, also install desktop launcher and icon
+    if [ "$ENV_TYPE" = "desktop" ] || [ "$FORCE_DESKTOP" = true ]; then
+        install_desktop_integration
+    fi
+
+    echo ""
+    log_success "MP3MetaFix installation complete!"
+    echo -e "  • ${BOLD}Systemd Service:${NC} sudo systemctl status mp3metafix.service"
+    echo -e "  • ${BOLD}Web Access:${NC}      http://127.0.0.1:${TARGET_PORT}"
+    if [ "$ENV_TYPE" = "desktop" ]; then
+        echo -e "  • ${BOLD}App Launcher:${NC}    Available in your system Application Menu"
+    fi
+    echo -e "  • ${BOLD}Auto-Start:${NC}      Active & enabled to automatically start on boot"
 }
 
 # Perform Update
@@ -361,6 +402,7 @@ do_uninstall() {
 ACTION="install"
 FORCE_HEADLESS=false
 FORCE_DESKTOP=false
+SKIP_SERVICE=false
 TARGET_PORT="$DEFAULT_PORT"
 SERVICE_USER="${SUDO_USER:-$USER}"
 
@@ -374,6 +416,7 @@ while [[ $# -gt 0 ]]; do
             echo "MP3MetaFix v${VERSION}"
             exit 0
             ;;
+        --no-service) SKIP_SERVICE=true; shift ;;
         --headless) FORCE_HEADLESS=true; shift ;;
         --desktop) FORCE_DESKTOP=true; shift ;;
         --port) TARGET_PORT="$2"; shift 2 ;;

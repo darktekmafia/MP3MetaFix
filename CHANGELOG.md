@@ -17,8 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `/api/download/{session_id}/{filename:path}` endpoint to guarantee target filenames are directly reflected in the URL path for all browsers.
   - Formatted `Content-Disposition` with RFC 5987 UTF-8 encoding (`filename*=UTF-8''...`) along with sanitized ASCII fallback.
   - Exposed `Content-Disposition` header in CORS/Access-Control settings.
-- **Test Coverage**:
-  - Added unit and integration tests for named path downloads and UTF-8 header validation.
+- **Universal Installer & Systemd Service**:
+  - Configured `install.sh` to install and enable `mp3metafix.service` by default across both desktop and server environments so the application starts automatically on boot.
+  - Added desktop wrapper auto-recovery to interact with the systemd service.
+  - Added `--no-service` flag for standalone installations.
+- **Documentation & Quickstart Refactoring**:
+  - Restructured `README.md` and `docs/DEPLOYMENT.md` to prioritize background service installation and management (`systemctl status/restart/stop`) over manual `run.sh` foreground execution.
 
 ---
 

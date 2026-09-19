@@ -4,23 +4,31 @@ This guide covers deployment options for MP3MetaFix across **Local Fedora 44 Dev
 
 ---
 
-## 1. Local Fedora 44 Development
+## 1. Local Linux / Workstation Installation (Fedora / Ubuntu / Arch)
 
-### Quick Start
+### Systemd Background Service (Starts on Boot)
+To install MP3MetaFix as a persistent background service that starts on system boot and integrates into your desktop application menu:
 ```bash
 cd /run/media/psychlone/Projects/mp3metafix
-./run.sh
-```
-
-### Desktop Application Integration
-To register MP3MetaFix in your GNOME/KDE software launcher:
-```bash
-./install.sh --desktop
+sudo ./install.sh
 ```
 This will:
-1. Create `~/.local/share/applications/mp3metafix.desktop`.
-2. Install the application icon to `~/.local/share/icons/hicolor/scalable/apps/mp3metafix.svg`.
-3. Create the launcher binary `~/.local/bin/mp3metafix` which starts the server and opens your default browser automatically.
+1. Setup system dependencies and Python virtual environment (`.venv`).
+2. Install and enable the `mp3metafix.service` systemd unit to start on system boot.
+3. Install the application icon and launcher to `~/.local/share/applications/mp3metafix.desktop`.
+
+### Service Management
+```bash
+sudo systemctl status mp3metafix.service
+sudo systemctl restart mp3metafix.service
+sudo systemctl stop mp3metafix.service
+```
+
+### Ad-hoc Local Development
+If developing or modifying code without running a background service:
+```bash
+./run.sh
+```
 
 ---
 
