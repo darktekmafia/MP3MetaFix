@@ -113,3 +113,14 @@ To allow instantaneous scrubbing and preview in web browsers, the `GET /api/stre
   - `GET /api/download/{session_id}/{filename}` routes provide direct file path semantics for browsers and download managers.
 - **Content-Disposition Encoding**:
   - Employs RFC 5987 parameter encoding (`filename*=UTF-8''...`) for full Unicode fidelity and an ASCII-sanitized `filename` fallback.
+
+---
+
+## 6. Service Lifecycle & Systemd Unit Migration Architecture
+
+MP3MetaFix packages an intelligent, non-destructive migration engine (`scripts/migrate_service.py`) for systemd unit maintenance across updates:
+- **Scope Isolation**: Parsing and edits are strictly confined to the `[Service]` section.
+- **Safe Command Tokenization**: Uses POSIX-compliant `shlex` tokenization to preserve arguments with spaces while avoiding destructive whitespace splitting.
+- **Safety Rejection**: Explicitly rejects compound commands, subshells, shell pipelines (`|`), redirects (`>`), and invalid syntax to prevent unit corruption.
+- **Atomic State Updates**: Creates temporary unit files in the target directory, mirrors original POSIX file mode and ownership, and performs atomic replacement via `os.replace`.
+- **Customization Preservation**: Updates only the Uvicorn launch flags (`--no-proxy-headers`, `--host $MP3METAFIX_HOST`, `--port $MP3METAFIX_PORT`) while preserving all administrator-defined environment variables, workers, and sandboxing limits (`MemoryMax`, `TasksMax`, `CPUQuota`).

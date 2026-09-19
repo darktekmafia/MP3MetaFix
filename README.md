@@ -1,6 +1,6 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 
@@ -46,7 +46,7 @@
   - Automatically detects your distro (`dnf`, `apt`, `pacman`).
   - Installs and enables a hardened **systemd background service** (`mp3metafix.service`) to start automatically on system boot.
   - Automatically registers **Desktop application launcher** (`.desktop`) and high-res icon for GUI environments.
-  - Supports `--update`, `--status`, `--uninstall`, `--no-service`, and custom ports.
+  - Supports `--update` with automated, non-destructive legacy service migration (`scripts/migrate_service.py`), `--status`, `--uninstall`, `--no-service`, and custom ports.
 
 ---
 

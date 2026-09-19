@@ -55,6 +55,8 @@ Provide a complete in-app lifecycle updater directly from the web interface, lev
 - [x] **Auto-Reconnection & Refresh Prompt**:
   - Automated client-side healthcheck polling (`/api/health`) as `install.sh` restarts the systemd service.
   - Success banner prompting the user to reload the page once the new version is verified online.
+- [x] **Portable Systemd Service Migration (`scripts/migrate_service.py`) [COMPLETED]**:
+  - Safe, non-destructive migration helper in `install.sh --update` to upgrade legacy service units to use `--no-proxy-headers` and dynamic host/port bindings while preserving administrator customizations.
 
 ---
 

@@ -155,7 +155,22 @@ To update MP3MetaFix in-place via CLI:
 cd /opt/mp3metafix
 sudo ./install.sh --update
 ```
-This automatically fetches the newest release, updates dependencies, and restarts the systemd service.
+This automatically:
+1. Fetches the newest release and reloads `VERSION`.
+2. Updates Python virtual environment dependencies.
+3. Automatically and safely migrates existing systemd units (`/etc/systemd/system/mp3metafix.service` or `~/.config/systemd/user/mp3metafix.service`) using `scripts/migrate_service.py` to upgrade legacy launch commands to use `--no-proxy-headers` and `$MP3METAFIX_HOST` / `$MP3METAFIX_PORT` without overwriting administrator environment variables, workers, or cgroups.
+4. Executes `systemctl daemon-reload` and restarts the service.
+
+### Manual Systemd Unit Migration (Optional)
+If you wish to inspect or run the migration script directly without pulling Git updates:
+```bash
+# Run migration helper
+sudo /opt/mp3metafix/.venv/bin/python /opt/mp3metafix/scripts/migrate_service.py /etc/systemd/system/mp3metafix.service
+
+# Reload systemd and restart
+sudo systemctl daemon-reload
+sudo systemctl restart mp3metafix.service
+```
 
 > [!NOTE]
 > In-app web updater execution (`POST /api/updates/apply`) is currently disabled pending administrative authorization and privilege separation review.

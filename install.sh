@@ -15,7 +15,7 @@ VERSION_FILE="${INSTALL_DIR}/VERSION"
 if [ -f "$VERSION_FILE" ]; then
     VERSION="$(cat "$VERSION_FILE" | tr -d '[:space:]')"
 else
-    VERSION="0.3.1"
+    VERSION="0.3.2"
 fi
 
 # Colors for output
@@ -373,6 +373,84 @@ do_install() {
     echo -e "  • ${BOLD}Auto-Start:${NC}      Active & enabled to automatically start on boot"
 }
 
+# Migrate Existing Systemd Units
+migrate_existing_services() {
+    MIGRATE_SCRIPT="${INSTALL_DIR}/scripts/migrate_service.py"
+    if [ ! -f "$MIGRATE_SCRIPT" ] || [ ! -f "${INSTALL_DIR}/.venv/bin/python" ]; then
+        return 0
+    fi
+
+    local migration_error=false
+
+    # 1. System-wide service
+    SYS_SVC="/etc/systemd/system/mp3metafix.service"
+    if [ -f "$SYS_SVC" ]; then
+        log_info "Checking system service (${SYS_SVC}) for launch settings migration..."
+        set +e
+        if [ "$EUID" -eq 0 ]; then
+            "${INSTALL_DIR}/.venv/bin/python" "$MIGRATE_SCRIPT" "$SYS_SVC"
+            SVC_RES=$?
+        else
+            sudo "${INSTALL_DIR}/.venv/bin/python" "$MIGRATE_SCRIPT" "$SYS_SVC"
+            SVC_RES=$?
+        fi
+        set -e
+
+        if [ "$SVC_RES" -eq 0 ]; then
+            log_info "Reloading systemd daemon for migrated system service..."
+            if [ "$EUID" -eq 0 ]; then
+                if ! systemctl daemon-reload; then
+                    log_error "Failed to reload systemd daemon."
+                    migration_error=true
+                fi
+            else
+                if ! sudo systemctl daemon-reload; then
+                    log_error "Failed to reload systemd daemon."
+                    migration_error=true
+                fi
+            fi
+        elif [ "$SVC_RES" -eq 2 ]; then
+            log_info "System service (${SYS_SVC}) is already up to date."
+        else
+            log_error "Migration failed for ${SYS_SVC}. Unit was left unchanged."
+            migration_error=true
+        fi
+    fi
+
+    # 2. User service
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        TARGET_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    else
+        TARGET_HOME="$HOME"
+    fi
+    USER_SVC="${TARGET_HOME}/.config/systemd/user/mp3metafix.service"
+    if [ -f "$USER_SVC" ]; then
+        log_info "Checking user service (${USER_SVC}) for launch settings migration..."
+        set +e
+        "${INSTALL_DIR}/.venv/bin/python" "$MIGRATE_SCRIPT" "$USER_SVC"
+        USER_SVC_RES=$?
+        set -e
+
+        if [ "$USER_SVC_RES" -eq 0 ]; then
+            log_info "Reloading systemd user daemon for migrated user service..."
+            if ! systemctl --user daemon-reload; then
+                log_error "Failed to reload systemd user daemon."
+                migration_error=true
+            fi
+        elif [ "$USER_SVC_RES" -eq 2 ]; then
+            log_info "User service (${USER_SVC}) is already up to date."
+        else
+            log_error "Migration failed for ${USER_SVC}. Unit was left unchanged."
+            migration_error=true
+        fi
+    fi
+
+    if [ "$migration_error" = true ]; then
+        return 1
+    fi
+    return 0
+}
+
 # Perform Update
 do_update() {
     print_banner
@@ -385,27 +463,60 @@ do_update() {
         git -C "$INSTALL_DIR" pull origin main || git -C "$INSTALL_DIR" pull || true
     fi
 
+    # Reload version from disk after git pull to prevent stale version reporting
+    if [ -f "$VERSION_FILE" ]; then
+        VERSION="$(cat "$VERSION_FILE" | tr -d '[:space:]')"
+    fi
+
     # Update dependencies
     setup_python_env
+
+    local has_errors=false
+
+    # Safely migrate existing service units if needed
+    if ! migrate_existing_services; then
+        log_warn "One or more systemd service units could not be migrated or reloaded automatically."
+        has_errors=true
+    fi
 
     detect_environment
     if [ "$ENV_TYPE" = "desktop" ]; then
         install_desktop_integration
     fi
 
-    log_success "MP3MetaFix updated to latest version (${VERSION})!"
-
-    # Restart service if running (scheduled detached to allow clean subprocess exit)
+    # Restart service if running
     if systemctl --user is-active --quiet mp3metafix.service 2>/dev/null; then
-        log_info "Scheduling restart of systemd user service..."
-        (sleep 1 && systemctl --user restart mp3metafix.service) >/dev/null 2>&1 &
-        disown 2>/dev/null || true
-        log_success "User service restart scheduled."
+        log_info "Restarting systemd user service..."
+        if systemctl --user daemon-reload && systemctl --user restart mp3metafix.service; then
+            log_success "Systemd user service restarted successfully."
+        else
+            log_error "Failed to restart systemd user service. Check 'systemctl --user status mp3metafix.service'."
+            has_errors=true
+        fi
     elif systemctl is-active --quiet mp3metafix.service 2>/dev/null; then
-        log_info "Scheduling restart of systemd system service..."
-        (sleep 1 && (sudo systemctl restart mp3metafix.service 2>/dev/null || systemctl restart mp3metafix.service 2>/dev/null)) >/dev/null 2>&1 &
-        disown 2>/dev/null || true
-        log_success "System service restart scheduled."
+        log_info "Restarting systemd system service..."
+        if [ "$EUID" -eq 0 ]; then
+            if systemctl daemon-reload && systemctl restart mp3metafix.service; then
+                log_success "Systemd system service restarted successfully."
+            else
+                log_error "Failed to restart systemd system service. Check 'sudo systemctl status mp3metafix.service'."
+                has_errors=true
+            fi
+        else
+            if sudo systemctl daemon-reload && sudo systemctl restart mp3metafix.service; then
+                log_success "Systemd system service restarted successfully."
+            else
+                log_error "Failed to restart systemd system service. Check 'sudo systemctl status mp3metafix.service'."
+                has_errors=true
+            fi
+        fi
+    fi
+
+    if [ "$has_errors" = true ]; then
+        log_warn "MP3MetaFix updated to ${VERSION}, but one or more service migration/restart operations failed."
+        return 1
+    else
+        log_success "MP3MetaFix updated to latest version (${VERSION})!"
     fi
 }
 

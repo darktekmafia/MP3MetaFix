@@ -20,6 +20,10 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 - [x] **12. Multi-User POSIX File Isolation (0700 Permissions)**: Prevent unprivileged local Linux users on multi-tenant VPS from snooping session directories. *(Implemented in `backend/storage.py`)*
 - [x] **13. CORS Credential Isolation**: Restrict allowed CORS origins via regex to prohibit credential leakage to wildcard domains. *(Implemented in `backend/main.py`)*
 - [x] **14. Localhost Default Host Binding & TLS Secure Cookies**: Bind to `127.0.0.1` by default and dynamically set `Secure` cookie flag over TLS/HTTPS. *(Implemented in `backend/config.py` & `backend/main.py`)*
+- [x] **15. Single Audio Byte-Range Bounds & Underflow Defense**: Enforce strict single-range HTTP 206 validation. *(Implemented in `backend/main.py`)*
+- [x] **16. Artwork Processing Error Sanitization**: Sanitize client-facing image decode errors and server log formats. *(Implemented in `backend/security.py`)*
+- [ ] **17. Update Installation Endpoint Access Control**: In-app updater endpoint disabled pending admin design. *(Implemented in `backend/main.py`)*
+- [x] **18. Safe Systemd Unit Parser Hardening & Migration**: Atomic in-place unit updates with POSIX quoting and shell injection defense. *(Implemented in `scripts/migrate_service.py` & `install.sh`)*
 
 ---
 
@@ -94,6 +98,14 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 ### Vector 17: Update Installation Endpoint Access Control [PENDING ADMIN DESIGN]
 - **Threat**: Unauthenticated visitors or non-admin users triggering server update scripts and restarts.
 - **Defense**: In-app update execution endpoint (`POST /api/updates/apply`) is disabled (HTTP 403 Forbidden) pending dedicated administrative authentication, concurrency lock design, and service privilege review.
+
+### Vector 18: Safe Systemd Service Migration & Unit Parser Hardening [COMPLETED]
+- **Threat**: Automated update scripts clobbering administrator customizations, corrupting complex `ExecStart` commands with naive regex or whitespace string splitting, exposing temporary files to symlink race conditions, or altering unit file permission modes.
+- **Defense**:
+  1. Strict `[Service]` section parsing with POSIX `shlex` tokenization in `scripts/migrate_service.py`.
+  2. Explicit rejection of compound shell commands, pipelines (`|`), redirects (`>`), subshells, or invalid quoting, leaving unparseable units untouched.
+  3. Atomic file writes using unguessable directory-local temporary files (`mkstemp`) with explicit preservation of original POSIX file mode (`stat.S_IMODE`) and ownership (`os.chown`).
+  4. Tri-state CLI exit codes (`0`=changed, `2`=unchanged, `1`=failed) ensuring the installer propagates failures and prevents reporting false successes.
 
 
 

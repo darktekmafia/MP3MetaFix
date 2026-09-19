@@ -5,6 +5,24 @@ All notable changes to **MP3MetaFix** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-09-19
+
+### Fixed
+- **Automated & Portable Systemd Service Unit Migration (`scripts/migrate_service.py`)**:
+  - Added dedicated migration helper invoked automatically during `install.sh --update` to detect legacy Uvicorn launch commands and update `ExecStart` with `--no-proxy-headers` and `$MP3METAFIX_HOST` / `$MP3METAFIX_PORT`.
+  - Strictly limits parsing and modifications to the `[Service]` section while preserving all administrator customizations, custom environment variables, worker counts, sandboxing flags, and cgroup resource limits (`MemoryMax`, `TasksMax`, `CPUQuota`).
+  - Synthesizes missing `MP3METAFIX_HOST` and `MP3METAFIX_PORT` environment variables into `[Service]` when migrating legacy units that hardcoded IP/port CLI flags.
+  - Safely and explicitly rejects unparseable, shell-wrapped, compound, or invalid `ExecStart` commands, leaving units untouched.
+  - Employs secure atomic file replacement preserving original file permissions (`stat.S_IMODE`) and ownership.
+- **Installer Error Propagation & Synchronous Service Restart**:
+  - Configured `install.sh --update` to handle tri-state migration outcomes (changed, unchanged, failed) and execute synchronous `daemon-reload` and service restart verification, preventing false success reports on failures.
+- **Installer Stale Version Reporting Fix**:
+  - Re-reads `VERSION` from disk immediately following `git pull` in `install.sh` to ensure the post-update status banner accurately reflects the newly pulled release.
+- **Cache-Busting Asset Refresh**:
+  - Bumped static asset query strings (`?v=0.3.2`) across `frontend/index.html` to guarantee fresh script and style caching.
+
+---
+
 ## [0.3.1] - 2026-09-19
 
 ### Fixed

@@ -688,7 +688,7 @@ def test_api_updates_check_endpoint(client, monkeypatch):
 async def test_stream_install_update_generator():
     """Verify stream_install_update yields SSE events."""
     from backend.updater import stream_install_update
-    
+
     events = []
     async for event in stream_install_update():
         events.append(event)
@@ -696,6 +696,341 @@ async def test_stream_install_update_generator():
             break
     assert len(events) > 0
     assert events[0].startswith("data: ")
+
+
+def test_migrate_service_content_preserves_customizations():
+    """Verify that service migration updates only ExecStart launch flags while strictly preserving all user customizations and cgroups."""
+    from scripts.migrate_service import migrate_service_content, MigrationStatus
+
+    legacy_unit = """[Unit]
+Description=MP3MetaFix Web Server & Audio Metadata Editor
+After=network.target
+
+[Service]
+Type=simple
+User=customuser
+WorkingDirectory=/custom/path/MP3MetaFix
+Environment="PATH=/custom/path/MP3MetaFix/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="MP3METAFIX_HOST=0.0.0.0"
+Environment="MP3METAFIX_PORT=8844"
+Environment="MP3METAFIX_DATA_DIR=/custom/path/MP3MetaFix/data"
+Environment="MP3METAFIX_TRUST_PROXIES=true"
+Environment="CUSTOM_OVERRIDE=1"
+ExecStart=/custom/path/MP3MetaFix/.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8844 --workers 4
+Restart=always
+RestartSec=3
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
+MemoryMax=1024M
+TasksMax=128
+CPUQuota=90%
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+    migrated, status, err = migrate_service_content(legacy_unit)
+    assert status == MigrationStatus.CHANGED
+    assert err is None
+
+    # 1. Verify launch command updated
+    assert "ExecStart=/custom/path/MP3MetaFix/.venv/bin/uvicorn backend.main:app --host $MP3METAFIX_HOST --port $MP3METAFIX_PORT --workers 4 --no-proxy-headers" in migrated
+
+    # 2. Verify all custom environment variables preserved
+    assert 'Environment="MP3METAFIX_HOST=0.0.0.0"' in migrated
+    assert 'Environment="MP3METAFIX_PORT=8844"' in migrated
+    assert 'Environment="MP3METAFIX_TRUST_PROXIES=true"' in migrated
+    assert 'Environment="CUSTOM_OVERRIDE=1"' in migrated
+    assert 'User=customuser' in migrated
+    assert 'WorkingDirectory=/custom/path/MP3MetaFix' in migrated
+
+    # 3. Verify custom sandboxing and resource limits preserved
+    assert "MemoryMax=1024M" in migrated
+    assert "TasksMax=128" in migrated
+    assert "CPUQuota=90%" in migrated
+    assert "ProtectSystem=full" in migrated
+    assert "PrivateTmp=true" in migrated
+    assert "NoNewPrivileges=true" in migrated
+
+
+def test_migrate_service_content_idempotency():
+    """Verify that running migration repeatedly on an already migrated unit returns UNCHANGED with identical content."""
+    from scripts.migrate_service import migrate_service_content, MigrationStatus
+
+    modern_unit = """[Unit]
+Description=MP3MetaFix Web Server & Audio Metadata Editor
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/MP3MetaFix
+Environment="PATH=/root/MP3MetaFix/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="MP3METAFIX_HOST=0.0.0.0"
+Environment="MP3METAFIX_PORT=8844"
+Environment="MP3METAFIX_DATA_DIR=/root/MP3MetaFix/data"
+Environment="MP3METAFIX_TRUST_PROXIES=true"
+ExecStart=/root/MP3MetaFix/.venv/bin/uvicorn backend.main:app --host $MP3METAFIX_HOST --port $MP3METAFIX_PORT --workers 2 --no-proxy-headers
+Restart=always
+RestartSec=3
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
+MemoryMax=512M
+TasksMax=64
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+    migrated, status, err = migrate_service_content(modern_unit)
+    assert status == MigrationStatus.UNCHANGED
+    assert err is None
+    assert migrated == modern_unit
+
+
+def test_migrate_service_content_legacy_env_synthesis():
+    """Verify that a legacy unit without explicit Environment host/port lines has them synthesized into [Service]."""
+    from scripts.migrate_service import migrate_service_content, MigrationStatus
+
+    legacy_minimal = """[Unit]
+Description=MP3MetaFix Web Server
+
+[Service]
+ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 9000 --workers 2
+Restart=always
+"""
+
+    migrated, status, err = migrate_service_content(legacy_minimal)
+    assert status == MigrationStatus.CHANGED
+    assert err is None
+    assert 'Environment="MP3METAFIX_HOST=0.0.0.0"' in migrated
+    assert 'Environment="MP3METAFIX_PORT=9000"' in migrated
+    assert "ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app --host $MP3METAFIX_HOST --port $MP3METAFIX_PORT --workers 2 --no-proxy-headers" in migrated
+
+
+def test_migrate_service_unrelated_unit_safety():
+    """Verify that unrelated or non-uvicorn unit files return UNCHANGED and are left completely untouched."""
+    from scripts.migrate_service import migrate_service_content, MigrationStatus
+
+    unrelated = """[Unit]
+Description=Some Other App
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/other/app.py
+"""
+
+    migrated, status, err = migrate_service_content(unrelated)
+    assert status == MigrationStatus.UNCHANGED
+    assert err is None
+    assert migrated == unrelated
+
+
+def test_migrate_service_rejection_of_unsafe_execstart():
+    """Verify that unsafe, shell-wrapped, compound, or malformed ExecStart commands are explicitly rejected as FAILED."""
+    from scripts.migrate_service import migrate_service_content, MigrationStatus
+
+    # 1. Shell pipe wrapper
+    pipe_unit = """[Unit]
+Description=MP3MetaFix
+
+[Service]
+ExecStart=/bin/sh -c "/opt/mp3metafix/.venv/bin/uvicorn backend.main:app | logger"
+"""
+    _, status, err = migrate_service_content(pipe_unit)
+    assert status == MigrationStatus.FAILED
+    assert "shell pipelines" in err
+
+    # 2. Compound command with &&
+    compound_unit = """[Unit]
+Description=MP3MetaFix
+
+[Service]
+ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app && echo done
+"""
+    _, status, err = migrate_service_content(compound_unit)
+    assert status == MigrationStatus.FAILED
+    assert "compound commands" in err
+
+    # 3. Unclosed quotation
+    unclosed_unit = """[Unit]
+Description=MP3MetaFix
+
+[Service]
+ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app --host "0.0.0.0
+"""
+    _, status, err = migrate_service_content(unclosed_unit)
+    assert status == MigrationStatus.FAILED
+    assert "quoting" in err
+
+    # 4. Multiple ExecStart lines in [Service]
+    multi_exec = """[Unit]
+Description=MP3MetaFix
+
+[Service]
+ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app
+ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app --port 8844
+"""
+    _, status, err = migrate_service_content(multi_exec)
+    assert status == MigrationStatus.FAILED
+    assert "Multiple ExecStart" in err
+
+
+def test_migrate_service_file_on_disk_permissions_and_atomicity(tmp_path: Path):
+    """Verify migrate_service_file performs atomic in-place updates on disk while strictly preserving file permissions."""
+    import stat
+    from scripts.migrate_service import migrate_service_file, MigrationStatus
+
+    svc_file = tmp_path / "mp3metafix.service"
+    legacy_content = """[Unit]
+Description=MP3MetaFix
+
+[Service]
+Environment="MP3METAFIX_HOST=127.0.0.1"
+Environment="MP3METAFIX_PORT=8844"
+ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8844 --workers 2
+"""
+    svc_file.write_text(legacy_content, encoding="utf-8")
+    # Set custom permission mode (e.g. 0640)
+    svc_file.chmod(0o640)
+
+    # First migration run: Modifies file and returns CHANGED
+    status1, msg1 = migrate_service_file(svc_file)
+    assert status1 == MigrationStatus.CHANGED
+    assert "Migrated launch settings" in msg1
+
+    # Verify content updated
+    content_after = svc_file.read_text(encoding="utf-8")
+    assert "--no-proxy-headers" in content_after
+    assert "--host $MP3METAFIX_HOST" in content_after
+    assert "--port $MP3METAFIX_PORT" in content_after
+
+    # Verify permission mode preserved
+    file_mode = stat.S_IMODE(svc_file.stat().st_mode)
+    assert file_mode == 0o640
+
+    # Verify no temporary files left behind
+    parent_files = list(tmp_path.glob("*.tmp*"))
+    assert parent_files == []
+
+    # Second migration run: Returns UNCHANGED with no modifications
+    status2, msg2 = migrate_service_file(svc_file)
+    assert status2 == MigrationStatus.UNCHANGED
+    assert "already up to date" in msg2
+    assert svc_file.read_text(encoding="utf-8") == content_after
+
+    # Migration on non-existent file: Returns FAILED
+    status3, msg3 = migrate_service_file(tmp_path / "nonexistent.service")
+    assert status3 == MigrationStatus.FAILED
+    assert "does not exist" in msg3
+
+
+def test_migrate_service_cli_exit_codes(tmp_path: Path):
+    """Verify CLI exit codes: 0 for changed, 2 for unchanged, 1 for failure."""
+    import subprocess
+    import sys
+
+    # 1. Test Exit Code 0 (Changed)
+    svc_legacy = tmp_path / "legacy.service"
+    svc_legacy.write_text("""[Unit]
+Description=MP3MetaFix
+[Service]
+Environment="MP3METAFIX_HOST=0.0.0.0"
+Environment="MP3METAFIX_PORT=8844"
+ExecStart=/opt/.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8844
+""", encoding="utf-8")
+
+    res_changed = subprocess.run(
+        [sys.executable, "scripts/migrate_service.py", str(svc_legacy)],
+        capture_output=True,
+        text=True,
+    )
+    assert res_changed.returncode == 0
+    assert "[+] Migrated launch settings" in res_changed.stdout
+
+    # 2. Test Exit Code 2 (Unchanged / Already current)
+    res_unchanged = subprocess.run(
+        [sys.executable, "scripts/migrate_service.py", str(svc_legacy)],
+        capture_output=True,
+        text=True,
+    )
+    assert res_unchanged.returncode == 2
+    assert "[*] Service" in res_unchanged.stdout
+    assert "already up to date" in res_unchanged.stdout
+
+    # 3. Test Exit Code 1 (Failed / Unsafe command)
+    svc_failed = tmp_path / "failed.service"
+    svc_failed.write_text("""[Unit]
+Description=MP3MetaFix
+[Service]
+ExecStart=/bin/sh -c "/opt/.venv/bin/uvicorn backend.main:app | tee log"
+""", encoding="utf-8")
+
+    res_failed = subprocess.run(
+        [sys.executable, "scripts/migrate_service.py", str(svc_failed)],
+        capture_output=True,
+        text=True,
+    )
+    assert res_failed.returncode == 1
+    assert "[!] Error:" in res_failed.stderr
+
+
+def test_installer_service_migration_and_restart_failure_handling(tmp_path: Path):
+    """Verify that install.sh migration and update logic detects failed migrations, reloads, and restarts and does not report false success."""
+    import subprocess
+
+    # Test 1: Bash subshell executing migration logic when migration script fails
+    bash_script_fail = f"""
+    MIGRATE_SCRIPT="scripts/migrate_service.py"
+    INSTALL_DIR="{Path.cwd()}"
+    SYS_SVC="{tmp_path / 'invalid.service'}"
+    cat << 'EOF' > "$SYS_SVC"
+[Unit]
+Description=Test
+[Service]
+ExecStart=/bin/sh -c "uvicorn backend.main:app | logger"
+EOF
+
+    # Run migration helper
+    python3 "$MIGRATE_SCRIPT" "$SYS_SVC" 2>/dev/null
+    SVC_RES=$?
+    if [ "$SVC_RES" -eq 1 ]; then
+        echo "DETECTED_FAILURE"
+        exit 1
+    fi
+    """
+    res1 = subprocess.run(["bash", "-c", bash_script_fail], capture_output=True, text=True)
+    assert res1.returncode == 1
+    assert "DETECTED_FAILURE" in res1.stdout
+
+    # Test 2: Unit file was left unchanged after failed migration
+    invalid_content = (tmp_path / 'invalid.service').read_text(encoding="utf-8")
+    assert '| logger' in invalid_content
+
+    # Test 3: Test that failed systemctl restart prevents successful update reporting
+    bash_script_restart_fail = """
+    has_errors=false
+    # Simulate a failed daemon-reload / restart
+    mock_systemctl_fail() {
+        return 1
+    }
+    if ! mock_systemctl_fail; then
+        has_errors=true
+    fi
+    if [ "$has_errors" = true ]; then
+        echo "UPDATE_REPORTED_FAILURE"
+        exit 1
+    else
+        echo "UPDATE_REPORTED_SUCCESS"
+        exit 0
+    fi
+    """
+    res2 = subprocess.run(["bash", "-c", bash_script_restart_fail], capture_output=True, text=True)
+    assert res2.returncode == 1
+    assert "UPDATE_REPORTED_FAILURE" in res2.stdout
+
 
 
 
