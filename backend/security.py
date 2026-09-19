@@ -13,7 +13,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 from fastapi import HTTPException, status
 
-from backend.config import SESSION_SECRET_KEY
+from backend.config import SESSION_SECRET_KEY, SESSION_COOKIE_MAX_AGE
+import time
 
 # Magic byte signatures
 MP3_ID3_SIGNATURE = b"ID3"
@@ -24,41 +25,74 @@ WEBP_SIGNATURE = b"WEBP"
 
 
 def create_signed_session_token(session_id: str) -> str:
-    """Sign a UUID4 session ID using HMAC-SHA256."""
+    """Sign a UUID4 session ID and current UNIX timestamp using HMAC-SHA256."""
+    ts = int(time.time())
+    payload = f"{session_id}.{ts}"
     sig = hmac.new(
         SESSION_SECRET_KEY.encode("utf-8"),
-        session_id.encode("utf-8"),
+        payload.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    return f"{session_id}.{sig}"
+    return f"{payload}.{sig}"
 
 
-def verify_signed_session_token(token: str) -> Optional[str]:
-    """Verify HMAC signature and return the authenticated UUID4 session ID or None."""
+def verify_signed_session_token(token: str, max_age_seconds: int = SESSION_COOKIE_MAX_AGE) -> Optional[str]:
+    """Verify HMAC signature and timestamp expiry. Returns authenticated UUID4 session ID or None."""
     if not token or "." not in token:
         return None
-    parts = token.split(".", 1)
-    if len(parts) != 2:
-        return None
-    session_id, sig = parts[0], parts[1]
-
-    # Validate UUID4 structure
-    try:
-        uuid_obj = uuid.UUID(session_id, version=4)
-        if str(uuid_obj) != session_id:
+    parts = token.split(".")
+    
+    # Support time-bounded format: session_id.timestamp.sig
+    if len(parts) == 3:
+        session_id, ts_str, sig = parts[0], parts[1], parts[2]
+        try:
+            ts = int(ts_str)
+            now = int(time.time())
+            # Enforce timestamp freshness (not in future by more than 60s, and not expired)
+            if ts > now + 60 or (now - ts) > max_age_seconds:
+                return None
+        except ValueError:
             return None
-    except (ValueError, TypeError, AttributeError):
+
+        # Validate UUID4 structure
+        try:
+            uuid_obj = uuid.UUID(session_id, version=4)
+            if str(uuid_obj) != session_id:
+                return None
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+        expected_sig = hmac.new(
+            SESSION_SECRET_KEY.encode("utf-8"),
+            f"{session_id}.{ts_str}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+        if hmac.compare_digest(sig, expected_sig):
+            return session_id
         return None
 
-    expected_sig = hmac.new(
-        SESSION_SECRET_KEY.encode("utf-8"),
-        session_id.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
+    # Fallback for 2-part legacy token: session_id.sig
+    if len(parts) == 2:
+        session_id, sig = parts[0], parts[1]
+        try:
+            uuid_obj = uuid.UUID(session_id, version=4)
+            if str(uuid_obj) != session_id:
+                return None
+        except (ValueError, TypeError, AttributeError):
+            return None
 
-    if hmac.compare_digest(sig, expected_sig):
-        return session_id
+        expected_sig = hmac.new(
+            SESSION_SECRET_KEY.encode("utf-8"),
+            session_id.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+        if hmac.compare_digest(sig, expected_sig):
+            return session_id
+
     return None
+
 
 
 def get_storage_dir_name(session_id: str) -> str:

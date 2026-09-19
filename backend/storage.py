@@ -31,6 +31,10 @@ class SessionManager:
         self.ttl_seconds = ttl_minutes * 60
         self.max_storage_bytes = max_storage_bytes
         self.temp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(self.temp_dir, 0o700)
+        except Exception:
+            pass
 
     def get_total_temp_size_bytes(self) -> int:
         """Calculate total disk space consumed by all sessions in data/temp."""
@@ -92,6 +96,10 @@ class SessionManager:
         dir_name = get_storage_dir_name(session_id)
         session_dir = self.temp_dir / dir_name
         session_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(session_dir, 0o700)
+        except Exception:
+            pass
 
         clean_name = sanitize_filename(original_filename)
         audio_path = session_dir / "audio.mp3"

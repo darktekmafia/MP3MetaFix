@@ -100,10 +100,10 @@ if TRUST_PROXIES:
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(CSRFProtectionMiddleware)
 
-# CORS setup (allow same-origin by default, expandable if needed)
+# CORS setup (restrict to same-origin / local hosts with credentials support)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -212,13 +212,18 @@ async def upload_mp3(request: Request, response: Response, file: UploadFile = Fi
 
     session_info = storage_manager.get_session_info(session_id) or {}
 
-    # Set secure HttpOnly session cookie
+    # Set secure HttpOnly session cookie (enforce secure flag if request is HTTPS)
+    is_https = (
+        request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto", "").lower() == "https"
+    )
     token = create_signed_session_token(session_id)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
         max_age=SESSION_COOKIE_MAX_AGE,
         httponly=True,
+        secure=is_https,
         samesite="lax",
         path="/",
     )
@@ -465,12 +470,17 @@ async def stream_audio(
 
 @app.delete("/api/session")
 async def delete_session(
+    request: Request,
     response: Response,
     session_id: str = Depends(get_current_session_id),
 ):
     """Explicitly terminate and purge a session, clearing the session cookie."""
     success = storage_manager.cleanup_session(session_id)
-    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    is_https = (
+        request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto", "").lower() == "https"
+    )
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/", secure=is_https, httponly=True)
     return {"success": success}
 
 

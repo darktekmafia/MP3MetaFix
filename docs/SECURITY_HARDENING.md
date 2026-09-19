@@ -16,6 +16,10 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 - [x] **8. Rate Limiter Anti-Spoofing & Memory Leak Defense**: Validate proxy trust subnets and auto-prune stale IP dictionaries. *(Implemented in `backend/security.py`)*
 - [x] **9. Internal Filesystem Path Exception Masking**: Prevent directory structure and OS user disclosure in HTTP error responses. *(Implemented in `backend/main.py`)*
 - [x] **10. MIME Confusion & CSP Content Protections**: Restrict execution contexts on media streams and downloads. *(Implemented in `backend/security.py` & `backend/main.py`)*
+- [x] **11. Time-Bounded HMAC Session Tokens**: Cryptographically embed and verify UNIX timestamps in session cookies to prevent perpetual replay. *(Implemented in `backend/security.py`)*
+- [x] **12. Multi-User POSIX File Isolation (0700 Permissions)**: Prevent unprivileged local Linux users on multi-tenant VPS from snooping session directories. *(Implemented in `backend/storage.py`)*
+- [x] **13. CORS Credential Isolation**: Restrict allowed CORS origins via regex to prohibit credential leakage to wildcard domains. *(Implemented in `backend/main.py`)*
+- [x] **14. Localhost Default Host Binding & TLS Secure Cookies**: Bind to `127.0.0.1` by default and dynamically set `Secure` cookie flag over TLS/HTTPS. *(Implemented in `backend/config.py` & `backend/main.py`)*
 
 ---
 
@@ -62,5 +66,22 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 ### Vector 10: MIME Confusion & Content Isolation [COMPLETED]
 - **Threat**: Crafting polyglot audio files containing HTML or script tags and tricking browsers into rendering them in an executable document context.
 - **Defense**: Enforced `X-Content-Type-Options: nosniff`, strict `Content-Type: audio/mpeg`, attachment download semantics, and restrictive `Content-Security-Policy` headers across all endpoints.
+
+### Vector 11: Timestamped Cryptographic Session Tokens [COMPLETED]
+- **Threat**: Captured session cookies being replayed indefinitely across long periods or offline token manipulation attempts.
+- **Defense**: Formatted tokens as `{session_id}.{timestamp}.{HMAC_signature}` in `backend/security.py`. Server validates expiration against `SESSION_COOKIE_MAX_AGE` cryptographically before checking storage state.
+
+### Vector 12: Multi-Tenant VPS POSIX Permissions Isolation [COMPLETED]
+- **Threat**: On a multi-user Linux VPS or shared host, unprivileged local system users viewing or tampering with temporary audio and image files in `data/temp/`.
+- **Defense**: Enforced strict `0700` (`rwx------`) POSIX permissions on `TEMP_DIR` and each hashed session directory in `backend/storage.py`.
+
+### Vector 13: CORS Credential Leakage Prevention [COMPLETED]
+- **Threat**: Loose wildcard CORS settings (`allow_origins=["*"]`) combined with credentials allowing malicious external domains to trigger credentialed cross-origin read operations.
+- **Defense**: Replaced wildcard origins with strict regex allowing only verified same-origin and localhost developers in `backend/main.py`.
+
+### Vector 14: Default Localhost Binding & Dynamic TLS Cookie Flags [COMPLETED]
+- **Threat**: Unintended exposure of unencrypted HTTP services on public network interfaces (`0.0.0.0`), and transmitting plain session cookies over unencrypted transport.
+- **Defense**: Defaulted `MP3METAFIX_HOST` to `127.0.0.1` (requiring explicit override or reverse proxy) and dynamically attached the `Secure` cookie flag when serving via TLS/HTTPS.
+
 
 

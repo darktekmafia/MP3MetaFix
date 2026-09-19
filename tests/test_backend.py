@@ -89,13 +89,23 @@ def test_cryptographic_session_tokens():
     valid_id = str(uuid.uuid4())
     token = create_signed_session_token(valid_id)
     assert "." in token
+    parts = token.split(".")
+    assert len(parts) == 3  # uuid.timestamp.sig
 
     # Verification passes for legitimate token
     verified = verify_signed_session_token(token)
     assert verified == valid_id
 
+    # Expired token fails
+    expired_token = f"{valid_id}.{int(time.time()) - 7200}.{parts[2]}"
+    assert verify_signed_session_token(expired_token, max_age_seconds=3600) is None
+
+    # Future token tampering fails
+    future_token = f"{valid_id}.{int(time.time()) + 999999}.{parts[2]}"
+    assert verify_signed_session_token(future_token) is None
+
     # Tampered signature fails
-    tampered_token = f"{valid_id}.0000000000000000000000000000000000000000000000000000000000000000"
+    tampered_token = f"{valid_id}.{parts[1]}.0000000000000000000000000000000000000000000000000000000000000000"
     assert verify_signed_session_token(tampered_token) is None
 
     # Invalid UUID format fails

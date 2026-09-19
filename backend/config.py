@@ -15,7 +15,7 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Server Config
-HOST = os.getenv("MP3METAFIX_HOST", "0.0.0.0")
+HOST = os.getenv("MP3METAFIX_HOST", "127.0.0.1")
 PORT = int(os.getenv("MP3METAFIX_PORT", "8844"))
 DEBUG = os.getenv("MP3METAFIX_DEBUG", "false").lower() in ("true", "1", "yes")
 
