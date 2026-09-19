@@ -1,6 +1,6 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 
@@ -21,6 +21,9 @@
 - 🔊 **Built-in HTML5 Audio Preview**:
   - Listen to uploaded MP3s directly in your browser before and after editing.
   - HTTP 206 Partial Content Range streaming support.
+- 💾 **Native Save & File System Access**:
+  - Native browser save folder picker via the modern File System Access API (`showSaveFilePicker`).
+  - Seamless fallback to direct named downloads with RFC 5987 UTF-8 Content-Disposition headers.
 - ⚡ **Dynamic Filename Formatter**:
   - Automatically rename downloaded MP3s using patterns like `%artist% - %title%.mp3` or `%track% - %title%.mp3`.
 - 🛡️ **Hardened Security by Design**:

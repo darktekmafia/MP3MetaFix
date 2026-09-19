@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.1] - 2026-09-19
+
+### Added
+- **File System Access API & Save Picker**:
+  - Implemented the modern Web File System Access API (`window.showSaveFilePicker`), prompting users to choose the exact destination directory and filename upon saving.
+  - Added seamless fallback to browser downloads when File System Access API is not supported or declined.
+- **Named Download Route & Enhanced Content-Disposition**:
+  - Added `/api/download/{session_id}/{filename:path}` endpoint to guarantee target filenames are directly reflected in the URL path for all browsers.
+  - Formatted `Content-Disposition` with RFC 5987 UTF-8 encoding (`filename*=UTF-8''...`) along with sanitized ASCII fallback.
+  - Exposed `Content-Disposition` header in CORS/Access-Control settings.
+- **Test Coverage**:
+  - Added unit and integration tests for named path downloads and UTF-8 header validation.
+
+---
+
 ## [0.1.0] - 2026-09-19
 
 ### Added

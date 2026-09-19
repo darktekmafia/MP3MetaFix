@@ -38,6 +38,6 @@ def get_version() -> str:
     version_file = BASE_DIR / "VERSION"
     if version_file.exists():
         return version_file.read_text().strip()
-    return "0.1.0"
+    return "0.1.1"
 
 VERSION = get_version()

@@ -7,6 +7,8 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+import re
+import urllib.parse
 from fastapi import (
     FastAPI,
     UploadFile,
@@ -316,24 +318,37 @@ async def save_metadata(session_id: str, meta: MetadataModel):
 
 
 @app.get("/api/download/{session_id}")
-async def download_mp3(session_id: str, background_tasks: BackgroundTasks, cleanup_after: bool = False):
-    """Download the modified MP3 file with clean Content-Disposition headers."""
+@app.get("/api/download/{session_id}/{filename:path}")
+async def download_mp3(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    filename: Optional[str] = None,
+    cleanup_after: bool = False,
+):
+    """Download the modified MP3 file with clean Content-Disposition headers and URL path support."""
     audio_path = storage_manager.get_audio_path(session_id)
     session_info = storage_manager.get_session_info(session_id)
     if not audio_path or not session_info:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    download_name = session_info.get("target_filename") or session_info.get("original_filename", "track.mp3")
+    download_name = filename or session_info.get("target_filename") or session_info.get("original_filename", "track.mp3")
     clean_name = sanitize_filename(download_name)
+    encoded_name = urllib.parse.quote(clean_name, safe="")
+    ascii_name = re.sub(r'[^\x20-\x7e]', '_', clean_name).replace('"', '')
 
     if cleanup_after:
         background_tasks.add_task(storage_manager.cleanup_session, session_id)
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}',
+        "Access-Control-Expose-Headers": "Content-Disposition",
+    }
 
     return FileResponse(
         path=audio_path,
         media_type="audio/mpeg",
         filename=clean_name,
-        headers={"Content-Disposition": f'attachment; filename="{clean_name}"'},
+        headers=headers,
     )
 
 

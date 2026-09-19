@@ -507,7 +507,7 @@ document.addEventListener('DOMContentLoaded', () => {
         state.targetFilename = res.target_filename;
 
         if (downloadAfter) {
-          triggerDownload();
+          await triggerDownload(res.target_filename);
         }
       } else {
         showToast(res.detail || 'Failed to save metadata', 'error');
@@ -520,16 +520,47 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function triggerDownload() {
+  async function triggerDownload(filename) {
     if (!state.sessionId) return;
-    const downloadUrl = `/api/download/${state.sessionId}`;
+    const cleanFilename = filename || state.targetFilename || state.originalFilename || 'track.mp3';
+    const downloadUrl = `/api/download/${state.sessionId}/${encodeURIComponent(cleanFilename)}`;
+
+    // Try modern File System Access API (showSaveFilePicker) so browser prompts for exact save location
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: cleanFilename,
+          types: [{
+            description: 'MP3 Audio File',
+            accept: { 'audio/mpeg': ['.mp3'] }
+          }]
+        });
+        showToast('Writing MP3 file to selected folder...', 'info', 2000);
+        const res = await fetch(downloadUrl);
+        if (!res.ok) throw new Error(`Download failed with status ${res.status}`);
+        const blob = await res.blob();
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        showToast(`Saved successfully: ${cleanFilename}`, 'success', 4000);
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          showToast('Save cancelled by user', 'info', 2000);
+          return;
+        }
+        console.warn('File System Access API fallback:', err);
+      }
+    }
+
+    // Standard browser download fallback
     const a = document.createElement('a');
     a.href = downloadUrl;
-    a.download = state.targetFilename || 'track.mp3';
+    a.download = cleanFilename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    showToast('Download started!', 'success');
+    showToast(`Downloading "${cleanFilename}" to your browser Downloads folder`, 'success', 4000);
   }
 
   btnSave.addEventListener('click', (e) => {

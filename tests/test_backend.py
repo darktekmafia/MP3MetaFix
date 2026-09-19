@@ -179,11 +179,16 @@ def test_api_full_workflow(client, sample_mp3_bytes, sample_image_bytes):
     stream_res = client.get(f"/api/stream/{session_id}")
     assert stream_res.status_code in (200, 206)
 
-    # 5. Download modified MP3
+    # 5. Download modified MP3 (both plain session URL and named URL)
     download_res = client.get(f"/api/download/{session_id}")
     assert download_res.status_code == 200
     assert "attachment; filename=" in download_res.headers.get("content-disposition", "")
     assert len(download_res.content) > 0
+
+    download_named_res = client.get(f"/api/download/{session_id}/SynthMaster%20-%20Cosmic%20Drift.mp3")
+    assert download_named_res.status_code == 200
+    assert "SynthMaster - Cosmic Drift.mp3" in download_named_res.headers.get("content-disposition", "")
+    assert len(download_named_res.content) > 0
 
     # 6. Delete session
     del_res = client.delete(f"/api/session/{session_id}")

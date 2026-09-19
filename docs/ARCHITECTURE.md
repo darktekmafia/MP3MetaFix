@@ -74,11 +74,20 @@ MP3MetaFix maps high-level user fields to standard ID3v2.4 and ID3v2.3 tags:
 | Lyrics | `USLT` | UTF-8 | Unsynchronized song lyrics |
 | Cover Art | `APIC` | Binary | Embedded front cover image (`type=3`) |
 
----
-
 ## 4. Audio Streaming & Range Requests
 
 To allow instantaneous scrubbing and preview in web browsers, the `GET /api/stream/{session_id}` endpoint implements **HTTP 206 Partial Content**:
 - Parses `Range: bytes=start-end` request headers.
 - Streams audio chunks (64 KB) on-demand.
 - Supports seeking without downloading the full audio file ahead of time.
+
+---
+
+## 5. Download & File System Operations
+
+- **File System Access API**:
+  - In supported Chromium-based browsers, `window.showSaveFilePicker()` is utilized to prompt the user to choose an explicit save location on their local filesystem.
+- **Named Path Downloads**:
+  - `GET /api/download/{session_id}/{filename}` routes provide direct file path semantics for browsers and download managers.
+- **Content-Disposition Encoding**:
+  - Employs RFC 5987 parameter encoding (`filename*=UTF-8''...`) for full Unicode fidelity and an ASCII-sanitized `filename` fallback.

@@ -15,7 +15,7 @@ VERSION_FILE="${INSTALL_DIR}/VERSION"
 if [ -f "$VERSION_FILE" ]; then
     VERSION="$(cat "$VERSION_FILE" | tr -d '[:space:]')"
 else
-    VERSION="0.1.0"
+    VERSION="0.1.1"
 fi
 
 # Colors for output
