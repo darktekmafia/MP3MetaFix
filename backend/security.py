@@ -252,15 +252,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         
-        # Generous but secure CSP compatible with modern browsers and Google fonts
+        # Generous but secure CSP compatible with modern browsers, Cloudflare analytics, and Google fonts
         csp_directives = [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-inline'",
+            "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com data:",
-            "img-src 'self' data: blob:",
+            "img-src 'self' data: blob: https://*.githubusercontent.com",
             "media-src 'self' blob: data:",
-            "connect-src 'self'",
+            "connect-src 'self' https://cloudflareinsights.com https://api.github.com",
             "base-uri 'self'",
             "form-action 'self'",
         ]

@@ -733,11 +733,15 @@ document.addEventListener('DOMContentLoaded', () => {
   function openVersionModal() {
     loadSystemInfo();
     checkForUpdates(false, true);
-    versionModal.classList.remove('hidden');
+    if (versionModal) {
+      versionModal.classList.remove('hidden');
+    }
   }
 
   function closeVersionModal() {
-    versionModal.classList.add('hidden');
+    if (versionModal) {
+      versionModal.classList.add('hidden');
+    }
   }
 
   async function startInAppUpdate() {

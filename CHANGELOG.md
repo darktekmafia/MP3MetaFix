@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Automated Test Suite Expansion**:
   - Expanded test coverage to 20 automated tests in `tests/test_backend.py` covering rate limiting, CSRF rejection, magic byte filtering, path traversal protection, timestamped HMAC verification, storage quota LRU eviction, error masking, semver comparison, and SSE log streaming.
 
+### Fixed
+- **Cloudflare Proxy & Analytics CSP Compatibility**: Added `https://static.cloudflareinsights.com` and `https://cloudflareinsights.com` to `script-src` and `connect-src` Content Security Policy directives.
+- **Cross-Browser Button Theme Styling**: Added global CSS `button` reset to eliminate native browser `ButtonFace` background rendering on header settings and version badge buttons.
+- **Client Cache Invalidation**: Added asset version query parameters (`styles.css?v=0.2.0`, `app.js?v=0.2.0`) to guarantee browser cache refreshing during upgrades.
+
 ---
 
 ## [0.1.1] - 2026-09-19
