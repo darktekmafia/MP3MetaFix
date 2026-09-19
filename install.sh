@@ -252,33 +252,78 @@ EOF
 
 # Systemd Service Installation
 install_systemd_service() {
-    log_info "Configuring systemd Service (mp3metafix.service)..."
-
-    SERVICE_FILE="/etc/systemd/system/mp3metafix.service"
     SERVICE_TEMPLATE="${INSTALL_DIR}/deploy/mp3metafix.service"
-
     if [ ! -f "$SERVICE_TEMPLATE" ]; then
         log_error "Template ${SERVICE_TEMPLATE} not found."
         exit 1
     fi
 
-    # Create populated service file in temp
-    TEMP_SERVICE="/tmp/mp3metafix.service"
-    sed "s|%USER%|${SERVICE_USER}|g; s|%INSTALL_DIR%|${INSTALL_DIR}|g; s|8844|${TARGET_PORT}|g" "$SERVICE_TEMPLATE" > "$TEMP_SERVICE"
-
-    log_info "Installing systemd unit to ${SERVICE_FILE} (requires sudo)..."
-    if [ "$EUID" -eq 0 ]; then
-        cp "$TEMP_SERVICE" "$SERVICE_FILE"
-        rm -f "$TEMP_SERVICE"
-        systemctl daemon-reload
-        systemctl enable --now mp3metafix.service
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        REAL_USER="$SUDO_USER"
+        REAL_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
     else
-        sudo cp "$TEMP_SERVICE" "$SERVICE_FILE"
-        rm -f "$TEMP_SERVICE"
-        sudo systemctl daemon-reload
-        sudo systemctl enable --now mp3metafix.service
+        REAL_USER="$USER"
+        REAL_HOME="$HOME"
     fi
-    log_success "MP3MetaFix systemd service enabled and started."
+
+    # Determine whether to use systemd user service or system-wide service
+    # User service is preferred for desktop sessions and paths under /home/ or /run/media/
+    if [ "$ENV_TYPE" = "desktop" ] || [[ "$INSTALL_DIR" == /home/* ]] || [[ "$INSTALL_DIR" == /run/media/* ]]; then
+        log_info "Configuring systemd User Service (systemctl --user)..."
+        USER_SERVICE_DIR="${REAL_HOME}/.config/systemd/user"
+        mkdir -p "$USER_SERVICE_DIR"
+        USER_SERVICE_FILE="${USER_SERVICE_DIR}/mp3metafix.service"
+
+        cat > "$USER_SERVICE_FILE" << EOF
+[Unit]
+Description=MP3MetaFix Web Server & Audio Metadata Editor
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${INSTALL_DIR}
+Environment="PATH=${INSTALL_DIR}/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="MP3METAFIX_HOST=127.0.0.1"
+Environment="MP3METAFIX_PORT=${TARGET_PORT}"
+Environment="MP3METAFIX_DATA_DIR=${INSTALL_DIR}/data"
+Environment="MP3METAFIX_TRUST_PROXIES=true"
+ExecStart=${INSTALL_DIR}/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port ${TARGET_PORT} --workers 2
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+
+        if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+            chown -R "${REAL_USER}:" "$USER_SERVICE_DIR"
+            sudo -u "$REAL_USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$REAL_USER")/bus" systemctl --user daemon-reload 2>/dev/null || true
+            sudo -u "$REAL_USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$REAL_USER")/bus" systemctl --user enable --now mp3metafix.service 2>/dev/null || true
+        else
+            systemctl --user daemon-reload 2>/dev/null || true
+            systemctl --user enable --now mp3metafix.service 2>/dev/null || true
+        fi
+        loginctl enable-linger "$REAL_USER" 2>/dev/null || true
+        log_success "MP3MetaFix systemd user service enabled and started."
+    else
+        log_info "Configuring systemd System Service (/etc/systemd/system/mp3metafix.service)..."
+        SERVICE_FILE="/etc/systemd/system/mp3metafix.service"
+        TEMP_SERVICE="/tmp/mp3metafix.service"
+        sed "s|%USER%|${SERVICE_USER}|g; s|%INSTALL_DIR%|${INSTALL_DIR}|g; s|8844|${TARGET_PORT}|g" "$SERVICE_TEMPLATE" > "$TEMP_SERVICE"
+
+        if [ "$EUID" -eq 0 ]; then
+            cp "$TEMP_SERVICE" "$SERVICE_FILE"
+            rm -f "$TEMP_SERVICE"
+            systemctl daemon-reload
+            systemctl enable --now mp3metafix.service
+        else
+            sudo cp "$TEMP_SERVICE" "$SERVICE_FILE"
+            rm -f "$TEMP_SERVICE"
+            sudo systemctl daemon-reload
+            sudo systemctl enable --now mp3metafix.service
+        fi
+        log_success "MP3MetaFix systemd system service enabled and started."
+    fi
 }
 
 # Perform Installation
@@ -317,8 +362,8 @@ do_install() {
 
     echo ""
     log_success "MP3MetaFix installation complete!"
-    echo -e "  • ${BOLD}Systemd Service:${NC} sudo systemctl status mp3metafix.service"
     echo -e "  • ${BOLD}Web Access:${NC}      http://127.0.0.1:${TARGET_PORT}"
+    echo -e "  • ${BOLD}Service Status:${NC}  systemctl --user status mp3metafix.service (or sudo systemctl status mp3metafix.service)"
     if [ "$ENV_TYPE" = "desktop" ]; then
         echo -e "  • ${BOLD}App Launcher:${NC}    Available in your system Application Menu"
     fi
@@ -341,10 +386,14 @@ do_update() {
     setup_python_env
 
     # Restart service if running
-    if systemctl is-active --quiet mp3metafix.service 2>/dev/null; then
-        log_info "Restarting systemd service..."
+    if systemctl --user is-active --quiet mp3metafix.service 2>/dev/null; then
+        log_info "Restarting systemd user service..."
+        systemctl --user restart mp3metafix.service
+        log_success "User service restarted."
+    elif systemctl is-active --quiet mp3metafix.service 2>/dev/null; then
+        log_info "Restarting systemd system service..."
         sudo systemctl restart mp3metafix.service
-        log_success "Service restarted."
+        log_success "System service restarted."
     fi
 
     detect_environment
@@ -364,9 +413,11 @@ do_status() {
     detect_environment
     echo "Detected Mode:      ${ENV_TYPE^^}"
 
-    if systemctl is-active --quiet mp3metafix.service 2>/dev/null; then
-        echo -e "Systemd Service:    ${GREEN}ACTIVE (Running)${NC}"
-    elif systemctl is-enabled --quiet mp3metafix.service 2>/dev/null; then
+    if systemctl --user is-active --quiet mp3metafix.service 2>/dev/null; then
+        echo -e "Systemd Service:    ${GREEN}ACTIVE (User Service Running)${NC}"
+    elif systemctl is-active --quiet mp3metafix.service 2>/dev/null; then
+        echo -e "Systemd Service:    ${GREEN}ACTIVE (System Service Running)${NC}"
+    elif systemctl --user is-enabled --quiet mp3metafix.service 2>/dev/null || systemctl is-enabled --quiet mp3metafix.service 2>/dev/null; then
         echo -e "Systemd Service:    ${YELLOW}INACTIVE (Enabled)${NC}"
     else
         echo -e "Systemd Service:    ${RED}NOT INSTALLED / DISABLED${NC}"
@@ -384,14 +435,24 @@ do_uninstall() {
     print_banner
     log_warn "Uninstalling MP3MetaFix..."
 
-    # Stop and remove systemd service
+    # Stop and remove user systemd service
+    if [ -f "${HOME}/.config/systemd/user/mp3metafix.service" ]; then
+        log_info "Removing user systemd service..."
+        systemctl --user stop mp3metafix.service || true
+        systemctl --user disable mp3metafix.service || true
+        rm -f "${HOME}/.config/systemd/user/mp3metafix.service"
+        systemctl --user daemon-reload || true
+        log_success "User systemd service removed."
+    fi
+
+    # Stop and remove system systemd service
     if [ -f /etc/systemd/system/mp3metafix.service ]; then
-        log_info "Removing systemd service..."
+        log_info "Removing system-wide systemd service..."
         sudo systemctl stop mp3metafix.service || true
         sudo systemctl disable mp3metafix.service || true
         sudo rm -f /etc/systemd/system/mp3metafix.service
         sudo systemctl daemon-reload
-        log_success "Systemd service removed."
+        log_success "System-wide systemd service removed."
     fi
 
     # Remove Desktop Integration
