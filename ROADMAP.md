@@ -10,10 +10,9 @@ Items are grouped by focus area and can be prioritized into structured version m
 
 Because MP3MetaFix is tailored for processing AI-generated music downloads from platforms like [Suno.com](https://suno.com), specialized workflow enhancements can streamline tagging and organization:
 
-- [ ] **Synchronized Lyrics (.lrc) Exporter & Interactive Karaoke Mode**:
-  - **Interactive Karaoke Teleprompter**: Live scrolling lyrics display synchronized to audio playback for singer-songwriters and vocalists.
-  - **"Tap-to-Sync" Timing Editor**: Intuitive editor allowing users to tap <kbd>Space</kbd> or click to stamp precise timestamps onto each lyric line as the song plays.
-  - **Export & Tagging**: Export to standard time-stamped `.lrc` sidecar files or embed directly into the ID3 `SYLT` (Synchronized Lyrics) frame.
+- [ ] **Synchronized Lyrics (.lrc) & ID3 SYLT Frame Tagging**:
+  - **"Tap-to-Sync" Timestamp Stamping**: Simple timestamp editor allowing creators to tap <kbd>Space</kbd> or click to stamp precise timestamps onto lyric lines during audio preview.
+  - **Export & Embedding**: Export standard time-stamped `.lrc` sidecar companion files or embed directly into the ID3 `SYLT` (Synchronized Lyrics) binary frame.
 - [ ] **Generation Lineage & Prompt Graph Tracker**:
   - Track AI generation parentage (*v1 -> extend -> full song -> stems*).
   - Store seed numbers, style prompts, and variation lineage in custom `TXXX:SUNO_ID` or `COMM` frames.
@@ -153,6 +152,9 @@ Foundational abstractions designed to enable seamless forking into a broader sel
   - Lightweight WAL-mode database layer enabling persistent indexed search, tag filtering, key/BPM queries, deduplication hashing, and smart playlists across stored files.
 - [ ] **Asynchronous Task Worker Queue**:
   - Non-blocking job runner with real-time SSE progress streaming for heavy batch audio transcoding (e.g. WAV -> MP3 320kbps), multi-gigabyte ZIP packaging, and video remuxing.
+- [ ] **Interactive Karaoke Studio & Fullscreen Teleprompter**:
+  - Fullscreen scrolling lyrics teleprompter synchronized with stored library tracks for singer-songwriters, rehearsal, and playback.
+  - Integration with multi-track vocal and instrumental stems.
 - [ ] **Universal Sidecar & NFO/JSON Exporter**:
   - Automated generation of `.nfo`, `.json`, and `.xml` companion metadata files compatible with Plex, Jellyfin, Kodi, and media indexers.
 - [ ] **Deep Binary Header & Hex / Frame Inspector**:
