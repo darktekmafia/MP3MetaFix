@@ -95,9 +95,10 @@ Expand the underlying audio engine beyond MP3:
 
 ## ✂️ 6. Audio Analysis, Visualization & Editing Tools
 
-- [ ] **Interactive Audio Waveform Display**:
+- [x] **Interactive Audio Waveform Display & Peak Scrubber** [COMPLETED]:
   - Render a dynamic, multi-color audio waveform using the Web Audio API / Canvas.
-  - Visual peak inspection, energy markers (Intro, Verse, Chorus Drop, Outro), and direct click-to-seek navigation.
+  - High-DPI canvas peak calculation, dynamic gradient played/unplayed splitting, glowing playhead, and direct click-to-seek / drag-scrubbing navigation.
+  - Hover vertical guideline with floating glassmorphic time tooltip and `ResizeObserver` responsive re-rendering.
 - [ ] **Automatic BPM & Musical Key Detection**:
   - Auto-calculate musical tempo (BPM) and harmonic key (e.g. *8A / A minor*) using audio signal analysis.
   - Automatically write standard ID3 `TBPM` and `TKEY` frames for DJ and playlist curation.

@@ -18,8 +18,10 @@
   - Extract and inspect embedded APIC cover art.
   - Drag-and-drop cover art replacement (JPEG, PNG, WebP converted & normalized via Pillow).
   - Extract/download original cover art or remove it.
-- 🔊 **Built-in HTML5 Audio Preview**:
-  - Listen to uploaded MP3s directly in your browser before and after editing.
+- 🔊 **Built-in Audio Preview & Interactive Waveform Scrubber**:
+  - Native Web Audio API & Retina Canvas waveform rendering dynamic peak amplitudes.
+  - Multi-color gradient playback state (cyan/purple played, slate/indigo upcoming).
+  - Continuous drag scrubbing, click-to-seek, hover time guide, and keyboard shortcuts.
   - HTTP 206 Partial Content Range streaming support.
 - 💾 **Native Save & File System Access**:
   - Native browser save folder picker via the modern File System Access API (`showSaveFilePicker`).

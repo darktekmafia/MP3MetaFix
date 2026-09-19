@@ -43,16 +43,23 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnDownloadArt = document.getElementById('btnDownloadArt');
   const btnRemoveArt = document.getElementById('btnRemoveArt');
 
-  // Audio Player
+  // Audio Player & Waveform Visualizer
   const audioElement = document.getElementById('audioElement');
   const btnPlayPause = document.getElementById('btnPlayPause');
   const playIcon = document.getElementById('playIcon');
   const pauseIcon = document.getElementById('pauseIcon');
-  const playerSeek = document.getElementById('playerSeek');
+  const waveformContainer = document.getElementById('waveformContainer');
+  const waveformCanvas = document.getElementById('waveformCanvas');
+  const waveformPlayhead = document.getElementById('waveformPlayhead');
+  const waveformHoverLine = document.getElementById('waveformHoverLine');
+  const waveformTooltip = document.getElementById('waveformTooltip');
+  const waveformLoader = document.getElementById('waveformLoader');
+  const waveformStatusBadge = document.getElementById('waveformStatusBadge');
   const playerCurrentTime = document.getElementById('playerCurrentTime');
   const playerTotalTime = document.getElementById('playerTotalTime');
   const playerVolume = document.getElementById('playerVolume');
   const btnMute = document.getElementById('btnMute');
+  let waveformVisualizer = null;
 
   // Form & Tabs
   const metaForm = document.getElementById('metadataForm');
@@ -155,10 +162,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  function handleFileUpload(file) {
+  let pendingArrayBuffer = null;
+
+  async function handleFileUpload(file) {
     if (!file.name.toLowerCase().endsWith('.mp3')) {
       showToast('Please select a valid .mp3 audio file', 'error');
       return;
+    }
+
+    try {
+      pendingArrayBuffer = await file.arrayBuffer();
+    } catch (_) {
+      pendingArrayBuffer = null;
     }
 
     const formData = new FormData();
@@ -260,10 +275,26 @@ document.addEventListener('DOMContentLoaded', () => {
     // Audio Player setup (clean endpoint using cookie session)
     audioElement.src = '/api/stream';
     audioElement.load();
-    playerSeek.value = 0;
     playerCurrentTime.textContent = '00:00';
     playerTotalTime.textContent = duration;
     pauseAudio();
+
+    // Waveform Visualizer setup
+    if (waveformVisualizer) {
+      waveformVisualizer.reset();
+      if (pendingArrayBuffer) {
+        waveformVisualizer.loadFromBuffer(pendingArrayBuffer);
+        pendingArrayBuffer = null;
+      } else {
+        fetch('/api/stream')
+          .then(res => {
+            if (!res.ok) throw new Error('Stream fetch failed');
+            return res.arrayBuffer();
+          })
+          .then(buf => waveformVisualizer.loadFromBuffer(buf))
+          .catch(err => console.warn('Stream buffer fetch error for waveform:', err));
+      }
+    }
 
     // Filename pattern setup
     updateFilenamePreview();
@@ -369,7 +400,406 @@ document.addEventListener('DOMContentLoaded', () => {
       .then(() => showToast('Cover art marked for removal', 'info'));
   });
 
-  // --- Audio Player Controls ---
+  // --- Audio Player & Waveform Visualizer ---
+  class WaveformVisualizer {
+    constructor(options) {
+      this.container = options.container;
+      this.canvas = options.canvas;
+      this.playhead = options.playhead;
+      this.hoverLine = options.hoverLine;
+      this.tooltip = options.tooltip;
+      this.loader = options.loader;
+      this.statusBadge = options.statusBadge;
+      this.audio = options.audio;
+      this.currentTimeEl = options.currentTimeEl;
+      this.totalTimeEl = options.totalTimeEl;
+
+      this.ctx = this.canvas.getContext('2d');
+      this.peaks = null;
+      this.audioBuffer = null;
+      this.audioCtx = null;
+      this.isDragging = false;
+      this.duration = 0;
+      this.currentProgress = 0;
+      this.animFrameId = null;
+
+      this.initEvents();
+      this.setupResizeObserver();
+    }
+
+    initEvents() {
+      // Hover guide and tooltip
+      this.container.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+      this.container.addEventListener('mouseleave', () => this.handleMouseLeave());
+
+      // Drag / Seek interactions with Pointer capture
+      this.container.addEventListener('pointerdown', (e) => {
+        if (!this.audio.src) return;
+        this.isDragging = true;
+        try {
+          this.container.setPointerCapture(e.pointerId);
+        } catch (_) {}
+        this.seekFromPointer(e);
+      });
+
+      this.container.addEventListener('pointermove', (e) => {
+        if (this.isDragging) {
+          this.seekFromPointer(e);
+        }
+      });
+
+      const stopDragging = (e) => {
+        if (this.isDragging) {
+          this.isDragging = false;
+          try {
+            this.container.releasePointerCapture(e.pointerId);
+          } catch (_) {}
+        }
+      };
+
+      this.container.addEventListener('pointerup', stopDragging);
+      this.container.addEventListener('pointercancel', stopDragging);
+
+      // Keyboard accessibility
+      this.container.addEventListener('keydown', (e) => {
+        if (!this.audio.src || !this.duration) return;
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          this.audio.currentTime = Math.max(0, this.audio.currentTime - 5);
+          this.updateProgress();
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          this.audio.currentTime = Math.min(this.duration, this.audio.currentTime + 5);
+          this.updateProgress();
+        } else if (e.key === 'Home') {
+          e.preventDefault();
+          this.audio.currentTime = 0;
+          this.updateProgress();
+        } else if (e.key === 'End') {
+          e.preventDefault();
+          this.audio.currentTime = this.duration;
+          this.updateProgress();
+        } else if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          togglePlayPause();
+        }
+      });
+
+      // Audio element bindings
+      this.audio.addEventListener('timeupdate', () => {
+        if (!this.isDragging) {
+          this.updateProgress();
+        }
+      });
+
+      this.audio.addEventListener('play', () => {
+        this.startProgressLoop();
+      });
+
+      this.audio.addEventListener('pause', () => {
+        this.stopProgressLoop();
+        this.updateProgress();
+      });
+
+      this.audio.addEventListener('ended', () => {
+        this.stopProgressLoop();
+        pauseAudio();
+        this.currentProgress = 0;
+        if (this.playhead) this.playhead.style.left = '0%';
+        if (this.currentTimeEl) this.currentTimeEl.textContent = '00:00';
+        this.render();
+      });
+    }
+
+    setupResizeObserver() {
+      if (window.ResizeObserver) {
+        const ro = new ResizeObserver(() => {
+          this.resizeAndRender();
+        });
+        ro.observe(this.container);
+      } else {
+        window.addEventListener('resize', () => this.resizeAndRender());
+      }
+    }
+
+    startProgressLoop() {
+      const loop = () => {
+        if (!this.audio.paused && !this.isDragging) {
+          this.updateProgress();
+          this.animFrameId = requestAnimationFrame(loop);
+        }
+      };
+      cancelAnimationFrame(this.animFrameId);
+      this.animFrameId = requestAnimationFrame(loop);
+    }
+
+    stopProgressLoop() {
+      if (this.animFrameId) {
+        cancelAnimationFrame(this.animFrameId);
+        this.animFrameId = null;
+      }
+    }
+
+    handleMouseMove(e) {
+      if (!this.duration && (!this.audio.duration || isNaN(this.audio.duration))) return;
+      const dur = this.duration || this.audio.duration;
+      const rect = this.container.getBoundingClientRect();
+      const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+      const pct = rect.width > 0 ? x / rect.width : 0;
+      const hoverTime = pct * dur;
+
+      this.hoverLine.style.opacity = '1';
+      this.hoverLine.style.left = `${x}px`;
+
+      this.tooltip.style.opacity = '1';
+      this.tooltip.textContent = formatTime(hoverTime);
+
+      const tooltipWidth = this.tooltip.offsetWidth || 42;
+      const halfWidth = tooltipWidth / 2;
+      const clampedX = Math.max(halfWidth + 4, Math.min(rect.width - halfWidth - 4, x));
+      this.tooltip.style.left = `${clampedX}px`;
+    }
+
+    handleMouseLeave() {
+      if (!this.isDragging) {
+        this.hoverLine.style.opacity = '0';
+        this.tooltip.style.opacity = '0';
+      }
+    }
+
+    seekFromPointer(e) {
+      const dur = this.duration || this.audio.duration;
+      if (!dur || isNaN(dur) || dur <= 0) return;
+      const rect = this.container.getBoundingClientRect();
+      const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+      const pct = rect.width > 0 ? x / rect.width : 0;
+
+      this.currentProgress = pct;
+      this.audio.currentTime = pct * dur;
+      this.updateProgress();
+
+      this.hoverLine.style.opacity = '1';
+      this.hoverLine.style.left = `${x}px`;
+      this.tooltip.style.opacity = '1';
+      this.tooltip.textContent = formatTime(this.audio.currentTime);
+      const tooltipWidth = this.tooltip.offsetWidth || 42;
+      const halfWidth = tooltipWidth / 2;
+      const clampedX = Math.max(halfWidth + 4, Math.min(rect.width - halfWidth - 4, x));
+      this.tooltip.style.left = `${clampedX}px`;
+    }
+
+    updateProgress() {
+      const dur = this.duration || this.audio.duration;
+      if (isNaN(dur) || dur <= 0) return;
+      this.duration = dur;
+      this.currentProgress = Math.max(0, Math.min(1, this.audio.currentTime / dur));
+
+      const pct = this.currentProgress * 100;
+      if (this.playhead) {
+        this.playhead.style.left = `${pct}%`;
+      }
+      this.container.setAttribute('aria-valuenow', Math.round(pct));
+
+      if (this.currentTimeEl) {
+        this.currentTimeEl.textContent = formatTime(this.audio.currentTime);
+      }
+      if (this.totalTimeEl && (!this.totalTimeEl.textContent || this.totalTimeEl.textContent === '00:00')) {
+        this.totalTimeEl.textContent = formatTime(dur);
+      }
+
+      this.render();
+    }
+
+    async loadFromBuffer(arrayBuffer) {
+      try {
+        this.showLoader(true);
+        if (this.statusBadge) {
+          this.statusBadge.textContent = 'Rendering...';
+        }
+
+        const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+        if (!this.audioCtx) {
+          this.audioCtx = new AudioCtxClass();
+        }
+
+        const bufferCopy = arrayBuffer.slice(0);
+        this.audioBuffer = await this.audioCtx.decodeAudioData(bufferCopy);
+        this.duration = this.audioBuffer.duration;
+
+        this.extractPeaks();
+        this.resizeAndRender();
+        this.showLoader(false);
+
+        if (this.statusBadge) {
+          this.statusBadge.textContent = 'Ready';
+        }
+      } catch (err) {
+        console.warn('Waveform audio decoding error:', err);
+        this.generateFallbackPeaks();
+        this.resizeAndRender();
+        this.showLoader(false);
+        if (this.statusBadge) {
+          this.statusBadge.textContent = 'Loaded';
+        }
+      }
+    }
+
+    showLoader(show) {
+      if (!this.loader) return;
+      if (show) {
+        this.loader.classList.add('loading');
+      } else {
+        this.loader.classList.remove('loading');
+      }
+    }
+
+    extractPeaks() {
+      if (!this.audioBuffer) return;
+      const channelL = this.audioBuffer.getChannelData(0);
+      const hasStereo = this.audioBuffer.numberOfChannels > 1;
+      const channelR = hasStereo ? this.audioBuffer.getChannelData(1) : null;
+      const totalSamples = channelL.length;
+
+      const barCount = 400;
+      const blockSize = Math.floor(totalSamples / barCount);
+      this.peaks = new Float32Array(barCount);
+
+      for (let i = 0; i < barCount; i++) {
+        const start = i * blockSize;
+        const end = Math.min(start + blockSize, totalSamples);
+        let sum = 0;
+        let peak = 0;
+        const step = Math.max(1, Math.floor((end - start) / 50));
+
+        let count = 0;
+        for (let j = start; j < end; j += step) {
+          const valL = Math.abs(channelL[j]);
+          const val = hasStereo ? (valL + Math.abs(channelR[j])) * 0.5 : valL;
+          sum += val * val;
+          if (val > peak) peak = val;
+          count++;
+        }
+
+        const rms = count > 0 ? Math.sqrt(sum / count) : 0;
+        const combined = (peak * 0.6) + (rms * 1.4);
+        this.peaks[i] = Math.max(0.06, Math.min(1.0, Math.pow(combined, 0.75)));
+      }
+    }
+
+    generateFallbackPeaks() {
+      const barCount = 200;
+      this.peaks = new Float32Array(barCount);
+      for (let i = 0; i < barCount; i++) {
+        this.peaks[i] = 0.15 + 0.7 * Math.abs(Math.sin(i * 0.08) * Math.cos(i * 0.03));
+      }
+    }
+
+    resizeAndRender() {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = this.container.getBoundingClientRect();
+      const cssWidth = Math.floor(rect.width) || 300;
+      const cssHeight = Math.floor(rect.height) || 64;
+
+      this.canvas.width = cssWidth * dpr;
+      this.canvas.height = cssHeight * dpr;
+      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      this.render();
+    }
+
+    render() {
+      if (!this.peaks || !this.peaks.length) return;
+      const rect = this.container.getBoundingClientRect();
+      const width = rect.width || 300;
+      const height = rect.height || 64;
+
+      this.ctx.clearRect(0, 0, width, height);
+
+      const barWidth = 3;
+      const barGap = 2;
+      const step = barWidth + barGap;
+      const numBars = Math.floor(width / step);
+      if (numBars <= 0) return;
+
+      const progressX = this.currentProgress * width;
+
+      const playedGrad = this.ctx.createLinearGradient(0, 0, 0, height);
+      playedGrad.addColorStop(0, '#38bdf8');
+      playedGrad.addColorStop(1, '#a855f7');
+
+      const unplayedGrad = this.ctx.createLinearGradient(0, 0, 0, height);
+      unplayedGrad.addColorStop(0, 'rgba(148, 163, 184, 0.45)');
+      unplayedGrad.addColorStop(1, 'rgba(71, 85, 105, 0.35)');
+
+      const maxBarHeight = height - 10;
+      const centerY = height / 2;
+
+      for (let i = 0; i < numBars; i++) {
+        const peakIdx = Math.floor((i / numBars) * this.peaks.length);
+        const val = this.peaks[peakIdx] || 0.06;
+        const barH = Math.max(3, val * maxBarHeight);
+        const x = i * step + 1;
+        const y = centerY - barH / 2;
+        const radius = 1.5;
+
+        const isPlayed = (x + barWidth) <= progressX;
+        const isPartiallyPlayed = x < progressX && (x + barWidth) > progressX;
+
+        if (isPartiallyPlayed) {
+          this.drawRoundedRect(x, y, barWidth, barH, radius, unplayedGrad);
+          this.ctx.save();
+          this.ctx.beginPath();
+          this.ctx.rect(0, 0, progressX, height);
+          this.ctx.clip();
+          this.drawRoundedRect(x, y, barWidth, barH, radius, playedGrad);
+          this.ctx.restore();
+        } else if (isPlayed) {
+          this.drawRoundedRect(x, y, barWidth, barH, radius, playedGrad);
+        } else {
+          this.drawRoundedRect(x, y, barWidth, barH, radius, unplayedGrad);
+        }
+      }
+    }
+
+    drawRoundedRect(x, y, w, h, r, fillStyle) {
+      this.ctx.fillStyle = fillStyle;
+      this.ctx.beginPath();
+      if (this.ctx.roundRect) {
+        this.ctx.roundRect(x, y, w, h, r);
+      } else {
+        this.ctx.rect(x, y, w, h);
+      }
+      this.ctx.fill();
+    }
+
+    reset() {
+      this.stopProgressLoop();
+      this.peaks = null;
+      this.audioBuffer = null;
+      this.currentProgress = 0;
+      this.duration = 0;
+      if (this.playhead) this.playhead.style.left = '0%';
+      if (this.hoverLine) this.hoverLine.style.opacity = '0';
+      if (this.tooltip) this.tooltip.style.opacity = '0';
+      if (this.statusBadge) this.statusBadge.textContent = 'Ready';
+      this.showLoader(false);
+      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+  }
+
+  waveformVisualizer = new WaveformVisualizer({
+    container: waveformContainer,
+    canvas: waveformCanvas,
+    playhead: waveformPlayhead,
+    hoverLine: waveformHoverLine,
+    tooltip: waveformTooltip,
+    loader: waveformLoader,
+    statusBadge: waveformStatusBadge,
+    audio: audioElement,
+    currentTimeEl: playerCurrentTime,
+    totalTimeEl: playerTotalTime
+  });
+
   btnPlayPause.addEventListener('click', togglePlayPause);
 
   function togglePlayPause() {
@@ -391,27 +821,6 @@ document.addEventListener('DOMContentLoaded', () => {
     playIcon.classList.remove('hidden');
     pauseIcon.classList.add('hidden');
   }
-
-  audioElement.addEventListener('timeupdate', () => {
-    if (!isNaN(audioElement.duration) && audioElement.duration > 0) {
-      const pct = (audioElement.currentTime / audioElement.duration) * 100;
-      playerSeek.value = pct;
-      playerCurrentTime.textContent = formatTime(audioElement.currentTime);
-      playerTotalTime.textContent = formatTime(audioElement.duration);
-    }
-  });
-
-  audioElement.addEventListener('ended', () => {
-    pauseAudio();
-    playerSeek.value = 0;
-  });
-
-  playerSeek.addEventListener('input', (e) => {
-    if (!isNaN(audioElement.duration)) {
-      const targetTime = (e.target.value / 100) * audioElement.duration;
-      audioElement.currentTime = targetTime;
-    }
-  });
 
   playerVolume.addEventListener('input', (e) => {
     audioElement.volume = parseFloat(e.target.value);
@@ -616,6 +1025,9 @@ document.addEventListener('DOMContentLoaded', () => {
         fetch('/api/session', { method: 'DELETE' }).catch(() => {});
       }
       pauseAudio();
+      if (waveformVisualizer) {
+        waveformVisualizer.reset();
+      }
       audioElement.src = '';
       state.hasSession = false;
       editorSection.classList.add('hidden');

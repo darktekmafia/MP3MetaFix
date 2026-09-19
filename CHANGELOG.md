@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **CORS Credential Isolation**: Replaced wildcard CORS headers with regex-validated origin matching (`localhost`, `127.0.0.1`, and explicit origins).
   - **Localhost Default Host Binding & Dynamic TLS Secure Cookies**: Defaulted network binding to `127.0.0.1` and dynamically set `Secure` cookie attributes when accessed over HTTPS.
   - **Systemd Resource Limits**: Added `MemoryMax=512M`, `TasksMax=64`, and `CPUQuota=80%` sandboxing in `mp3metafix.service`.
+- **Interactive Audio Waveform Visualizer & Peak Scrubber**:
+  - **Native Web Audio API & HTML5 Canvas Rendering**: Decodes audio streams on-the-fly and computes 400 normalized RMS/peak amplitude points rendered on a Retina-sharp canvas (`window.devicePixelRatio`).
+  - **Dynamic Multi-Color Gradient State**: Highlights played audio with a vibrant cyan-to-purple gradient (`#38bdf8` -> `#a855f7`) while preserving sleek slate/indigo bars for upcoming audio.
+  - **Interactive Scrubbing & Hover Time Tooltip**: Click-to-seek, click-and-drag continuous scrubbing with pointer capture, hover vertical guide line, and glassmorphic floating timestamp tooltip.
+  - **Fluid 60fps Playhead Tracking & Accessibility**: Real-time `requestAnimationFrame` loop synchronization, automatic container resize recalculation via `ResizeObserver`, and keyboard seeking controls (`ArrowLeft`, `ArrowRight`, `Home`, `End`, `Space`).
 - **In-App Web Updater & Version Inspector**:
   - **Automated Update Checker**: Background check on page load and manual "Check for Updates" querying GitHub Releases/Tags API with 10-minute in-memory caching.
   - **Version Details Modal**: Detailed inspection card displaying active version, Git commit hash, active branch, runtime mode (Desktop vs Systemd service), and repository link.
