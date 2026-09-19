@@ -1195,6 +1195,65 @@ echo "EXECUTING_MODERN_V034_MIGRATION_FLOW"
     assert "EXECUTING_MODERN_V034_MIGRATION_FLOW" in res2.stdout
 
 
+def test_v031_to_v034_update_transition_requires_second_invocation(tmp_path: Path):
+    """Verify that an installation starting from v0.3.1 (no migration in install.sh) updates disk on run 1, then migrates on run 2."""
+    import subprocess
+
+    origin_dir = tmp_path / "origin"
+    origin_dir.mkdir()
+    repo_dir = tmp_path / "local"
+
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(origin_dir)], check=True, capture_output=True)
+
+    # v0.3.1 installer
+    init_dir = tmp_path / "init"
+    init_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main", str(init_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(init_dir), "config", "user.name", "TestUser"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "config", "user.email", "test@example.com"], check=True)
+
+    v031_script = """#!/usr/bin/env bash
+set -e
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+do_update() {
+    git -C "$INSTALL_DIR" pull origin main >/dev/null 2>&1 || true
+    echo "V031_UPDATE_COMPLETED"
+}
+if [ "$1" = "--update" ]; then do_update; fi
+"""
+    (init_dir / "install.sh").write_text(v031_script, encoding="utf-8")
+    subprocess.run(["git", "-C", str(init_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "commit", "-m", "v0.3.1"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "remote", "add", "origin", str(origin_dir)], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "push", "origin", "main"], check=True)
+
+    # Clone local repo representing a v0.3.1 install
+    subprocess.run(["git", "clone", str(origin_dir), str(repo_dir)], check=True, capture_output=True)
+
+    # Add v0.3.4 to origin
+    v034_script = """#!/usr/bin/env bash
+set -e
+ORIG_ARGS=("$@")
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo "V034_MIGRATION_EXECUTED"
+"""
+    (init_dir / "install.sh").write_text(v034_script, encoding="utf-8")
+    subprocess.run(["git", "-C", str(init_dir), "commit", "-am", "v0.3.4"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "push", "origin", "main"], check=True)
+
+    # First update: completes v0.3.1 flow (fetches files to disk)
+    res1 = subprocess.run(["bash", str(repo_dir / "install.sh"), "--update"], capture_output=True, text=True)
+    assert res1.returncode == 0
+    assert "V031_UPDATE_COMPLETED" in res1.stdout
+    assert "V034_MIGRATION_EXECUTED" not in res1.stdout
+
+    # Second update: loads v0.3.4 from disk and executes migration
+    res2 = subprocess.run(["bash", str(repo_dir / "install.sh"), "--update"], capture_output=True, text=True)
+    assert res2.returncode == 0
+    assert "V034_MIGRATION_EXECUTED" in res2.stdout
+
+
+
 
 
 
