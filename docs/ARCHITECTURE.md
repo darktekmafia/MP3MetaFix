@@ -27,33 +27,49 @@ Because MP3MetaFix accepts arbitrary user uploads and is intended to run exposed
 [ ProxyHeadersMiddleware ] (Handles X-Forwarded-For, X-Forwarded-Proto safely)
         │
         ▼
-[ HMAC-SHA256 Cookie Authenticator ] (Validates HttpOnly signed session token)
+[ CSRFProtectionMiddleware ] (Blocks cross-site mutating requests & unauthorized origins)
         │
         ▼
-[ Upload Validator ]
+[ InMemoryRateLimiter ] (Sliding-window IP rate limiting with trusted-proxy anti-spoofing)
+        │
+        ▼
+[ Timestamped HMAC Cookie Authenticator ] (Validates HttpOnly {uuid}.{timestamp}.{signature})
+        │
+        ▼
+[ Upload & Metadata Validator ]
   ├── 1. Chunk-level Magic Bytes Verification (ID3 / MPEG Frame Sync 0xFF 0xFB/FA/F3/F2)
   ├── 2. Upload Size Quota Enforcement (default: 150MB limit streamed)
-  ├── 3. Strict Pillow image verification for artwork (JPEG / PNG / WebP)
-  └── 4. Client Filename Sanitization (Replaces path traversals, control characters)
+  ├── 3. Decompression Bomb Defense (Pillow MAX_IMAGE_PIXELS = 10 MP, 4096x4096px limit)
+  ├── 4. Pydantic Payload Length Constraints (Bounded title, artist, lyrics, comments)
+  └── 5. Client Filename Sanitization (Replaces path traversals, control characters)
         │
         ▼
-[ Decoupled Hashed Storage ] (/data/temp/{SHA256(secret:uuid4)[:32]}/)
+[ Decoupled Hashed Storage (POSIX 0700) ] (/data/temp/{SHA256(secret:uuid4)[:32]}/)
         │
         ▼
-[ Background TTL Purge ] (Periodic async worker purges sessions > 60 minutes)
+[ Quota Guard & Background TTL Purge ]
+  ├── Global Storage Quota Guard (Auto-LRU pruning when disk storage reaches max quota)
+  └── Periodic TTL Worker (Purges expired sessions > 60 minutes)
 ```
 
 ### Key Security Controls:
 1. **Zero Raw Identifier Exposure**:
    - Internal session UUIDs and filesystem folder paths are never exposed in browser URLs, JavaScript state, or responses.
-   - Authentication is maintained via an `HttpOnly`, `SameSite=Lax` cookie containing an HMAC-SHA256 signed token (`session_id.signature`).
-2. **Decoupled Hashed Filesystem Storage**:
-   - Physical storage directories on the host filesystem are named using a one-way deterministic cryptographic hash: `SHA-256(server_secret:session_id)[:32]`. Even if an attacker observes a network token, they cannot infer host directory structures.
+   - Authentication is maintained via an `HttpOnly`, `SameSite=Lax` cookie containing an HMAC-SHA256 signed token with embedded issuance timestamp (`session_id.timestamp.signature`).
+2. **Decoupled Hashed Filesystem Storage & 0700 Permissions**:
+   - Physical storage directories on the host filesystem are named using a one-way deterministic cryptographic hash: `SHA-256(server_secret:session_id)[:32]`.
+   - All session directories are created with `0700` (`rwx------`) permissions, isolating temp storage across multi-tenant Linux hosts.
 3. **Magic Bytes Header Verification**:
    - Files are inspected at the byte level before full persistence. Disguised executable files (e.g. `.exe`, `.elf`, `.php`, `.sh` renamed to `.mp3`) are rejected immediately with `HTTP 400 Bad Request`.
-4. **Automated Lifecycle / Temp Pruning**:
+4. **Automated Lifecycle & Storage Quota LRU**:
+   - Dynamic LRU session pruning triggers if total temporary storage exceeds `MAX_GLOBAL_TEMP_STORAGE_MB` (default 2GB).
    - A background asyncio task executes periodically (every 5 minutes) to prune sessions whose `last_accessed_at` timestamp exceeds the configurable TTL (`MP3METAFIX_SESSION_TTL_MINUTES`, default 60 minutes).
-5. **Header Protection**:
+5. **CSRF & Origin Isolation**:
+   - `CSRFProtectionMiddleware` rejects mutating state requests (`POST`, `PUT`, `DELETE`, `PATCH`) with foreign `Sec-Fetch-Site` or non-whitelisted `Origin` headers.
+   - CORS is restricted to exact regex matchers (`localhost`, `127.0.0.1`, and explicit origins).
+6. **Exception Masking**:
+   - Internal Python exceptions and file paths are masked from HTTP responses to prevent server path leakage, while full diagnostics are recorded to internal server logs.
+7. **Header Protection**:
    - `Content-Security-Policy`: Disallows untrusted script execution.
    - `X-Content-Type-Options: nosniff`: Prevents MIME confusion attacks.
    - `X-Frame-Options: SAMEORIGIN`: Protects against clickjacking.

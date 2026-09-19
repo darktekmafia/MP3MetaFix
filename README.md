@@ -1,6 +1,6 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 
@@ -26,11 +26,16 @@
   - Seamless fallback to direct named downloads with RFC 5987 UTF-8 Content-Disposition headers.
 - ⚡ **Dynamic Filename Formatter**:
   - Automatically rename downloaded MP3s using patterns like `%artist% - %title%.mp3` or `%track% - %title%.mp3`.
-- 🛡️ **Hardened Security by Design**:
-  - Magic bytes header validation (rejects masquerading binaries and malformed payloads).
-  - Isolated UUID4 temporary sessions (zero risk of path traversal `../`).
-  - Automated background TTL cleanup of temp files.
-  - Strict Content Security Policy (CSP), HSTS, `X-Content-Type-Options: nosniff`, and trusted reverse proxy support.
+- 🛡️ **14-Point Security Hardening & Threat Defense**:
+  - **Cryptographic Session Cookies**: Timestamped HMAC-SHA256 signed `HttpOnly`, `SameSite=Lax` session cookies.
+  - **Decoupled Hashed Storage**: Session directories isolated via one-way SHA-256 hashes (`SHA-256(secret:uuid)[:32]`).
+  - **POSIX 0700 Isolation**: Multi-user permissions hardening on temporary storage.
+  - **Global Storage Quota**: Automatic LRU session eviction when storage reaches disk limits.
+  - **DDoS & Flood Protection**: Sliding-window rate limiter with proxy IP anti-spoofing.
+  - **CSRF & XSS Defense**: Strict `Sec-Fetch-Site` validation and dynamic DOM node sanitization.
+  - **Image Decompression Bomb Defense**: Pillow pixel limit bounds (10 MP max).
+  - **Exception Masking**: Clean client error responses preventing filesystem disclosures.
+  - **Process Sandboxing**: Systemd cgroup constraints (`MemoryMax=512M`, `TasksMax=64`, `CPUQuota=80%`).
 - 🐧 **Smart Universal Linux Installer (`install.sh`)**:
   - Automatically detects your distro (`dnf`, `apt`, `pacman`).
   - Installs and enables a hardened **systemd background service** (`mp3metafix.service`) to start automatically on system boot.
@@ -128,22 +133,25 @@ Detailed deployment instructions are documented in [docs/DEPLOYMENT.md](docs/DEP
 graph TD
     Client([Browser / Desktop Launcher]) <-->|HTTPS| RP[Reverse Proxy Nginx / Caddy]
     RP <-->|HTTP Stream| Backend[FastAPI Backend]
-    subgraph Security Perimeter
+    subgraph Security Defense Stack
+        CSRF[CSRF & Origin Inspector]
+        RateLimit[Anti-Spoofing Rate Limiter]
         Val[Magic Byte & MIME Validator]
-        San[Filename Sanitizer]
-        UUID[UUID Temp Session Manager]
-        TTL[Background TTL Cleanup Worker]
+        San[Filename & Metadata Sanitizer]
+        HMAC[Timestamped HMAC Authenticator]
+        Quota[Storage Quota & LRU Eviction]
+        TTL[Background TTL Worker]
     end
     subgraph Audio Engine
         Mutagen[Mutagen ID3v2.4 Engine]
-        Pillow[Pillow APIC Image Processor]
+        Pillow[Pillow APIC Decompression Defense]
     end
-    Backend --> Security Perimeter
+    Backend --> Security Defense Stack
     Backend --> Audio Engine
-    Security Perimeter --> Storage[(Temporary Session Storage)]
+    Security Defense Stack --> Storage[(Decoupled Hashed Storage 0700)]
 ```
 
-For in-depth technical documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+For in-depth technical documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md).
 
 ---
 

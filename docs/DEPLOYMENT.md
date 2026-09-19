@@ -128,3 +128,23 @@ cd /opt/mp3metafix
 sudo ./install.sh --update
 ```
 This automatically fetches the newest release, updates dependencies, and restarts the systemd service.
+
+---
+
+## 5. Environment Variables & Security Configuration
+
+The server behavior and security thresholds can be customized via environment variables in systemd units or `.env` files:
+
+| Variable | Default | Description |
+|---|---|---|
+| `MP3METAFIX_HOST` | `127.0.0.1` | Bind interface (keep `127.0.0.1` when using a reverse proxy) |
+| `MP3METAFIX_PORT` | `8844` | Server listening port |
+| `MP3METAFIX_SESSION_TTL_MINUTES` | `60` | Inactivity TTL for uploaded sessions |
+| `MP3METAFIX_MAX_UPLOAD_SIZE_MB` | `150` | Maximum single MP3 upload size (MB) |
+| `MP3METAFIX_MAX_ARTWORK_SIZE_MB` | `10` | Maximum artwork upload size (MB) |
+| `MP3METAFIX_MAX_GLOBAL_STORAGE_MB` | `2048` | Disk quota cap before automatic LRU session pruning |
+| `MP3METAFIX_RATE_LIMIT_UPLOADS` | `25` | Max upload bursts per client IP per minute |
+| `MP3METAFIX_TRUST_PROXIES` | `true` | Enables proxy header validation from private/loopback CIDRs |
+| `MP3METAFIX_SECRET_KEY` | *(auto-generated)* | Cryptographic HMAC secret key (persisted to `data/.secret_key`) |
+
+For comprehensive vulnerability analysis, attack surfaces, and defense mechanisms, consult [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md).

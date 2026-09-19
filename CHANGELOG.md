@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.0] - 2026-09-19
+
+### Added
+- **Comprehensive 14-Point Security Hardening & Threat Defense Engine**:
+  - **Timestamped Cryptographic HMAC Session Tokens**: Tokens now cryptographically encode session UUID, issuance UNIX timestamp, and HMAC-SHA256 signature (`{uuid}.{timestamp}.{signature}`) with strict time-to-live enforcement to prevent replay attacks.
+  - **Zero-Knowledge Decoupled Storage**: Session storage directories on disk are isolated and named with one-way deterministic SHA-256 hashes (`SHA-256(secret:uuid)[:32]`).
+  - **POSIX 0700 Multi-Tenant VPS File Isolation**: All temporary storage and session directories are created with strict `0700` (`rwx------`) permissions to prevent unauthorized access by unprivileged users in shared environments.
+  - **DOM XSS Sanitization**: Replaced `innerHTML` insertions with safe DOM node construction and `textContent` across all UI elements, dynamic toasts, and metadata badges.
+  - **Pillow Decompression Bomb Defense**: Protected server memory against pixel flood and decompression attacks by capping `Image.MAX_IMAGE_PIXELS = 10,000,000` and enforcing 4096×4096px bounds.
+  - **Global Storage Quota & LRU Pruning**: Added `MAX_GLOBAL_TEMP_STORAGE_MB` (default 2GB) quota enforcement with automatic Least Recently Used (LRU) session eviction to prevent disk exhaustion DoS.
+  - **CSRF Protection Middleware**: Implemented `CSRFProtectionMiddleware` inspecting `Sec-Fetch-Site` and `Origin` headers on mutating requests (`POST`, `PUT`, `DELETE`, `PATCH`).
+  - **In-Memory Upload Rate Limiter with Anti-Spoofing**: Enforced a sliding-window rate limit (25 uploads / 60s per client IP) with trusted proxy CIDR verification to prevent `X-Forwarded-For` spoofing, coupled with automatic LRU tracking cleanup.
+  - **Pydantic Payload Length Constraints**: Enforced strict input bounds on metadata fields (Title/Artist: 500 chars, Lyrics: 64KB, Numbers: 50 chars, Comments: 10KB) to prevent payload memory inflation.
+  - **Internal Filesystem Path & Traceback Exception Masking**: Sanitized API error outputs, logging detailed stack traces server-side while presenting clean, non-disclosing error messages to clients.
+  - **MIME Confusion & CSP Protections**: Enforced strict `Content-Type: audio/mpeg`, `X-Content-Type-Options: nosniff`, and restrictive Content Security Policies.
+  - **CORS Credential Isolation**: Replaced wildcard CORS headers with regex-validated origin matching (`localhost`, `127.0.0.1`, and explicit origins).
+  - **Localhost Default Host Binding & Dynamic TLS Secure Cookies**: Defaulted network binding to `127.0.0.1` and dynamically set `Secure` cookie attributes when accessed over HTTPS.
+  - **Systemd Resource Limits**: Added `MemoryMax=512M`, `TasksMax=64`, and `CPUQuota=80%` sandboxing in `mp3metafix.service`.
+- **Security Hardening Documentation**:
+  - Published comprehensive security guide in `docs/SECURITY_HARDENING.md` detailing threat models, attack vectors, and verification procedures.
+- **Automated Test Suite Expansion**:
+  - Expanded test coverage to 16 automated tests in `tests/test_backend.py` covering rate limiting, CSRF rejection, magic byte filtering, path traversal protection, timestamped HMAC verification, storage quota LRU eviction, and error masking.
+
+---
+
 ## [0.1.1] - 2026-09-19
 
 ### Added
