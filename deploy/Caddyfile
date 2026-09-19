@@ -1,0 +1,27 @@
+# MP3MetaFix Caddy Reverse Proxy Configuration
+# Place in /etc/caddy/Caddyfile or append to your existing Caddyfile
+
+mp3metafix.yourdomain.com {
+    # Automatic HTTPS is handled by Caddy
+
+    # Reverse proxy to backend
+    reverse_proxy 127.0.0.1:8844 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        # Buffering
+        flush_interval -1
+    }
+
+    # Security & Request Limits
+    request_body {
+        max_size 150MB
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/mp3metafix.log
+    }
+}

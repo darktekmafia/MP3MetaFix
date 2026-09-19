@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#1e1b4b" />
+      <stop offset="100%" stop-color="#311042" />
+    </linearGradient>
+    <linearGradient id="neonGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#818cf8" />
+      <stop offset="100%" stop-color="#c084fc" />
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ec4899" />
+      <stop offset="100%" stop-color="#8b5cf6" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Rounded App Icon Background -->
+  <rect width="512" height="512" rx="110" fill="url(#bgGrad)" />
+  <rect width="504" height="504" x="4" y="4" rx="106" fill="none" stroke="url(#neonGrad)" stroke-width="3" opacity="0.4" />
+
+  <!-- Outer Vinyl Disc Rings -->
+  <circle cx="256" cy="256" r="180" fill="#090d16" stroke="#1e293b" stroke-width="4" />
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#334155" stroke-width="1.5" stroke-dasharray="8 6" opacity="0.6" />
+  <circle cx="256" cy="256" r="120" fill="none" stroke="#475569" stroke-width="1" opacity="0.4" />
+  <circle cx="256" cy="256" r="90" fill="#111827" stroke="url(#neonGrad)" stroke-width="3" />
+
+  <!-- Center Spindle Glow -->
+  <circle cx="256" cy="256" r="32" fill="url(#glowGrad)" filter="url(#glow)" />
+  <circle cx="256" cy="256" r="16" fill="#0f172a" />
+
+  <!-- Music Note & Tag Icon Accent -->
+  <path d="M210 160 L320 125 V260 C310 250 290 245 270 252 C245 261 235 285 245 305 C255 325 280 335 305 325 C325 316 335 295 335 275 V175 L230 205 V295 C220 285 200 280 180 287 C155 296 145 320 155 340 C165 360 190 370 215 360 C235 351 245 330 245 310 V160 Z" 
+        fill="url(#neonGrad)" filter="url(#glow)" opacity="0.85" />
+
+  <!-- Wrench / Metafix Tag Overlay -->
+  <g transform="translate(320, 310) scale(0.95)">
+    <circle cx="70" cy="70" r="60" fill="#0f172a" stroke="url(#glowGrad)" stroke-width="4" filter="url(#glow)"/>
+    <!-- Pencil / Edit glyph -->
+    <path d="M45 95 L50 75 L85 40 L98 53 L63 88 Z M90 35 L98 27 C101 24 106 24 109 27 L113 31 C116 34 116 39 113 42 L105 50 Z" 
+          fill="url(#neonGrad)" />
+  </g>
+</svg>

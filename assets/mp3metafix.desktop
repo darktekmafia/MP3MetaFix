@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=MP3MetaFix
+GenericName=Audio Metadata Editor
+Comment=Server-side and local MP3 ID3 tag and cover art editor
+Exec=mp3metafix
+Icon=mp3metafix
+Terminal=false
+Categories=AudioVideo;Audio;AudioVideoEditing;
+Keywords=mp3;id3;tag;metadata;audio;music;editor;
+StartupNotify=true

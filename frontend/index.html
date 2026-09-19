@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MP3MetaFix - Server-side MP3 metadata editor with ID3v2 tag and cover art management">
+  <title>MP3MetaFix | MP3 Metadata & Cover Art Editor</title>
+  
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  
+  <link rel="icon" type="image/svg+xml" href="/assets/mp3metafix.svg">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body class="app-body">
+  <!-- Dynamic Background Glow Elements -->
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div class="bg-glow bg-glow-3"></div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand-group">
+        <div class="brand-logo-container">
+          <img src="/assets/mp3metafix.svg" alt="MP3MetaFix Logo" class="brand-logo" width="44" height="44">
+        </div>
+        <div class="brand-text">
+          <h1 class="brand-title">MP3<span>MetaFix</span></h1>
+          <p class="brand-subtitle">Server-Side Audio Metadata & Cover Art Editor</p>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="badge badge-version" id="versionBadge">v0.1.0</span>
+        <span class="badge badge-status" id="serverStatus"><span class="status-dot"></span> Online</span>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- State 1: Upload Dropzone -->
+      <section id="uploadSection" class="upload-section">
+        <div id="dropzone" class="dropzone-card" tabindex="0" role="button" aria-label="Upload MP3 file dropzone">
+          <input type="file" id="fileInput" accept=".mp3,audio/mpeg" class="visually-hidden">
+          <div class="dropzone-glow"></div>
+          <div class="dropzone-content">
+            <div class="dropzone-icon-wrapper">
+              <svg class="dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+            </div>
+            <h2 class="dropzone-title">Drop your MP3 file here</h2>
+            <p class="dropzone-desc">Drag and drop an audio file, or click anywhere to browse</p>
+            <div class="dropzone-tags">
+              <span class="tag-pill">MP3 Audio</span>
+              <span class="tag-pill">ID3v2.3 / ID3v2.4</span>
+              <span class="tag-pill">Embedded Album Art</span>
+              <span class="tag-pill">Up to 150 MB</span>
+            </div>
+          </div>
+          <!-- Upload Progress Bar (hidden by default) -->
+          <div id="uploadProgressContainer" class="upload-progress-container hidden">
+            <div class="progress-info">
+              <span id="uploadStatusText">Uploading and parsing audio stream...</span>
+              <span id="uploadPercent">0%</span>
+            </div>
+            <div class="progress-bar-track">
+              <div id="uploadProgressBar" class="progress-bar-fill" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- State 2: Metadata Editor Workspace (hidden by default) -->
+      <section id="editorSection" class="editor-section hidden">
+        <!-- Top Toolbar -->
+        <div class="editor-toolbar">
+          <div class="file-loaded-info">
+            <div class="file-icon-badge">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18V5l12-2v13"></path>
+                <circle cx="6" cy="18" r="3"></circle>
+                <circle cx="18" cy="16" r="3"></circle>
+              </svg>
+            </div>
+            <div>
+              <div id="loadedFilename" class="loaded-filename" title="track.mp3">track.mp3</div>
+              <div id="loadedAudioSpecs" class="loaded-specs">320 kbps • 44.1 kHz • Stereo • 03:45</div>
+            </div>
+          </div>
+          <div class="toolbar-actions">
+            <button id="btnNewFile" class="btn btn-secondary" title="Upload a different MP3">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
+                <polyline points="16 6 12 2 8 6"></polyline>
+                <line x1="12" y1="2" x2="12" y2="15"></line>
+              </svg>
+              <span>New File</span>
+            </button>
+            <button id="btnSave" class="btn btn-primary" title="Save metadata (Ctrl+S)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+              </svg>
+              <span>Save Changes</span>
+            </button>
+            <button id="btnSaveDownload" class="btn btn-accent" title="Save changes & download updated MP3">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <span>Save & Download</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Grid Workspace -->
+        <div class="workspace-grid">
+          <!-- Left Column: Artwork & Audio Player -->
+          <div class="left-panel">
+            <!-- Cover Art Card -->
+            <div class="card artwork-card">
+              <div class="card-header">
+                <h3 class="card-title">Album Artwork</h3>
+                <span id="artworkStatusBadge" class="tag-pill tag-pill-sm">Embedded</span>
+              </div>
+              
+              <div class="artwork-preview-container" id="artworkDropzone">
+                <input type="file" id="artworkInput" accept="image/jpeg,image/png,image/webp" class="visually-hidden">
+                <img id="artworkImage" src="" alt="Album Artwork Preview" class="artwork-image hidden">
+                <div id="artworkPlaceholder" class="artwork-placeholder">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="artwork-placeholder-icon">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                  </svg>
+                  <p class="artwork-placeholder-text">No Artwork Found</p>
+                  <span class="artwork-placeholder-sub">Drag image here or click below</span>
+                </div>
+                <div class="artwork-overlay">
+                  <span>Drop New Image</span>
+                </div>
+              </div>
+
+              <div class="artwork-btn-group">
+                <button id="btnReplaceArt" class="btn btn-sm btn-secondary" title="Upload new cover image">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                  <span>Upload Art</span>
+                </button>
+                <button id="btnDownloadArt" class="btn btn-sm btn-secondary" title="Download current cover art image">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  <span>Extract</span>
+                </button>
+                <button id="btnRemoveArt" class="btn btn-sm btn-danger" title="Remove embedded artwork">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                  <span>Remove</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Audio Player Card -->
+            <div class="card player-card">
+              <div class="card-header">
+                <h3 class="card-title">Audio Preview</h3>
+              </div>
+              <audio id="audioElement" preload="metadata"></audio>
+              
+              <div class="player-controls">
+                <button id="btnPlayPause" class="player-btn-play" aria-label="Play or Pause preview">
+                  <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                  </svg>
+                  <svg id="pauseIcon" viewBox="0 0 24 24" fill="currentColor" class="hidden">
+                    <rect x="6" y="4" width="4" height="16"></rect>
+                    <rect x="14" y="4" width="4" height="16"></rect>
+                  </svg>
+                </button>
+
+                <div class="player-scrubber-group">
+                  <div class="player-time-display">
+                    <span id="playerCurrentTime">00:00</span>
+                    <span id="playerTotalTime">00:00</span>
+                  </div>
+                  <input type="range" id="playerSeek" min="0" max="100" value="0" class="player-slider" aria-label="Audio scrubber">
+                </div>
+
+                <div class="player-volume-group">
+                  <button id="btnMute" class="player-btn-icon" aria-label="Mute or Unmute">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                      <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    </svg>
+                  </button>
+                  <input type="range" id="playerVolume" min="0" max="1" step="0.05" value="0.8" class="player-slider volume-slider" aria-label="Volume slider">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: Metadata Form -->
+          <div class="right-panel">
+            <div class="card form-card">
+              <!-- Form Tabs -->
+              <div class="tabs-header" role="tablist">
+                <button class="tab-btn active" role="tab" data-tab="tab-main" aria-selected="true">General Info</button>
+                <button class="tab-btn" role="tab" data-tab="tab-details" aria-selected="false">Track Details</button>
+                <button class="tab-btn" role="tab" data-tab="tab-lyrics" aria-selected="false">Lyrics & Notes</button>
+                <button class="tab-btn" role="tab" data-tab="tab-filename" aria-selected="false">File Naming</button>
+              </div>
+
+              <form id="metadataForm" class="meta-form">
+                <!-- Tab 1: General Info -->
+                <div id="tab-main" class="tab-panel active" role="tabpanel">
+                  <div class="form-grid">
+                    <div class="form-group span-2">
+                      <label for="inputTitle" class="form-label">Track Title</label>
+                      <input type="text" id="inputTitle" name="title" class="form-input" placeholder="e.g. Bohemian Rhapsody" autocomplete="off">
+                    </div>
+
+                    <div class="form-group span-2">
+                      <label for="inputArtist" class="form-label">Artist</label>
+                      <input type="text" id="inputArtist" name="artist" class="form-input" placeholder="e.g. Queen" autocomplete="off">
+                    </div>
+
+                    <div class="form-group span-2">
+                      <label for="inputAlbum" class="form-label">Album</label>
+                      <input type="text" id="inputAlbum" name="album" class="form-input" placeholder="e.g. A Night at the Opera" autocomplete="off">
+                    </div>
+
+                    <div class="form-group span-2">
+                      <label for="inputAlbumArtist" class="form-label">Album Artist</label>
+                      <input type="text" id="inputAlbumArtist" name="album_artist" class="form-input" placeholder="e.g. Queen" autocomplete="off">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputGenre" class="form-label">Genre</label>
+                      <input type="text" id="inputGenre" name="genre" class="form-input" placeholder="e.g. Rock, Synthwave" list="genreList" autocomplete="off">
+                      <datalist id="genreList">
+                        <option value="Rock"><option value="Pop"><option value="Electronic"><option value="Synthwave">
+                        <option value="Hip-Hop"><option value="Jazz"><option value="Classical"><option value="Metal">
+                        <option value="Ambient"><option value="Soundtrack"><option value="R&B"><option value="Folk">
+                      </datalist>
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputYear" class="form-label">Year / Date</label>
+                      <input type="text" id="inputYear" name="year" class="form-input" placeholder="e.g. 1975" autocomplete="off">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tab 2: Track Details -->
+                <div id="tab-details" class="tab-panel" role="tabpanel">
+                  <div class="form-grid">
+                    <div class="form-group">
+                      <label for="inputTrackNumber" class="form-label">Track Number</label>
+                      <input type="text" id="inputTrackNumber" name="track_number" class="form-input" placeholder="e.g. 1">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputTotalTracks" class="form-label">Total Tracks</label>
+                      <input type="text" id="inputTotalTracks" name="total_tracks" class="form-input" placeholder="e.g. 12">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputDiscNumber" class="form-label">Disc Number</label>
+                      <input type="text" id="inputDiscNumber" name="disc_number" class="form-input" placeholder="e.g. 1">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputTotalDiscs" class="form-label">Total Discs</label>
+                      <input type="text" id="inputTotalDiscs" name="total_discs" class="form-input" placeholder="e.g. 1">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputComposer" class="form-label">Composer</label>
+                      <input type="text" id="inputComposer" name="composer" class="form-input" placeholder="e.g. Freddie Mercury">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputBpm" class="form-label">BPM</label>
+                      <input type="text" id="inputBpm" name="bpm" class="form-input" placeholder="e.g. 120">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tab 3: Lyrics & Comments -->
+                <div id="tab-lyrics" class="tab-panel" role="tabpanel">
+                  <div class="form-grid">
+                    <div class="form-group span-2">
+                      <label for="inputComment" class="form-label">Comment</label>
+                      <input type="text" id="inputComment" name="comment" class="form-input" placeholder="Additional notes or tags">
+                    </div>
+
+                    <div class="form-group span-2">
+                      <label for="inputLyrics" class="form-label">Unsynchronized Lyrics</label>
+                      <textarea id="inputLyrics" name="lyrics" rows="9" class="form-textarea" placeholder="Paste track lyrics here..."></textarea>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tab 4: File Naming Pattern -->
+                <div id="tab-filename" class="tab-panel" role="tabpanel">
+                  <div class="naming-container">
+                    <p class="naming-help">
+                      Customize how the downloaded MP3 file will be named. Use dynamic tags like <code>%artist%</code>, <code>%title%</code>, <code>%album%</code>, <code>%track%</code>, <code>%year%</code>.
+                    </p>
+                    
+                    <div class="form-group">
+                      <label for="inputCustomFilename" class="form-label">Output Filename Pattern</label>
+                      <div class="filename-input-wrapper">
+                        <input type="text" id="inputCustomFilename" name="custom_filename" class="form-input" placeholder="%artist% - %title%.mp3">
+                        <span class="file-ext-badge">.mp3</span>
+                      </div>
+                    </div>
+
+                    <div class="naming-presets">
+                      <span class="presets-label">Quick Presets:</span>
+                      <button type="button" class="preset-btn" data-preset="%artist% - %title%">Artist - Title</button>
+                      <button type="button" class="preset-btn" data-preset="%track% - %artist% - %title%">01 - Artist - Title</button>
+                      <button type="button" class="preset-btn" data-preset="%artist% - %album% - %track% - %title%">Artist - Album - Track - Title</button>
+                      <button type="button" class="preset-btn" data-preset="%title%">Title Only</button>
+                    </div>
+
+                    <div class="naming-preview">
+                      <span class="preview-label">Live Preview:</span>
+                      <span id="filenamePreview" class="preview-result">Queen - Bohemian Rhapsody.mp3</span>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <div>MP3MetaFix &copy; 2026 &bull; Secure Server-side Metadata Engine</div>
+      <div class="footer-links">
+        <span>Shortcut: <kbd>Ctrl+S</kbd> to save</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
