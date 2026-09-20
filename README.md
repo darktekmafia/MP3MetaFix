@@ -12,8 +12,8 @@
 
 - 🌐 **Multi-Interface Architecture & Gateway Hub**:
   - **Gateway Hub (`/`)**: Real-time system telemetry dashboard displaying CPU load, memory utilization, disk space, and MP3 temporary cache quotas with one-click app launching.
-  - **MP3MetaFix (`/app`)**: Lightweight, mobile-first, single-track ID3v2.4 editor.
-  - **MP3MetaManager (`/manager`)**: Desktop power-user multi-track management and batch workspace.
+  - **MP3MetaFix (`/app`)**: Lightweight, mobile-first, single-track ID3v2.4 editor optimized for touchscreens and quick edits.
+  - **MP3MetaManager (`/manager`)**: Desktop power-user workspace featuring complete functional superset parity with `/app` (integrated single-track inspector, waveform scrubber, cover art studio) alongside high-density multi-track batch spreadsheet editing, universal ID3 frame/byte inspection, and synced lyrics.
   - **Persistent App Switcher**: Header navigation pill allowing instant workspace jumping without context loss.
 - 🎧 **Complete ID3v2.4 & ID3v2.3 Tagging**:
   - Track Title, Artist, Album, Album Artist, Genre, Year / Date

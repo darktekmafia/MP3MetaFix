@@ -147,15 +147,23 @@ MP3MetaFix decouples user interaction into three specialized interfaces sharing 
                   │  (HMAC Auth, Hashed Storage, Mutagen Engine) │
                   └───────┬──────────────┬──────────────┬────────┘
                           │              │              │
-         ┌────────────────┴───┐   ┌──────┴─────────┐   ┌┴────────────────────┐
-         │  Gateway Hub (/)   │   │ MP3MetaFix     │   │ MP3MetaManager      │
-         │                    │   │ (/app)         │   │ (/manager)          │
-         │ - Live Telemetry   │   │ - Mobile-First │   │ - Desktop Power-User│
-         │ - Diagnostics Modal│   │ - Single-Track │   │ - Multi-Track Table │
-         │ - App Dispatcher   │   │ - Waveform     │   │ - Synced Lyrics/LRC │
-         │ - Subnet Stats     │   │ - Canned Tags  │   │ - Stem Tree Manager │
-         └────────────────────┘   └────────────────┘   └─────────────────────┘
+         ┌────────────────┴───┐   ┌──────┴─────────┐   ┌┴─────────────────────────────┐
+         │  Gateway Hub (/)   │   │ MP3MetaFix     │   │ MP3MetaManager (/manager)    │
+         │                    │   │ (/app)         │   │ (Superset of /app)           │
+         │ - Live Telemetry   │   │ - Mobile-First │   │ - Desktop Power-User         │
+         │ - Diagnostics Modal│   │ - Single-Track │   │ - Integrated Single-Track UI │
+         │ - App Dispatcher   │   │ - Waveform     │   │ - Multi-Track Batch Table    │
+         │ - Subnet Stats     │   │ - Canned Tags  │   │ - Deep ID3/Hex Byte Engine   │
+         │                    │   │ - Suno Parser  │   │ - Synced Lyrics/LRC & Stems  │
+         └────────────────────┘   └────────────────┘   └──────────────────────────────┘
 ```
+
+### Architectural Principle: Workflow & Device-Driven Selection (Superset Model)
+**MP3MetaManager (`/manager`) is engineered as a complete functional superset of MP3MetaFix (`/app`)**.
+- The choice of interface is dictated by the user's **current workflow** and **client device form factor**:
+  - **Mobile Phones & Focused Quick Edits (`/app`)**: Lightweight, distraction-free single-track editing optimized for touchscreens and quick mobile workflows.
+  - **Desktop Workstations & Power Curation (`/manager`)**: Full-screen workspace with deep batch tools, multi-track spreadsheet tables, stem trees, synced lyrics, and universal raw ID3 frame inspector.
+- **Zero Need for App Switching**: Desktop users never need to jump between interfaces just to edit single-track tags, scrub a waveform, or replace artwork. All `/app` features are embedded directly within `/manager` via an integrated single-track inspector drawer.
 
 ### 1. Gateway Hub & Telemetry Dashboard (`/`)
 - **Target Persona**: System Administrators, Homelab Operators, Multi-Device Users.
@@ -171,12 +179,17 @@ MP3MetaFix decouples user interaction into three specialized interfaces sharing 
   - Constrained album artwork preview dimensions (`max-width: 210px` on mobile phones) to prevent massive vertical scrolling.
   - Balanced 2-column workspace on tablets ($\ge 720\text{px}$) keeping artwork and metadata forms immediately accessible.
   - Responsive button label typography (`.btn-txt-full` / `.btn-txt-short`).
-- **Core Capabilities**: Complete ID3v2.3/ID3v2.4 frame editing, Web Audio dynamic waveform canvas rendering, APIC cover art processing, canned comment presets, and File System Access API save integration.
+- **Core Capabilities**: Complete ID3v2.3/ID3v2.4 frame editing, Web Audio dynamic waveform canvas rendering, APIC cover art processing, canned comment presets, dynamic filename formatting, Suno link parsing, and File System Access API save integration.
 
 ### 3. MP3MetaManager Desktop Workspace (`/manager`)
 - **Target Persona**: Desktop Power Users, DJs, Album Curators, Batch Producers.
 - **Design Philosophy**: High-density desktop workspace built for widescreen 1080p–4K displays.
-- **Core Capabilities**: Multi-file batch spreadsheet data table, sequential auto-numbering, bulk cover art extraction, Suno AI generation/stem lineage graph, and tap-to-sync karaoke timestamping (`.lrc` / ID3 `SYLT`).
+- **Superset Core Capabilities**:
+  - **Integrated Single-Track Inspector**: Built-in drawer offering in-place access to all `/app` features (all ID3 fields, waveform scrubber, cover art studio, canned comment presets, dynamic filename generator, and Suno prompt parser).
+  - **Multi-Track Batch Spreadsheet Editor**: High-density table with keyboard navigation (<kbd>Tab</kbd>, <kbd>Enter</kbd>), bulk tag propagation, regex find-and-replace, and auto-numbering.
+  - **Universal ID3 Frame & Raw MPEG Byte Inspector**: Direct viewing, editing, and addition of any standard ID3 frame, custom `TXXX` key-values, multi-language `COMM`/`USLT` descriptors, multiple `APIC` pictures, and low-level hex inspection.
+  - **Karaoke Tap-to-Sync & Synced Lyrics (`.lrc` / `SYLT`)**: Interactive playback timestamping tool for synced lyrics sidecars and ID3 frames.
+  - **Suno AI Stem & Generation Tree Organizer**: Visual lineage graph organizing extensions, variations, and split stems.
 
 ### 4. Global App Switcher
 - Embedded header pill navigation allowing instant switching between `/app`, `/manager`, and `/` across all interfaces without losing active context.

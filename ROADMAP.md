@@ -8,12 +8,16 @@ Although MP3MetaFix runs as a unified high-performance Python FastAPI service wi
 
 ## 🧭 Interface Overview & Strategy Matrix
 
-| Project / Interface | Route | Primary Target Persona | Screen & Form Factor | Key Design Focus |
+| Project / Interface | Route | Primary Target Persona | Screen & Form Factor | Key Design Focus & Scope |
 |---|---|---|---|---|
 | **Gateway Hub** | `/` | System Administrators, Homelab Users, Multi-Device Operators | All screens (320px–4K) | System telemetry, health diagnostics, app dispatching |
 | **MP3MetaFix Editor** | `/app` | Mobile Creators, Smartphone/Tablet Users, Single-Track Producers | Mobile-first (phones, tablets, responsive desktop) | Speed, friction-free single-track tagging, touch waveforms, Suno prompt parsing, canned presets |
-| **MP3MetaManager** | `/manager` | Desktop Power Users, DJs, Album Curators, Batch Producers | Desktop-first (widescreen, 1080p–4K displays) | High-density tables, multi-file batch tagging, deep ID3 frame inspector/editor, stem trees, synced lyrics (LRC/SYLT) |
+| **MP3MetaManager** | `/manager` | Desktop Power Users, DJs, Album Curators, Batch Producers | Desktop-first (widescreen, 1080p–4K displays) | **Functional Superset of `/app`**: Full single-track inspector + high-density tables, multi-file batch tagging, deep ID3 frame inspector/editor, stem trees, synced lyrics (LRC/SYLT) |
 | **Core Platform** | `/api` | DevOps, Package Maintainers, Infrastructure Engineers | CLI, Systemd, Reverse Proxies, Docker | Security hardening, zero-downtime updates, cross-platform deployment |
+
+> [!NOTE]
+> **Architectural Principle: Workflow & Device-Driven Interface Selection (Superset Model)**  
+> **MP3MetaManager (`/manager`) is engineered as a complete functional superset of MP3MetaFix (`/app`)**. All single-track editing tools, waveform visualizers, cover art management, preset managers, and Suno link parsers present in `/app` are natively integrated into `/manager` via an embedded single-track inspector drawer. Users never need to switch between applications just to edit a single track's tags or cover art; interface selection is determined solely by the user's active workflow (focused quick edit vs comprehensive multi-track session) and client device form factor (mobile touch vs desktop workstation).
 
 ---
 
@@ -93,7 +97,7 @@ The **Gateway Hub** serves as the front door and system dashboard for the MP3Met
 
 ## 🗂️ Project C: MP3MetaManager (`/manager`) — Desktop Power-User Workspace Roadmap
 
-**MP3MetaManager** is the desktop-focused power-user interface engineered for heavy multi-track batch operations, album assembly, library management, and deep audio organization.
+**MP3MetaManager** is the desktop-focused power-user interface engineered for heavy multi-track batch operations, album assembly, library management, and deep audio organization. **It incorporates all single-track editing features of `/app` directly into its workspace, eliminating any need to switch applications**.
 
 ### Completed Features ✅
 - [x] **Desktop Workspace Foundation**:
@@ -105,6 +109,15 @@ The **Gateway Hub** serves as the front door and system dashboard for the MP3Met
   - Clear placeholder state with active editor handoff buttons to prevent dead-end interactions while in development.
 
 ### Active Backlog & Future Vision 📋
+- [ ] **Full Feature Parity with MP3MetaFix (`/app`) via Integrated Single-Track Inspector**:
+  - Embedded collapsible **Track Detail Inspector Drawer / Side Panel** allowing comprehensive single-track editing without leaving the batch workspace:
+    - *Full Tag Suite*: In-place editing for Track Title, Artist, Album, Album Artist, Genre, Year/Date, Track/Total, Disc/Total, BPM, Composer, Comments, and Unsynchronized Lyrics (`USLT`).
+    - *Album Artwork Studio*: Direct cover art drag-and-drop replacement, high-res preview, format normalization (JPEG/PNG/WebP), extraction, and removal.
+    - *Retina Canvas Audio Waveform Visualizer*: Full audio playback with dynamic waveform peaks, continuous drag scrubbing, and HTTP 206 streaming for the currently selected track.
+    - *Canned Comment Presets & Preset Manager*: Quick-select preset dropdown and persistent custom preset creation.
+    - *Dynamic Filename Formatter*: Instant pattern-based renaming (`%artist% - %title%.mp3`, `%track% - %title%.mp3`) with preset buttons.
+    - *Suno.com URL / Share Link Auto-Parser*: Direct URL fetching and tag prefilling for single tracks within the desktop queue.
+    - *Single-Track Native Save & Export*: In-place disk writeback and direct download.
 - [ ] **Universal ID3 Frame & Raw Metadata Inspector / Editor ("View/Edit All Embedded Information")**:
   - **Comprehensive Frame Manager**: View, add, edit, and delete **any** embedded ID3v2.3 / ID3v2.4 frame:
     - *Standard Text Frames*: `TIT1` (Grouping), `TIT2` (Title), `TIT3` (Subtitle), `TPE1`–`TPE4` (Artists/Conductor), `TALB` (Album), `TOAL` (Original Album), `TCOM` (Composer), `TEXT` (Lyricist), `TCON` (Genre), `TCOP` (Copyright), `TPUB` (Publisher), `TDRC`/`TYER` (Recording Date), `TRCK` (Track), `TPOS` (Disc), `TBPM` (BPM), `TKEY` (Initial Key), `TLAN` (Language), `TSRC` (ISRC), `TSSE` (Encoder).
