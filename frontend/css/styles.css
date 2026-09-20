@@ -2054,9 +2054,9 @@ button {
 /* Application Cards Grid */
 .hub-apps-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(2, 1fr);
   gap: 2rem;
-  margin-bottom: 4rem;
+  margin-bottom: 3.5rem;
 }
 
 .app-card {
@@ -2561,12 +2561,267 @@ button {
   .manager-workspace {
     grid-template-columns: 1fr;
   }
+}
+
+/* ==========================================================================
+   Responsive Rules for Gateway Hub (Mobile & Tablet)
+   ========================================================================== */
+.sub-short {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .hub-container {
+    padding: 1.25rem 1.5rem 3.5rem;
+  }
+  .hub-apps-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+    margin-bottom: 2.5rem;
+  }
+  .telemetry-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .hub-apps-grid {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+    margin-bottom: 2rem;
+  }
+  .app-header {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  .app-switcher-nav {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+  }
+  .app-switcher-pill {
+    width: 100%;
+    justify-content: space-around;
+  }
+  .switcher-link {
+    flex: 1;
+    justify-content: center;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.78rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .hub-container {
+    padding: 1rem 1rem 2.5rem;
+  }
+  .hub-header {
+    margin-bottom: 1.5rem;
+    padding: 0.75rem 1rem;
+  }
+  .brand-group {
+    gap: 0.6rem;
+    min-width: 0;
+  }
+  .brand-logo-container img {
+    width: 36px;
+    height: 36px;
+  }
+  .brand-title {
+    font-size: 1.35rem;
+  }
+  .brand-subtitle {
+    font-size: 0.75rem;
+  }
+  .header-badges {
+    gap: 0.35rem;
+    flex-shrink: 0;
+  }
+  .badge {
+    font-size: 0.7rem;
+    padding: 0.2rem 0.5rem;
+    white-space: nowrap;
+  }
+  .hub-hero {
+    margin-bottom: 1.75rem;
+  }
+  .hub-hero-title {
+    font-size: 1.65rem;
+  }
+  .hub-hero-subtitle {
+    font-size: 0.88rem;
+  }
+  .app-card {
+    padding: 1.35rem;
+  }
+  .app-title {
+    font-size: 1.35rem;
+  }
+  .app-tagline {
+    font-size: 0.84rem;
+  }
+  .app-desc {
+    font-size: 0.85rem;
+    margin-bottom: 1.15rem;
+  }
+  .app-features-list {
+    gap: 0.45rem;
+    margin-bottom: 1.4rem;
+  }
+  .app-features-list li {
+    font-size: 0.8rem;
+    gap: 0.5rem;
+  }
+  .btn-lg {
+    padding: 0.75rem 1.25rem;
+    font-size: 0.92rem;
+    min-height: 44px;
+  }
+  .telemetry-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+  .telemetry-card {
+    padding: 0.9rem;
+  }
+  .t-card-header {
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+  }
+  .t-icon {
+    width: 30px;
+    height: 30px;
+  }
+  .t-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+  .t-title {
+    font-size: 0.82rem;
+  }
+  .t-sub {
+    font-size: 0.68rem;
+  }
+  .t-val-main {
+    font-size: 1.3rem;
+    margin-bottom: 0.4rem;
+  }
+  .t-meter-track {
+    height: 4px;
+    margin-bottom: 0.6rem;
+  }
+  .t-details-row {
+    font-size: 0.68rem;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .telemetry-env-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    padding: 0.9rem;
+  }
   .env-divider {
     display: none;
   }
-  .telemetry-env-bar {
+  .env-label {
+    font-size: 0.65rem;
+  }
+  .env-value {
+    font-size: 0.78rem;
+    word-break: break-all;
+  }
+  .hub-footer {
     flex-direction: column;
-    align-items: flex-start;
+    text-align: center;
+    gap: 0.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .hub-container {
+    padding: 0.75rem 0.75rem 2rem;
+  }
+  .app-header {
+    padding: 0.65rem 0.75rem;
+  }
+  .brand-group {
+    gap: 0.5rem;
+  }
+  .brand-logo-container img {
+    width: 32px;
+    height: 32px;
+  }
+  .brand-title {
+    font-size: 1.2rem;
+  }
+  .sub-full {
+    display: none;
+  }
+  .sub-short {
+    display: inline;
+  }
+  .header-badges {
+    gap: 0.25rem;
+  }
+  .badge {
+    font-size: 0.65rem;
+    padding: 0.15rem 0.4rem;
+  }
+  .hub-hero-title {
+    font-size: 1.45rem;
+  }
+  .hub-hero-subtitle {
+    font-size: 0.84rem;
+  }
+  .app-card {
+    padding: 1.15rem;
+  }
+  .app-card-header {
+    margin-bottom: 0.85rem;
+  }
+  .app-badge-pill {
+    font-size: 0.68rem;
+    padding: 0.2rem 0.55rem;
+  }
+  .app-icon-wrapper {
+    width: 44px;
+    height: 44px;
+  }
+  .app-icon-wrapper svg {
+    width: 22px;
+    height: 22px;
+  }
+  .app-title {
+    font-size: 1.25rem;
+  }
+  .app-tagline {
+    font-size: 0.8rem;
+  }
+  .app-desc {
+    font-size: 0.82rem;
+  }
+  .switcher-link {
+    font-size: 0.72rem;
+    padding: 0.3rem 0.4rem;
+    gap: 0.25rem;
+  }
+}
+
+@media (max-width: 360px) {
+  .telemetry-grid {
+    grid-template-columns: 1fr;
+  }
+  .telemetry-env-bar {
+    grid-template-columns: 1fr;
+  }
+  .header-badges {
+    gap: 0.2rem;
+  }
+  .badge {
+    font-size: 0.62rem;
+    padding: 0.12rem 0.35rem;
   }
 }
 
