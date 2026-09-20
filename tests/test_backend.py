@@ -1295,9 +1295,23 @@ def test_configure_access_validation():
     assert validate_bind_port("abc") is False
     assert validate_bind_port(None) is False
 
+    # Valid trusted proxies
+    from scripts.configure_access import validate_trusted_proxies
+    assert validate_trusted_proxies("127.0.0.1,::1") is True
+    assert validate_trusted_proxies("192.168.0.50") is True
+    assert validate_trusted_proxies("10.0.0.0/8, 172.16.0.0/12") is True
+    assert validate_trusted_proxies("127.0.0.1, 192.168.1.100, 10.10.10.10") is True
+
+    # Invalid trusted proxies
+    assert validate_trusted_proxies("") is False
+    assert validate_trusted_proxies(None) is False
+    assert validate_trusted_proxies("127.0.0.1; rm -rf /") is False
+    assert validate_trusted_proxies("not-an-ip") is False
+    assert validate_trusted_proxies("192.168.1.999") is False
+
 
 def test_configure_access_get_and_set_service_binding():
-    """Verify inspection and modification of host and port in service unit content."""
+    """Verify inspection and modification of host, port, and proxy trust in service unit content."""
     from scripts.configure_access import ConfigStatus, get_service_binding, set_service_binding
 
     sample_unit = """[Unit]
@@ -1311,6 +1325,7 @@ Environment="MP3METAFIX_HOST=127.0.0.1"
 Environment="MP3METAFIX_PORT=8844"
 Environment="MP3METAFIX_DATA_DIR=/opt/mp3metafix/data"
 Environment="MP3METAFIX_TRUST_PROXIES=false"
+Environment="MP3METAFIX_TRUSTED_PROXIES=127.0.0.1,::1"
 ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app --host $MP3METAFIX_HOST --port $MP3METAFIX_PORT --workers 2 --no-proxy-headers
 Restart=always
 MemoryMax=512M
@@ -1323,29 +1338,42 @@ WantedBy=default.target
     assert binding["host"] == "127.0.0.1"
     assert binding["port"] == "8844"
     assert binding["trust_proxies"] == "false"
+    assert binding["trusted_proxies"] == "127.0.0.1,::1"
     assert binding["is_configured"] is True
 
-    # 2. Test set_service_binding with LAN alias
-    new_content, status, err = set_service_binding(sample_unit, host="lan")
+    # 2. Test set_service_binding with LAN alias and proxy trust
+    new_content, status, err = set_service_binding(
+        sample_unit,
+        host="lan",
+        trust_proxies=True,
+        trusted_proxies="192.168.0.50,10.0.0.0/8",
+    )
     assert status == ConfigStatus.CHANGED
     assert err is None
     assert 'Environment="MP3METAFIX_HOST=0.0.0.0"' in new_content
     assert 'Environment="MP3METAFIX_PORT=8844"' in new_content
+    assert 'Environment="MP3METAFIX_TRUST_PROXIES=true"' in new_content
+    assert 'Environment="MP3METAFIX_TRUSTED_PROXIES=192.168.0.50,10.0.0.0/8"' in new_content
     assert "MemoryMax=512M" in new_content
-    assert 'Environment="MP3METAFIX_TRUST_PROXIES=false"' in new_content
 
     # 3. Test idempotent set_service_binding
-    same_content, status2, _ = set_service_binding(new_content, host="0.0.0.0")
+    same_content, status2, _ = set_service_binding(
+        new_content,
+        host="0.0.0.0",
+        trust_proxies=True,
+        trusted_proxies="192.168.0.50,10.0.0.0/8",
+    )
     assert status2 == ConfigStatus.UNCHANGED
     assert same_content == new_content
 
-    # 4. Test changing port
-    port_content, status3, _ = set_service_binding(sample_unit, port=9000)
+    # 4. Test changing port and disabling proxy
+    port_content, status3, _ = set_service_binding(sample_unit, port=9000, trust_proxies=False)
     assert status3 == ConfigStatus.CHANGED
     assert 'Environment="MP3METAFIX_PORT=9000"' in port_content
     assert 'Environment="MP3METAFIX_HOST=127.0.0.1"' in port_content
+    assert 'Environment="MP3METAFIX_TRUST_PROXIES=false"' in port_content
 
-    # 5. Test invalid host / port rejection
+    # 5. Test invalid host / port / proxy rejection
     _, bad_status, bad_err = set_service_binding(sample_unit, host="127.0.0.1; whoami")
     assert bad_status == ConfigStatus.FAILED
     assert "Invalid bind host" in bad_err
@@ -1353,6 +1381,10 @@ WantedBy=default.target
     _, bad_status2, bad_err2 = set_service_binding(sample_unit, port="99999")
     assert bad_status2 == ConfigStatus.FAILED
     assert "Invalid bind port" in bad_err2
+
+    _, bad_status3, bad_err3 = set_service_binding(sample_unit, trusted_proxies="bad_ip_address")
+    assert bad_status3 == ConfigStatus.FAILED
+    assert "Invalid trusted_proxies" in bad_err3
 
 
 def test_configure_access_file_on_disk_permissions_and_atomicity(tmp_path: Path):
@@ -1374,13 +1406,15 @@ WantedBy=default.target
     # Set custom permission mode (0640)
     svc_file.chmod(0o640)
 
-    status, msg = update_service_file(svc_file, host="0.0.0.0")
+    status, msg = update_service_file(svc_file, host="0.0.0.0", trust_proxies=True, trusted_proxies="192.168.0.50")
     assert status == ConfigStatus.CHANGED
-    assert "Updated network binding" in msg
+    assert "Updated network configuration" in msg
 
     # Verify content
     updated_text = svc_file.read_text(encoding="utf-8")
     assert 'Environment="MP3METAFIX_HOST=0.0.0.0"' in updated_text
+    assert 'Environment="MP3METAFIX_TRUST_PROXIES=true"' in updated_text
+    assert 'Environment="MP3METAFIX_TRUSTED_PROXIES=192.168.0.50"' in updated_text
 
     # Verify mode is preserved
     mode = stat.S_IMODE(svc_file.stat().st_mode)
@@ -1403,6 +1437,8 @@ Description=MP3MetaFix
 [Service]
 Environment="MP3METAFIX_HOST=127.0.0.1"
 Environment="MP3METAFIX_PORT=8844"
+Environment="MP3METAFIX_TRUST_PROXIES=false"
+Environment="MP3METAFIX_TRUSTED_PROXIES=127.0.0.1,::1"
 ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app
 [Install]
 WantedBy=default.target
@@ -1420,10 +1456,22 @@ WantedBy=default.target
     info = json.loads(res_get.stdout)
     assert info["host"] == "127.0.0.1"
     assert info["port"] == "8844"
+    assert info["trust_proxies"] == "false"
 
-    # Test set command
+    # Test set command with host and proxy trust
     res_set = subprocess.run(
-        [sys.executable, str(script_path), "set", str(svc_file), "--host", "0.0.0.0"],
+        [
+            sys.executable,
+            str(script_path),
+            "set",
+            str(svc_file),
+            "--host",
+            "0.0.0.0",
+            "--trust-proxies",
+            "true",
+            "--trusted-proxies",
+            "192.168.0.50,10.0.0.0/8",
+        ],
         capture_output=True,
         text=True,
     )
@@ -1432,7 +1480,18 @@ WantedBy=default.target
 
     # Test idempotent set command (exit code 2)
     res_set_idem = subprocess.run(
-        [sys.executable, str(script_path), "set", str(svc_file), "--host", "0.0.0.0"],
+        [
+            sys.executable,
+            str(script_path),
+            "set",
+            str(svc_file),
+            "--host",
+            "0.0.0.0",
+            "--trust-proxies",
+            "true",
+            "--trusted-proxies",
+            "192.168.0.50,10.0.0.0/8",
+        ],
         capture_output=True,
         text=True,
     )
@@ -1449,7 +1508,7 @@ WantedBy=default.target
 
 
 def test_installer_access_and_binding_commands(tmp_path: Path):
-    """Verify that install.sh --access, --lan, --local, and --bind operate correctly."""
+    """Verify that install.sh --access, --lan, --local, --bind, --proxy, and --h operate correctly."""
     import os
     import shutil
     import subprocess
@@ -1481,6 +1540,8 @@ Description=MP3MetaFix
 [Service]
 Environment="MP3METAFIX_HOST=127.0.0.1"
 Environment="MP3METAFIX_PORT=8844"
+Environment="MP3METAFIX_TRUST_PROXIES=false"
+Environment="MP3METAFIX_TRUSTED_PROXIES=127.0.0.1,::1"
 ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app
 [Install]
 WantedBy=default.target
@@ -1501,7 +1562,18 @@ WantedBy=default.target
     env["HOME"] = str(tmp_path)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
 
-    # 1. Test install.sh --access (Inspection mode)
+    # 1. Test install.sh --h (Help alias)
+    res_h = subprocess.run(
+        ["bash", str(test_root / "install.sh"), "--h"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert res_h.returncode == 0
+    assert "Usage:" in res_h.stdout
+    assert "Options:" in res_h.stdout
+
+    # 2. Test install.sh --access (Inspection mode)
     res_access = subprocess.run(
         ["bash", str(test_root / "install.sh"), "--access"],
         capture_output=True,
@@ -1515,7 +1587,7 @@ WantedBy=default.target
     assert "8844" in res_access.stdout
     assert "Localhost:" in res_access.stdout
 
-    # 2. Test install.sh --lan (Switch to 0.0.0.0)
+    # 3. Test install.sh --lan (Switch to 0.0.0.0)
     res_lan = subprocess.run(
         ["bash", str(test_root / "install.sh"), "--lan"],
         capture_output=True,
@@ -1527,7 +1599,46 @@ WantedBy=default.target
     updated_svc = svc_file.read_text(encoding="utf-8")
     assert 'Environment="MP3METAFIX_HOST=0.0.0.0"' in updated_svc
 
-    # 3. Test install.sh --local (Switch back to 127.0.0.1)
+    # 4. Test install.sh --bind 192.168.0.190 (Specific IP bind and probe target)
+    res_bind_ip = subprocess.run(
+        ["bash", str(test_root / "install.sh"), "--bind", "192.168.0.190"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert res_bind_ip.returncode == 0
+    assert "Service successfully updated" in res_bind_ip.stdout
+    assert "http://192.168.0.190:8844" in res_bind_ip.stdout
+    assert "Bound Interface:" in res_bind_ip.stdout
+    updated_svc_ip = svc_file.read_text(encoding="utf-8")
+    assert 'Environment="MP3METAFIX_HOST=192.168.0.190"' in updated_svc_ip
+
+    # 5. Test install.sh --proxy 192.168.0.50 (Enable proxy trust with custom IP)
+    res_proxy = subprocess.run(
+        ["bash", str(test_root / "install.sh"), "--proxy", "192.168.0.50,10.0.0.0/8"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert res_proxy.returncode == 0
+    assert "Service successfully updated" in res_proxy.stdout
+    updated_svc_proxy = svc_file.read_text(encoding="utf-8")
+    assert 'Environment="MP3METAFIX_TRUST_PROXIES=true"' in updated_svc_proxy
+    assert 'Environment="MP3METAFIX_TRUSTED_PROXIES=192.168.0.50,10.0.0.0/8"' in updated_svc_proxy
+
+    # 6. Test install.sh --no-proxy (Disable proxy trust)
+    res_no_proxy = subprocess.run(
+        ["bash", str(test_root / "install.sh"), "--no-proxy"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert res_no_proxy.returncode == 0
+    assert "Service successfully updated" in res_no_proxy.stdout
+    updated_svc_no_proxy = svc_file.read_text(encoding="utf-8")
+    assert 'Environment="MP3METAFIX_TRUST_PROXIES=false"' in updated_svc_no_proxy
+
+    # 7. Test install.sh --local (Switch back to 127.0.0.1)
     res_local = subprocess.run(
         ["bash", str(test_root / "install.sh"), "--local"],
         capture_output=True,

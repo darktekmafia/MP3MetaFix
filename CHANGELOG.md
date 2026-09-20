@@ -8,13 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.4] - 2026-09-19
 
 ### Added
-- **Service Access & LAN Maintenance Commands (`--access`, `--lan`, `--local`, `--bind`)**:
-  - Added dedicated maintenance options in `install.sh` to inspect current host/port binding, service health status, and detected LAN access URLs without requiring manual systemd unit editing.
+- **Service Access, LAN & Reverse Proxy Maintenance Commands (`--access`, `--lan`, `--local`, `--bind`, `--proxy`, `--no-proxy`, `--trusted-proxies`)**:
+  - Added dedicated maintenance options in `install.sh` to inspect current host/port binding, reverse proxy trust settings, service health status, and detected LAN access URLs without requiring manual systemd unit editing.
   - Added quick switching commands `--lan` (listen on all network interfaces `0.0.0.0`) and `--local` (restrict to localhost `127.0.0.1`) with automatic systemd daemon reloading, service restarting, and health verification.
+  - Added proxy trust management flags `--proxy [IPS]`, `--no-proxy`, and `--trusted-proxies <IPS>` allowing users to enable or disable reverse proxy header handling and restrict trust to specific upstream proxy IPs (e.g. Nginx Proxy Manager) without changing the network bind address.
 - **Service Configuration Helper (`scripts/configure_access.py`)**:
-  - Implemented standalone Python helper for reading and updating `MP3METAFIX_HOST` and `MP3METAFIX_PORT` inside systemd `[Service]` sections with strict host/port validation (preventing shell injection), atomic file replacement, and permission preservation.
+  - Implemented standalone Python helper for reading and updating `MP3METAFIX_HOST`, `MP3METAFIX_PORT`, `MP3METAFIX_TRUST_PROXIES`, and `MP3METAFIX_TRUSTED_PROXIES` inside systemd `[Service]` sections with strict host/port/CIDR validation (preventing shell injection), atomic file replacement, and permission preservation.
 - **Enhanced Post-Installation and Status Guidance**:
-  - Updated post-installation summary output and `./install.sh --status` to display active URLs and clear instructions on enabling LAN access for headless and container environments.
+  - Updated post-installation summary output and `./install.sh --status` to display active URLs, reverse proxy trust status, and clear instructions on enabling LAN access for headless and container environments.
+
+### Fixed
+- **Custom Bind IP Health Probes & Endpoint Reporting**:
+  - Configured health check probes and active access URL reporting to dynamically target the configured interface when bound to a specific IP (e.g. `--bind 192.168.0.190`), eliminating false timeout warnings caused by probing localhost on dedicated interface binds.
+- **Help Flag Aliases**:
+  - Accepted `--h` and `-help` as aliases for `--help` / `-h` in `install.sh`.
 
 ### Documentation & Lifecycle
 - **Pre-Handoff vs Handoff-Capable Update Transition Semantics**:

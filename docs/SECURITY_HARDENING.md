@@ -109,12 +109,12 @@ This document logs the threat model, attack surface analysis, vulnerability vect
   4. Tri-state CLI exit codes (`0`=changed, `2`=unchanged, `1`=failed) ensuring the installer propagates failures and prevents reporting false successes.
   5. Process image replacement (`exec bash`) upon git updates guarded with commit hash checks and `_MP3METAFIX_REEXEC=1` environment variables to prevent infinite restart loops.
 
-### Vector 19: Safe Service Access & Network Binding Hardening [COMPLETED]
-- **Threat**: Attackers attempting command injection through malformed host parameters passed to service configuration scripts, or unintentional exposure of unauthenticated services on public/untrusted interfaces during automated setup.
+### Vector 19: Safe Service Access, Proxy Trust & Network Binding Hardening [COMPLETED]
+- **Threat**: Attackers attempting command injection through malformed host or proxy IP parameters passed to service configuration scripts, unintentional exposure of unauthenticated services on public/untrusted interfaces during automated setup, or spoofed proxy header injection.
 - **Defense**:
-  1. Strict validation in `scripts/configure_access.py` using Python's `ipaddress` module and RFC 1123 hostname regex, explicitly rejecting spaces, tabs, newlines, semicolons, shell metacharacters, and quote delimiters.
-  2. Secure default: Fresh installations retain the secure loopback default (`127.0.0.1`), requiring explicit administrative command execution (`./install.sh --lan` or `./install.sh --bind <IP>`) to allow external network reachability.
-  3. Safe atomic writes: Modifies only `Environment="MP3METAFIX_HOST=..."` and `Environment="MP3METAFIX_PORT=..."` within `[Service]`, preserving permissions, sandboxing limits, and other environment variables.
+  1. Strict validation in `scripts/configure_access.py` using Python's `ipaddress` module and RFC 1123 hostname regex, explicitly validating IPv4/IPv6 addresses and CIDR subnets while rejecting spaces, tabs, newlines, semicolons, shell metacharacters, and quote delimiters.
+  2. Secure default: Fresh installations retain the secure loopback default (`127.0.0.1`) and proxy trust disabled (`MP3METAFIX_TRUST_PROXIES=false`), requiring explicit administrative command execution (`./install.sh --lan`, `./install.sh --bind <IP>`, or `./install.sh --proxy <IP>`) to allow external network reachability or upstream proxy trust.
+  3. Safe atomic writes: Modifies only target directives (`MP3METAFIX_HOST`, `MP3METAFIX_PORT`, `MP3METAFIX_TRUST_PROXIES`, `MP3METAFIX_TRUSTED_PROXIES`) within `[Service]`, preserving permissions, sandboxing limits, and other environment variables.
 
 
 

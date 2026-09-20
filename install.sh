@@ -49,21 +49,24 @@ show_help() {
     print_banner
     echo -e "Usage: ${BOLD}./install.sh [OPTIONS]${NC}\n"
     echo "Options:"
-    echo "  --install           Install MP3MetaFix & systemd service (default action)"
-    echo "  --update            Pull latest updates and rebuild dependencies"
-    echo "  --uninstall         Remove MP3MetaFix service, desktop launcher, and configs"
-    echo "  --status            Check installation and service status"
-    echo "  --access            Show network bind address, status, and LAN access URLs"
-    echo "  --lan               Switch service to listen on all network interfaces (0.0.0.0)"
-    echo "  --local             Switch service to listen on localhost only (127.0.0.1)"
-    echo "  --bind <HOST>       Set custom bind host (e.g. 0.0.0.0, 127.0.0.1, or IP)"
-    echo "  --version, -v       Display application version"
-    echo "  --no-service        Skip installing systemd service"
-    echo "  --headless          Force headless server / LXC installation mode"
-    echo "  --desktop           Force desktop environment installation mode"
-    echo "  --port <PORT>       Custom server port (default: 8844)"
-    echo "  --user <USER>       Specify user for systemd service (default: current user)"
-    echo "  --help, -h          Show this help message"
+    echo "  --install               Install MP3MetaFix & systemd service (default action)"
+    echo "  --update                Pull latest updates and rebuild dependencies"
+    echo "  --uninstall             Remove MP3MetaFix service, desktop launcher, and configs"
+    echo "  --status                Check installation and service status"
+    echo "  --access                Show network bind address, proxy trust status, and LAN URLs"
+    echo "  --lan                   Switch service to listen on all network interfaces (0.0.0.0)"
+    echo "  --local                 Switch service to listen on localhost only (127.0.0.1)"
+    echo "  --bind <HOST>           Set custom bind host (e.g. 0.0.0.0, 127.0.0.1, or IP)"
+    echo "  --proxy [IPS]           Enable reverse proxy trust (optional comma-separated IPs)"
+    echo "  --no-proxy              Disable reverse proxy trust (ignore forwarded headers)"
+    echo "  --trusted-proxies <IPS> Set explicit trusted reverse proxy IPs/subnets"
+    echo "  --version, -v           Display application version"
+    echo "  --no-service            Skip installing systemd service"
+    echo "  --headless              Force headless server / LXC installation mode"
+    echo "  --desktop               Force desktop environment installation mode"
+    echo "  --port <PORT>           Custom server port (default: 8844)"
+    echo "  --user <USER>           Specify user for systemd service (default: current user)"
+    echo "  --help, -h              Show this help message"
     echo ""
     exit 0
 }
@@ -561,6 +564,8 @@ do_access_config() {
     print_banner
     local target_host="$1"
     local target_port="$2"
+    local target_trust="$3"
+    local target_trusted="$4"
     local cfg_script="${INSTALL_DIR}/scripts/configure_access.py"
 
     if [ ! -f "$cfg_script" ] || [ ! -f "${INSTALL_DIR}/.venv/bin/python" ]; then
@@ -580,18 +585,25 @@ do_access_config() {
     local svc_type="${svc_info##*:}"
 
     # If no modification is requested, perform inspection
-    if [ -z "$target_host" ] && [ -z "$target_port" ]; then
+    if [ -z "$target_host" ] && [ -z "$target_port" ] && [ -z "$target_trust" ] && [ -z "$target_trusted" ]; then
         log_info "Inspecting network access configuration (${svc_type} service: ${svc_file})..."
         local json_info
         json_info="$("${INSTALL_DIR}/.venv/bin/python" "$cfg_script" get "$svc_file")"
-        local cur_host cur_port
+        local cur_host cur_port cur_trust cur_trusted
         cur_host=$(echo "$json_info" | grep -oP '(?<="host": ")[^"]+' || echo "127.0.0.1")
         cur_port=$(echo "$json_info" | grep -oP '(?<="port": ")[^"]+' || echo "8844")
+        cur_trust=$(echo "$json_info" | grep -oP '(?<="trust_proxies": ")[^"]+' || echo "false")
+        cur_trusted=$(echo "$json_info" | grep -oP '(?<="trusted_proxies": ")[^"]+' || echo "127.0.0.1,::1")
 
         echo ""
         echo -e "${BOLD}Current Service Network Configuration:${NC}"
         echo -e "  • ${BOLD}Configured Bind Host:${NC} ${cur_host}"
         echo -e "  • ${BOLD}Configured Port:${NC}      ${cur_port}"
+        if [ "$cur_trust" = "true" ]; then
+            echo -e "  • ${BOLD}Reverse Proxy Trust:${NC}  ${GREEN}ENABLED${NC} (Trusted: ${cur_trusted})"
+        else
+            echo -e "  • ${BOLD}Reverse Proxy Trust:${NC}  ${YELLOW}DISABLED${NC} (Forwarded headers ignored)"
+        fi
         echo -e "  • ${BOLD}Service File:${NC}         ${svc_file} (${svc_type})"
 
         # Check service status
@@ -609,55 +621,75 @@ do_access_config() {
             fi
         fi
 
+        # Determine probe host
+        local probe_host="127.0.0.1"
+        if [ "$cur_host" != "0.0.0.0" ] && [ "$cur_host" != "::" ] && [ "$cur_host" != "localhost" ] && [ "$cur_host" != "127.0.0.1" ]; then
+            probe_host="$cur_host"
+        fi
+
         # Check HTTP health
-        if curl -s -f "http://127.0.0.1:${cur_port}/api/health" >/dev/null 2>&1; then
-            echo -e "  • ${BOLD}Health Check:${NC}         ${GREEN}OK (Responding on port ${cur_port})${NC}"
+        if curl -s -f "http://${probe_host}:${cur_port}/api/health" >/dev/null 2>&1; then
+            echo -e "  • ${BOLD}Health Check:${NC}         ${GREEN}OK (Responding on http://${probe_host}:${cur_port})${NC}"
         else
             echo -e "  • ${BOLD}Health Check:${NC}         ${YELLOW}NOT RESPONDING on port ${cur_port}${NC}"
         fi
 
         echo ""
         echo -e "${BOLD}Access URLs:${NC}"
-        echo -e "  • ${BOLD}Localhost:${NC}            http://127.0.0.1:${cur_port}"
 
-        # Detect LAN IPs
-        local lan_ips
-        lan_ips=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^127\.' | grep -v '^$' || true)
-        if [ -n "$lan_ips" ]; then
-            if [ "$cur_host" = "0.0.0.0" ] || [ "$cur_host" = "::" ]; then
-                echo -e "  • ${BOLD}LAN Access:${NC}            ${GREEN}ENABLED${NC} on all interfaces:"
-                while IFS= read -r ip_addr; do
-                    [ -n "$ip_addr" ] && echo -e "      ➜ http://${ip_addr}:${cur_port}"
-                done <<< "$lan_ips"
-            else
-                echo -e "  • ${BOLD}LAN Access:${NC}            ${YELLOW}DISABLED${NC} (Bound to ${cur_host} only)"
+        if [ "$cur_host" = "127.0.0.1" ] || [ "$cur_host" = "localhost" ]; then
+            echo -e "  • ${BOLD}Localhost:${NC}            http://127.0.0.1:${cur_port}"
+            echo -e "  • ${BOLD}LAN Access:${NC}            ${YELLOW}DISABLED${NC} (Bound to ${cur_host} only)"
+            local lan_ips
+            lan_ips=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^127\.' | grep -v '^$' || true)
+            if [ -n "$lan_ips" ]; then
                 echo -e "    Detected network IPs on this machine:"
                 while IFS= read -r ip_addr; do
                     [ -n "$ip_addr" ] && echo -e "      ➜ http://${ip_addr}:${cur_port} (Unreachable until LAN access enabled)"
                 done <<< "$lan_ips"
-                echo ""
-                echo -e "${BOLD}Quick Switching Commands:${NC}"
-                echo -e "  • Enable LAN access:      ${CYAN}./install.sh --lan${NC} (or ./install.sh --bind 0.0.0.0)"
-                echo -e "  • Restrict to localhost:  ${CYAN}./install.sh --local${NC} (or ./install.sh --bind 127.0.0.1)"
+            fi
+        elif [ "$cur_host" = "0.0.0.0" ] || [ "$cur_host" = "::" ]; then
+            echo -e "  • ${BOLD}Localhost:${NC}            http://127.0.0.1:${cur_port}"
+            local lan_ips
+            lan_ips=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^127\.' | grep -v '^$' || true)
+            if [ -n "$lan_ips" ]; then
+                echo -e "  • ${BOLD}LAN Access:${NC}            ${GREEN}ENABLED${NC} on all network interfaces:"
+                while IFS= read -r ip_addr; do
+                    [ -n "$ip_addr" ] && echo -e "      ➜ http://${ip_addr}:${cur_port}"
+                done <<< "$lan_ips"
+            else
+                echo -e "  • ${BOLD}LAN Access:${NC}            ${GREEN}ENABLED${NC} (Listening on 0.0.0.0)"
             fi
         else
-            if [ "$cur_host" = "0.0.0.0" ]; then
-                echo -e "  • ${BOLD}LAN Access:${NC}            ${GREEN}ENABLED${NC} (Listening on 0.0.0.0)"
-            else
-                echo -e "  • ${BOLD}LAN Access:${NC}            ${YELLOW}DISABLED${NC} (Bound to ${cur_host})"
-            fi
+            echo -e "  • ${BOLD}Bound Interface:${NC}      http://${cur_host}:${cur_port}"
+            echo -e "  • ${BOLD}LAN Access:${NC}            ${GREEN}ENABLED${NC} (Listening specifically on ${cur_host})"
+            echo -e "  • ${BOLD}Localhost (127.0.0.1):${NC} ${YELLOW}NOT BOUND${NC} (Service is bound only to ${cur_host})"
         fi
+
+        echo ""
+        echo -e "${BOLD}Quick Maintenance Commands:${NC}"
+        echo -e "  • Enable LAN access:      ${CYAN}./install.sh --lan${NC} (or ./install.sh --bind 0.0.0.0)"
+        echo -e "  • Restrict to localhost:  ${CYAN}./install.sh --local${NC} (or ./install.sh --bind 127.0.0.1)"
+        echo -e "  • Custom interface bind:  ${CYAN}./install.sh --bind <IP>${NC}"
+        echo -e "  • Enable proxy trust:     ${CYAN}./install.sh --proxy [TRUSTED_IPS]${NC}"
+        echo -e "  • Disable proxy trust:    ${CYAN}./install.sh --no-proxy${NC}"
         return 0
     fi
 
-    # Update host/port binding
-    log_info "Updating MP3MetaFix network binding in ${svc_file}..."
+    # Update host/port/proxy configuration
+    log_info "Updating MP3MetaFix network configuration in ${svc_file}..."
     local py_args=("set" "$svc_file")
     if [ -n "$target_host" ]; then
         py_args+=("--host" "$target_host")
     fi
     if [ -n "$target_port" ]; then
         py_args+=("--port" "$target_port")
+    fi
+    if [ -n "$target_trust" ]; then
+        py_args+=("--trust-proxies" "$target_trust")
+    fi
+    if [ -n "$target_trusted" ]; then
+        py_args+=("--trusted-proxies" "$target_trusted")
     fi
 
     set +e
@@ -671,7 +703,7 @@ do_access_config() {
     set -e
 
     if [ "$update_res" -ne 0 ] && [ "$update_res" -ne 2 ]; then
-        log_error "Failed to update network binding in ${svc_file}."
+        log_error "Failed to update network configuration in ${svc_file}."
         exit 1
     fi
 
@@ -689,18 +721,26 @@ do_access_config() {
         fi
     fi
 
-    # Read effective host and port
+    # Read effective host, port, and proxy configuration
     local json_info
     json_info="$("${INSTALL_DIR}/.venv/bin/python" "$cfg_script" get "$svc_file")"
-    local eff_host eff_port
+    local eff_host eff_port eff_trust eff_trusted
     eff_host=$(echo "$json_info" | grep -oP '(?<="host": ")[^"]+' || echo "127.0.0.1")
     eff_port=$(echo "$json_info" | grep -oP '(?<="port": ")[^"]+' || echo "8844")
+    eff_trust=$(echo "$json_info" | grep -oP '(?<="trust_proxies": ")[^"]+' || echo "false")
+    eff_trusted=$(echo "$json_info" | grep -oP '(?<="trusted_proxies": ")[^"]+' || echo "127.0.0.1,::1")
+
+    # Determine probe host
+    local probe_host="127.0.0.1"
+    if [ "$eff_host" != "0.0.0.0" ] && [ "$eff_host" != "::" ] && [ "$eff_host" != "localhost" ] && [ "$eff_host" != "127.0.0.1" ]; then
+        probe_host="$eff_host"
+    fi
 
     # Verify health probe
-    log_info "Verifying service health on port ${eff_port}..."
+    log_info "Verifying service health on http://${probe_host}:${eff_port}/api/health..."
     local health_ok=false
     for i in {1..20}; do
-        if curl -s -f "http://127.0.0.1:${eff_port}/api/health" >/dev/null 2>&1; then
+        if curl -s -f "http://${probe_host}:${eff_port}/api/health" >/dev/null 2>&1; then
             health_ok=true
             break
         fi
@@ -711,13 +751,24 @@ do_access_config() {
     if [ "$health_ok" = true ]; then
         log_success "Service successfully updated and verified healthy!"
     else
-        log_warn "Service restarted, but health check probe on port ${eff_port} has not responded yet."
+        log_warn "Service restarted, but health check probe on http://${probe_host}:${eff_port} has not responded yet."
     fi
 
-    echo -e "${BOLD}Active MP3MetaFix Access URLs:${NC}"
-    echo -e "  • ${BOLD}Localhost:${NC}  http://127.0.0.1:${eff_port}"
+    echo -e "${BOLD}Active MP3MetaFix Configuration:${NC}"
+    echo -e "  • ${BOLD}Configured Bind:${NC}      ${eff_host}:${eff_port}"
+    if [ "$eff_trust" = "true" ]; then
+        echo -e "  • ${BOLD}Reverse Proxy Trust:${NC}  ${GREEN}ENABLED${NC} (Trusted: ${eff_trusted})"
+    else
+        echo -e "  • ${BOLD}Reverse Proxy Trust:${NC}  ${YELLOW}DISABLED${NC} (Forwarded headers ignored)"
+    fi
 
-    if [ "$eff_host" = "0.0.0.0" ] || [ "$eff_host" = "::" ]; then
+    echo -e "${BOLD}Active Access URLs:${NC}"
+    if [ "$eff_host" = "127.0.0.1" ] || [ "$eff_host" = "localhost" ]; then
+        echo -e "  • ${BOLD}Localhost:${NC}            http://127.0.0.1:${eff_port}"
+        echo -e "  • ${BOLD}LAN Access:${NC}            ${YELLOW}RESTRICTED${NC} (Bound to ${eff_host} only)"
+        echo -e "    Run '${CYAN}./install.sh --lan${NC}' anytime to enable access from other machines on your LAN."
+    elif [ "$eff_host" = "0.0.0.0" ] || [ "$eff_host" = "::" ]; then
+        echo -e "  • ${BOLD}Localhost:${NC}            http://127.0.0.1:${eff_port}"
         local lan_ips
         lan_ips=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^127\.' | grep -v '^$' || true)
         if [ -n "$lan_ips" ]; then
@@ -727,8 +778,9 @@ do_access_config() {
             done <<< "$lan_ips"
         fi
     else
-        echo -e "  • ${BOLD}LAN Access:${NC}  ${YELLOW}RESTRICTED${NC} (Bound to ${eff_host} only)"
-        echo -e "    Run '${CYAN}./install.sh --lan${NC}' anytime to enable access from other machines on your LAN."
+        echo -e "  • ${BOLD}Bound Interface:${NC}      http://${eff_host}:${eff_port}"
+        echo -e "  • ${BOLD}LAN Access:${NC}            ${GREEN}ENABLED${NC} (Listening specifically on ${eff_host})"
+        echo -e "  • ${BOLD}Localhost (127.0.0.1):${NC} ${YELLOW}NOT BOUND${NC} (Service is bound only to ${eff_host})"
     fi
 }
 
@@ -745,6 +797,8 @@ do_status() {
     svc_info="$(get_active_service_file)"
     local cur_host="127.0.0.1"
     local cur_port="${DEFAULT_PORT}"
+    local cur_trust="false"
+    local cur_trusted="127.0.0.1,::1"
 
     if [ -n "$svc_info" ] && [ -f "${INSTALL_DIR}/scripts/configure_access.py" ] && [ -f "${INSTALL_DIR}/.venv/bin/python" ]; then
         local svc_file="${svc_info%%:*}"
@@ -753,6 +807,8 @@ do_status() {
         if [ -n "$json_info" ]; then
             cur_host=$(echo "$json_info" | grep -oP '(?<="host": ")[^"]+' || echo "127.0.0.1")
             cur_port=$(echo "$json_info" | grep -oP '(?<="port": ")[^"]+' || echo "8844")
+            cur_trust=$(echo "$json_info" | grep -oP '(?<="trust_proxies": ")[^"]+' || echo "false")
+            cur_trusted=$(echo "$json_info" | grep -oP '(?<="trusted_proxies": ")[^"]+' || echo "127.0.0.1,::1")
         fi
     fi
 
@@ -767,9 +823,19 @@ do_status() {
     fi
 
     echo -e "Configured Bind:    ${cur_host}:${cur_port}"
+    if [ "$cur_trust" = "true" ]; then
+        echo -e "Proxy Trust:        ${GREEN}ENABLED${NC} (Trusted: ${cur_trusted})"
+    else
+        echo -e "Proxy Trust:        ${YELLOW}DISABLED${NC}"
+    fi
 
-    if curl -s -f "http://127.0.0.1:${cur_port}/api/health" >/dev/null 2>&1; then
-        echo -e "HTTP Endpoint:      ${GREEN}RESPONDING on http://127.0.0.1:${cur_port}${NC}"
+    local probe_host="127.0.0.1"
+    if [ "$cur_host" != "0.0.0.0" ] && [ "$cur_host" != "::" ] && [ "$cur_host" != "localhost" ] && [ "$cur_host" != "127.0.0.1" ]; then
+        probe_host="$cur_host"
+    fi
+
+    if curl -s -f "http://${probe_host}:${cur_port}/api/health" >/dev/null 2>&1; then
+        echo -e "HTTP Endpoint:      ${GREEN}RESPONDING on http://${probe_host}:${cur_port}${NC}"
     else
         echo -e "HTTP Endpoint:      ${YELLOW}NOT RESPONDING on port ${cur_port}${NC}"
     fi
@@ -783,6 +849,8 @@ do_status() {
                 [ -n "$ip_addr" ] && echo -e "  ➜ http://${ip_addr}:${cur_port}"
             done <<< "$lan_ips"
         fi
+    elif [ "$cur_host" != "127.0.0.1" ] && [ "$cur_host" != "localhost" ]; then
+        echo -e "Bound Interface:    ➜ http://${cur_host}:${cur_port}"
     else
         echo -e "LAN Access:         ${YELLOW}RESTRICTED (Localhost only)${NC} — Run './install.sh --lan' to allow LAN access"
     fi
@@ -830,6 +898,8 @@ SKIP_SERVICE=false
 TARGET_PORT="$DEFAULT_PORT"
 TARGET_BIND_HOST=""
 TARGET_PORT_ARG=""
+TARGET_TRUST_PROXIES=""
+TARGET_TRUSTED_PROXIES=""
 SERVICE_USER="${SUDO_USER:-$USER}"
 
 while [[ $# -gt 0 ]]; do
@@ -858,6 +928,31 @@ while [[ $# -gt 0 ]]; do
                 shift 1
             fi
             ;;
+        --proxy|--trust-proxy|--trust-proxies)
+            ACTION="access"
+            TARGET_TRUST_PROXIES="true"
+            if [[ $# -ge 2 && ! "$2" =~ ^-- ]]; then
+                TARGET_TRUSTED_PROXIES="$2"
+                shift 2
+            else
+                shift 1
+            fi
+            ;;
+        --no-proxy|--no-trust-proxy|--disable-proxy)
+            ACTION="access"
+            TARGET_TRUST_PROXIES="false"
+            shift 1
+            ;;
+        --trusted-proxies|--trusted-proxy)
+            ACTION="access"
+            TARGET_TRUST_PROXIES="true"
+            if [[ $# -ge 2 && ! "$2" =~ ^-- ]]; then
+                TARGET_TRUSTED_PROXIES="$2"
+                shift 2
+            else
+                shift 1
+            fi
+            ;;
         --version|-v)
             echo "MP3MetaFix v${VERSION}"
             exit 0
@@ -871,7 +966,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --user) SERVICE_USER="$2"; shift 2 ;;
-        --help|-h) show_help ;;
+        --help|-h|--h|-help) show_help ;;
         *)
             log_error "Unknown option: $1"
             show_help
@@ -883,6 +978,6 @@ case "$ACTION" in
     install) do_install ;;
     update) do_update ;;
     status) do_status ;;
-    access) do_access_config "$TARGET_BIND_HOST" "$TARGET_PORT_ARG" ;;
+    access) do_access_config "$TARGET_BIND_HOST" "$TARGET_PORT_ARG" "$TARGET_TRUST_PROXIES" "$TARGET_TRUSTED_PROXIES" ;;
     uninstall) do_uninstall ;;
 esac

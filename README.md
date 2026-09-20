@@ -105,17 +105,21 @@ The server will run in your active terminal session and stop when you press <kbd
 |------|-------------|
 | `--install` | Default: Installs dependencies, sets up systemd service, and adds desktop integration |
 | `--update` | Pulls latest Git updates, updates python dependencies, and restarts the systemd service |
-| `--status` | Checks systemd service status and HTTP endpoint health |
-| `--access` | Displays current network binding, status, and LAN access URLs |
+| `--status` | Checks systemd service status, configured bind, proxy trust, and HTTP health |
+| `--access` | Displays current network binding, proxy trust status, and reachable LAN URLs |
 | `--lan` | Switches service to listen on all network interfaces (`0.0.0.0`) for LAN reachability |
 | `--local` | Switches service to listen on localhost only (`127.0.0.1`) |
 | `--bind <HOST>` | Sets custom bind host (e.g. `0.0.0.0`, `127.0.0.1`, or specific IP) |
+| `--proxy [IPS]` | Enables reverse proxy trust (optionally specifying trusted proxy IP/subnets) |
+| `--no-proxy` | Disables reverse proxy trust (ignores forwarded headers) |
+| `--trusted-proxies <IPS>` | Sets explicit comma-separated trusted proxy IPs/CIDRs |
 | `--uninstall` | Stops and removes systemd service, desktop entries, and launchers |
 | `--no-service` | Skips systemd service registration (standalone mode) |
 | `--headless` | Force Headless / Server / LXC mode (skips GUI desktop entries) |
 | `--desktop` | Force Desktop mode (ensures app menu launcher & icon are created) |
 | `--port <PORT>` | Custom port (default: `8844`) |
 | `--user <USER>` | Specify user for systemd service (default: current user) |
+| `--help`, `-h` | Shows help message |
 | `--version`, `-v` | Prints current version |
 
 ---

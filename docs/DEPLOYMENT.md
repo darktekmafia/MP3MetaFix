@@ -82,14 +82,15 @@ sudo systemctl restart mp3metafix.service
 
 MP3MetaFix includes built-in maintenance commands to inspect and adjust network binding without manually modifying systemd unit files:
 
-### View Current Binding & Network URLs
+### View Current Binding, Proxy Trust & Network URLs
 ```bash
 ./install.sh --access
 ```
 Displays:
 - Current configured bind host and port (`MP3METAFIX_HOST` and `MP3METAFIX_PORT`).
-- Service status (active/inactive) and health check probe status.
-- Localhost URL (`http://127.0.0.1:8844`) and detected LAN IP endpoints (e.g. `http://192.168.1.104:8844`).
+- Reverse proxy trust status and configured trusted proxy subnets (`MP3METAFIX_TRUST_PROXIES`, `MP3METAFIX_TRUSTED_PROXIES`).
+- Service status (active/inactive) and health check probe status on the configured interface.
+- Active access endpoints (Localhost, LAN, or specific bound interface).
 
 ### Enable LAN Access (All Interfaces)
 ```bash
@@ -107,7 +108,24 @@ Restricts listening to local loopback `127.0.0.1`.
 
 ### Custom Host / IP Binding
 ```bash
-sudo ./install.sh --bind 192.168.1.50
+sudo ./install.sh --bind 192.168.0.190
+```
+Binds the service specifically to a dedicated network interface. The health probe and endpoint reporting automatically target `http://192.168.0.190:8844`.
+
+### Reverse Proxy Trust Configuration (`--proxy`, `--no-proxy`, `--trusted-proxies`)
+Configure reverse proxy header processing (`X-Forwarded-For`, `X-Forwarded-Proto`) without manually editing unit files:
+```bash
+# Enable proxy trust with loopback defaults (127.0.0.1, ::1)
+sudo ./install.sh --proxy
+
+# Enable proxy trust for a dedicated reverse proxy IP / subnet (e.g. Nginx Proxy Manager)
+sudo ./install.sh --proxy 192.168.0.50
+
+# Specify multiple trusted proxy CIDR subnets
+sudo ./install.sh --trusted-proxies 127.0.0.1,192.168.0.50,10.0.0.0/8
+
+# Disable proxy trust (direct client connections only)
+sudo ./install.sh --no-proxy
 ```
 
 ---
