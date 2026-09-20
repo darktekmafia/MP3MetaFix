@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Workspace Engineering Standards & Rule Hardening (`AGENTS.md`)**:
   - Added **Rule 8 (Mobile-First Responsive Design for `/app`)** mandating unobtrusive prompts, zero-overflow track flooring, and compact bottom sheets.
   - Added **Rule 9 (User Choice & Non-Destructive Data Merging)** guaranteeing user per-field control over metadata overwrites.
+- **Seamless Session Restoration & Memory Retention (`GET /api/session`)**:
+  - Implemented session handshake endpoint (`GET /api/session`) checking the secure `HttpOnly` cookie against active storage sessions on disk.
+  - Automatically restores open file sessions on page reload or when mobile operating systems reclaim browser memory during app switching, mounting the audio waveform and populating metadata fields without showing the dropzone.
 
 ---
 
