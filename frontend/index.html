@@ -650,12 +650,35 @@
       }
     }
 
+    let telemetryTimer = null;
+
+    function startTelemetryPolling() {
+      if (telemetryTimer) return;
+      fetchTelemetry();
+      telemetryTimer = setInterval(fetchTelemetry, 4000);
+    }
+
+    function stopTelemetryPolling() {
+      if (telemetryTimer) {
+        clearInterval(telemetryTimer);
+        telemetryTimer = null;
+      }
+    }
+
     // Expose fetchTelemetry globally so login can trigger an immediate poll
     window.fetchTelemetry = fetchTelemetry;
+    window.startTelemetryPolling = startTelemetryPolling;
 
-    // Initial fetch and 4s interval polling
-    fetchTelemetry();
-    setInterval(fetchTelemetry, 4000);
+    // Start polling once authenticated
+    window.addEventListener('mp3metafix:auth-ready', (e) => {
+      if (e.detail && e.detail.authenticated) {
+        startTelemetryPolling();
+      }
+    });
+
+    window.addEventListener('mp3metafix:auth-logout', () => {
+      stopTelemetryPolling();
+    });
   </script>
 </body>
 </html>

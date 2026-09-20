@@ -356,6 +356,7 @@
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
       notify('You have been signed out', 'info');
+      window.dispatchEvent(new CustomEvent('mp3metafix:auth-logout'));
       await checkAuthStatus();
       // If current page requires auth and guest mode is off, modal will re-open
     } catch (err) {
