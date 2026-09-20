@@ -47,6 +47,21 @@
         <p class="hub-hero-subtitle">
           Choose between the mobile-optimized quick tagger or the desktop power-user management workspace.
         </p>
+
+        <!-- Live Telemetry Quick Status Bar (Instant visibility at top) -->
+        <a href="#systemTelemetry" class="telemetry-quickbar" title="Jump to Detailed System Diagnostics & Live Telemetry">
+          <span class="quick-pill"><span class="q-dot dot-cpu"></span> CPU: <strong id="quickCpu">--%</strong></span>
+          <span class="quick-sep">&bull;</span>
+          <span class="quick-pill"><span class="q-dot dot-ram"></span> RAM: <strong id="quickRam">--%</strong></span>
+          <span class="quick-sep">&bull;</span>
+          <span class="quick-pill"><span class="q-dot dot-disk"></span> Disk: <strong id="quickDisk">--%</strong></span>
+          <span class="quick-sep">&bull;</span>
+          <span class="quick-pill"><span class="q-dot dot-storage"></span> Cache: <strong id="quickStorage">0 MB</strong></span>
+          <span class="quick-cta">
+            <span>Diagnostics</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
+          </span>
+        </a>
       </section>
 
       <!-- Interface Chooser Cards Grid -->
@@ -154,7 +169,7 @@
       </section>
 
       <!-- Live System Telemetry Section -->
-      <section class="hub-telemetry-section" aria-label="System Diagnostics">
+      <section class="hub-telemetry-section" id="systemTelemetry" aria-label="System Diagnostics">
         <div class="telemetry-section-header">
           <div>
             <h3 class="telemetry-section-title">Live Server Diagnostics & Resource Telemetry</h3>
@@ -338,6 +353,8 @@
           document.getElementById('statCpuPercent').textContent = `${data.cpu.estimated_percent}%`;
           document.getElementById('statCpuMeter').style.width = `${Math.min(100, data.cpu.estimated_percent)}%`;
           document.getElementById('statCpuLoadAvg').textContent = `${data.cpu.load_1m} / ${data.cpu.load_5m} / ${data.cpu.load_15m}`;
+          const quickCpu = document.getElementById('quickCpu');
+          if (quickCpu) quickCpu.textContent = `${data.cpu.estimated_percent}%`;
         }
 
         // 2. RAM
@@ -346,6 +363,8 @@
           document.getElementById('statRamPercent').textContent = `${data.memory.used_percent}%`;
           document.getElementById('statRamMeter').style.width = `${Math.min(100, data.memory.used_percent)}%`;
           document.getElementById('statRamDetails').textContent = `${data.memory.used_mb}MB / ${data.memory.available_mb}MB free`;
+          const quickRam = document.getElementById('quickRam');
+          if (quickRam) quickRam.textContent = `${data.memory.used_percent}%`;
         }
 
         // 3. Disk
@@ -354,6 +373,8 @@
           document.getElementById('statDiskPercent').textContent = `${data.disk.used_percent}%`;
           document.getElementById('statDiskMeter').style.width = `${Math.min(100, data.disk.used_percent)}%`;
           document.getElementById('statDiskFree').textContent = `${data.disk.free_gb} GB Free`;
+          const quickDisk = document.getElementById('quickDisk');
+          if (quickDisk) quickDisk.textContent = `${data.disk.used_percent}%`;
         }
 
         // 4. App Storage
@@ -362,6 +383,8 @@
           document.getElementById('statStorageSize').textContent = `${data.app_storage.temp_storage_mb} MB`;
           document.getElementById('statStorageMeter').style.width = `${Math.min(100, data.app_storage.temp_storage_used_percent)}%`;
           document.getElementById('statStorageQuota').textContent = `${data.app_storage.temp_storage_used_percent}% of ${data.app_storage.max_temp_storage_mb}MB`;
+          const quickStorage = document.getElementById('quickStorage');
+          if (quickStorage) quickStorage.textContent = `${data.app_storage.temp_storage_mb} MB`;
         }
 
         // 5. Environment & Runtime
