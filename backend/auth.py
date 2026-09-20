@@ -166,9 +166,12 @@ class ChangePasswordRequest(BaseModel):
 
 class SettingsUpdateRequest(BaseModel):
     guest_mode_enabled: Optional[bool] = None
+    guest_mode: Optional[bool] = None
     session_ttl_minutes: Optional[int] = Field(default=None, ge=5, le=1440)
     max_upload_size_mb: Optional[int] = Field(default=None, ge=10, le=2048)
     max_global_storage_mb: Optional[int] = Field(default=None, ge=100, le=102400)
+    max_temp_storage_mb: Optional[int] = Field(default=None, ge=100, le=102400)
+    max_sessions: Optional[int] = Field(default=None, ge=1, le=1000)
 
 
 # --- Authentication & Settings Manager ---
@@ -342,6 +345,12 @@ class AuthManager:
     def update_settings(self, updates: Dict[str, Any]) -> Dict[str, Any]:
         """Apply updates to system settings."""
         current = self._load_settings()
+        # Normalize aliases
+        if "guest_mode" in updates and updates["guest_mode"] is not None:
+            updates["guest_mode_enabled"] = updates["guest_mode"]
+        if "max_temp_storage_mb" in updates and updates["max_temp_storage_mb"] is not None:
+            updates["max_global_storage_mb"] = updates["max_temp_storage_mb"]
+
         for k, v in updates.items():
             if v is not None:
                 current[k] = v
@@ -353,7 +362,7 @@ class AuthManager:
     def is_guest_mode_enabled(self) -> bool:
         """Check if unauthenticated guest access to /app is permitted."""
         settings = self._load_settings()
-        return bool(settings.get("guest_mode_enabled", False))
+        return bool(settings.get("guest_mode_enabled", settings.get("guest_mode", False)))
 
 
 auth_manager = AuthManager()

@@ -380,9 +380,9 @@
         const inputMaxStorage = document.getElementById('settingMaxStorage');
         const adminSection = document.getElementById('settingsAdminSection');
 
-        if (toggleGuest) toggleGuest.checked = !!settings.guest_mode;
+        if (toggleGuest) toggleGuest.checked = !!(settings.guest_mode ?? settings.guest_mode_enabled);
         if (inputMaxSessions) inputMaxSessions.value = settings.max_sessions || 10;
-        if (inputMaxStorage) inputMaxStorage.value = settings.max_temp_storage_mb || 2048;
+        if (inputMaxStorage) inputMaxStorage.value = settings.max_global_storage_mb || settings.max_temp_storage_mb || 2048;
 
         if (adminSection) {
           if (AuthState.role === 'admin') {
@@ -411,10 +411,16 @@
     const inputMaxStorage = document.getElementById('settingMaxStorage');
     const submitBtn = document.getElementById('btnSaveSettings');
 
+    const isGuest = toggleGuest ? toggleGuest.checked : false;
+    const maxStorage = inputMaxStorage ? parseInt(inputMaxStorage.value, 10) : 2048;
+    const maxSessions = inputMaxSessions ? parseInt(inputMaxSessions.value, 10) : 10;
+
     const payload = {
-      guest_mode: toggleGuest ? toggleGuest.checked : false,
-      max_sessions: inputMaxSessions ? parseInt(inputMaxSessions.value, 10) : 10,
-      max_temp_storage_mb: inputMaxStorage ? parseInt(inputMaxStorage.value, 10) : 2048,
+      guest_mode_enabled: isGuest,
+      guest_mode: isGuest,
+      max_global_storage_mb: maxStorage,
+      max_temp_storage_mb: maxStorage,
+      max_sessions: maxSessions,
     };
 
     if (submitBtn) submitBtn.disabled = true;
@@ -429,7 +435,7 @@
 
       if (res.ok) {
         notify('System settings updated successfully', 'success');
-        AuthState.guestMode = !!payload.guest_mode;
+        AuthState.guestMode = isGuest;
         renderHeaderAuth();
       } else {
         notify(data.detail || 'Failed to save settings', 'error');

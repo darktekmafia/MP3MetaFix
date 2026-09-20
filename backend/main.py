@@ -319,11 +319,16 @@ async def change_password(req: ChangePasswordRequest, user: Dict[str, Any] = Dep
 async def get_settings(user: Dict[str, Any] = Depends(require_authenticated_user)):
     """Get active system settings."""
     settings = auth_manager.get_settings()
+    guest_enabled = bool(settings.get("guest_mode_enabled", settings.get("guest_mode", False)))
+    storage_quota = settings.get("max_global_storage_mb", settings.get("max_temp_storage_mb", MAX_GLOBAL_TEMP_STORAGE_MB))
     return {
-        "guest_mode_enabled": settings.get("guest_mode_enabled", False),
+        "guest_mode_enabled": guest_enabled,
+        "guest_mode": guest_enabled,
         "session_ttl_minutes": settings.get("session_ttl_minutes", SESSION_TTL_MINUTES),
         "max_upload_size_mb": settings.get("max_upload_size_mb", MAX_UPLOAD_SIZE_MB),
-        "max_global_storage_mb": settings.get("max_global_storage_mb", MAX_GLOBAL_TEMP_STORAGE_MB),
+        "max_global_storage_mb": storage_quota,
+        "max_temp_storage_mb": storage_quota,
+        "max_sessions": settings.get("max_sessions", 10),
         "version": VERSION,
         "is_admin": user.get("role") == "admin",
     }

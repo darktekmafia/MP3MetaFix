@@ -2202,9 +2202,17 @@ def test_guest_mode_vs_protected_mode_enforcement(unauth_client, auth_client, sa
     res_up = auth_client.post("/api/upload", files={"file": ("test.mp3", sample_mp3_bytes, "audio/mpeg")})
     assert res_up.status_code == 200
 
-    # --- Scenario B: Guest Mode Enabled by Admin ---
-    auth_client.post("/api/settings", json={"guest_mode_enabled": True})
+    # --- Scenario B: Guest Mode Enabled by Admin (testing both alias keys) ---
+    res_set = auth_client.post("/api/settings", json={"guest_mode": True, "max_temp_storage_mb": 4096})
+    assert res_set.status_code == 200
     assert auth_manager.is_guest_mode_enabled() is True
+    
+    # Verify GET /api/settings returns synced aliases
+    res_get = auth_client.get("/api/settings")
+    assert res_get.status_code == 200
+    assert res_get.json()["guest_mode"] is True
+    assert res_get.json()["guest_mode_enabled"] is True
+    assert res_get.json()["max_global_storage_mb"] == 4096
 
     # Unauthenticated visitor CAN now use single-track /app editor endpoints
     res_guest_up = unauth_client.post("/api/upload", files={"file": ("guest.mp3", sample_mp3_bytes, "audio/mpeg")})
@@ -2215,6 +2223,10 @@ def test_guest_mode_vs_protected_mode_enforcement(unauth_client, auth_client, sa
     assert unauth_client.get("/api/updates/check").status_code == 401
     assert unauth_client.get("/api/settings").status_code == 401
     assert unauth_client.post("/api/settings", json={"guest_mode_enabled": False}).status_code == 401
+
+    # Disable via guest_mode: False
+    auth_client.post("/api/settings", json={"guest_mode": False})
+    assert auth_manager.is_guest_mode_enabled() is False
 
 
 
