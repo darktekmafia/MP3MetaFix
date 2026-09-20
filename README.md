@@ -40,7 +40,7 @@
 - 🔐 **Full System Authentication & Access Control**:
   - **Protected by Default**: All routes, Gateway Hub (`/`), Desktop MetaManager (`/manager`), and file editing APIs require authentication.
   - **First-Run Administrator Setup Wizard**: Automated setup prompt on first launch to create the primary administrator account with zero manual config file editing.
-  - **Configurable Guest Mode**: Administrator can enable Guest Mode in Settings to allow public/guest single-track tag editing at `/app` while keeping the Hub, live diagnostics, MetaManager, and settings locked.
+  - **Configurable Guest Mode**: Administrator can enable Guest Mode in Settings to allow public/guest access to the Gateway Hub (`/`) and Single-Track Editor (`/app`), while keeping MP3MetaManager (`/manager`), system telemetry diagnostics, and server settings locked.
   - **Zero-Dependency Security**: Standard-library PBKDF2-HMAC-SHA256 password hashing (600,000 rounds) + constant-time comparison.
   - **Distinct Trust Boundaries**: Independent signed cookie layers for account identity (`mp3metafix_auth`) and temporary file sessions (`mp3metafix_session`).
   - **In-App Settings & Quota Manager**: In-app management modal for password changes, guest mode policy, and session/disk storage quota controls.

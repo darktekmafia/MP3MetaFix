@@ -202,6 +202,14 @@
     container.appendChild(dropdown);
   }
 
+  // Check if current route is permitted for unauthenticated guests when guestMode is enabled
+  function isGuestAllowedPath() {
+    const path = window.location.pathname;
+    const isHub = path === '/' || path === '/index.html' || path === '';
+    const isApp = path === '/app' || path.startsWith('/app/');
+    return isHub || isApp;
+  }
+
   // --- API Authentication Handlers ---
   async function checkAuthStatus() {
     try {
@@ -226,15 +234,13 @@
       }
 
       if (!AuthState.authenticated) {
-        const path = window.location.pathname;
-        const isAppPage = path === '/app' || path.startsWith('/app/');
-        if (isAppPage && AuthState.guestMode) {
-          // Allowed as Guest on /app
+        if (AuthState.guestMode && isGuestAllowedPath()) {
+          // Allowed as Guest on / and /app
           closeModal('loginModal');
           closeModal('setupModal');
           window.dispatchEvent(new CustomEvent('mp3metafix:auth-ready', { detail: { ...AuthState } }));
         } else {
-          // Protected page or Guest mode disabled -> show login modal
+          // Protected page (/manager) or Guest mode disabled -> show login modal
           openModal('loginModal');
         }
       } else {
@@ -540,10 +546,7 @@
     const btnCloseLogin = document.getElementById('btnCloseLoginModal');
     if (btnCloseLogin) {
       btnCloseLogin.addEventListener('click', () => {
-        // If guest mode is allowed on /app, allow closing
-        const path = window.location.pathname;
-        const isAppPage = path === '/app' || path.startsWith('/app/');
-        if (isAppPage && AuthState.guestMode) {
+        if (AuthState.guestMode && isGuestAllowedPath()) {
           closeModal('loginModal');
         } else {
           notify('Please sign in to access this workspace', 'info');
@@ -559,9 +562,7 @@
           closeModal('settingsModal');
         }
         const loginModal = document.getElementById('loginModal');
-        const path = window.location.pathname;
-        const isAppPage = path === '/app' || path.startsWith('/app/');
-        if (loginModal && !loginModal.classList.contains('hidden') && isAppPage && AuthState.guestMode) {
+        if (loginModal && !loginModal.classList.contains('hidden') && AuthState.guestMode && isGuestAllowedPath()) {
           closeModal('loginModal');
         }
       }
@@ -572,6 +573,15 @@
       settingsModal.addEventListener('click', (e) => {
         if (e.target === settingsModal) {
           closeModal('settingsModal');
+        }
+      });
+    }
+
+    const loginModal = document.getElementById('loginModal');
+    if (loginModal) {
+      loginModal.addEventListener('click', (e) => {
+        if (e.target === loginModal && AuthState.guestMode && isGuestAllowedPath()) {
+          closeModal('loginModal');
         }
       });
     }

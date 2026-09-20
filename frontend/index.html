@@ -454,8 +454,8 @@
               </div>
               <div class="settings-row">
                 <div class="settings-label-group">
-                  <span class="settings-label">Enable Guest Mode for Single-Track Editor (/app)</span>
-                  <span class="settings-subtext">When enabled, visitors can use MP3MetaFix without logging in. The Gateway Hub, MetaManager, and Live Telemetry remain restricted to logged-in administrators.</span>
+                  <span class="settings-label">Enable Guest Mode for Public Access (/ and /app)</span>
+                  <span class="settings-subtext">When enabled, visitors can explore the Gateway Hub and use MP3MetaFix (/app) without logging in. MP3MetaManager (/manager) and Administrative Diagnostics/Settings remain restricted to logged-in accounts.</span>
                 </div>
                 <label class="toggle-switch" aria-label="Toggle Guest Mode">
                   <input type="checkbox" id="settingGuestMode">
@@ -671,12 +671,24 @@
 
     // Start polling once authenticated
     window.addEventListener('mp3metafix:auth-ready', (e) => {
+      const statusText = document.getElementById('telemetryStatusText');
+      const refreshPulse = document.querySelector('.refresh-pulse');
       if (e.detail && e.detail.authenticated) {
+        if (statusText) statusText.textContent = 'Auto-refreshing';
+        if (refreshPulse) refreshPulse.style.display = 'inline-block';
         startTelemetryPolling();
+      } else {
+        if (statusText) statusText.textContent = 'Admin sign-in required';
+        if (refreshPulse) refreshPulse.style.display = 'none';
+        stopTelemetryPolling();
       }
     });
 
     window.addEventListener('mp3metafix:auth-logout', () => {
+      const statusText = document.getElementById('telemetryStatusText');
+      const refreshPulse = document.querySelector('.refresh-pulse');
+      if (statusText) statusText.textContent = 'Admin sign-in required';
+      if (refreshPulse) refreshPulse.style.display = 'none';
       stopTelemetryPolling();
     });
   </script>

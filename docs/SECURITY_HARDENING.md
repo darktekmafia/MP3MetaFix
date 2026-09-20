@@ -121,7 +121,7 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 ### Vector 20: User Authentication, PBKDF2 Password Security & Brute-Force Rate Limiting [COMPLETED]
 - **Threat**: Unauthorized users accessing administrative telemetry or file editor on public/LAN networks, credential stuffing, brute-force password guessing, and session token conflation.
 - **Defense**:
-  1. **Default Protected Mode**: All mutating APIs, Gateway Hub, Desktop MetaManager, and telemetry require authentication unless Guest Mode is explicitly toggled by the administrator.
+  1. **Default Protected Mode**: All mutating APIs, Desktop MetaManager, and telemetry require authentication unless Guest Mode is explicitly toggled by the administrator to allow public access to `/` and `/app`.
   2. **Zero-Dependency Password Hashing**: Utilizes standard library `hashlib.pbkdf2_hmac` (`sha256`, 600,000 iterations, unique 16-byte random salt) and timing-attack-resistant `secrets.compare_digest`.
   3. **Distinct Cookie Trust Boundaries**: Decoupled `mp3metafix_auth` signed token `{user_id}.{timestamp}.{sig}` from `mp3metafix_session` `{session_id}.{timestamp}.{sig}`.
   4. **POSIX 0700 & 0600 Filesystem Security**: Persistent users (`users.json`) and system settings (`settings.json`) stored in `data/auth/` under POSIX `0700` directory and `0600` file modes.

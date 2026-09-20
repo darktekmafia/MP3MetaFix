@@ -241,8 +241,8 @@ MP3MetaFix integrates a zero-external-dependency authentication subsystem built 
         ├── !initialized ─────────► [ First-Run Setup Wizard Modal ] ──► POST /api/auth/setup
         │
         ├── initialized & !auth ──► Check Guest Mode Policy:
-        │                              ├── If Guest Mode & /app ──► Allow Single-Track Tagging (Guest Pill)
-        │                              └── Else (/manager, /, stats) ─► Show Login Modal ──► POST /api/auth/login
+        │                              ├── If Guest Mode & (/ or /app) ──► Allow Hub & Single-Track Tagging (Guest Pill)
+        │                              └── Else (/manager or Guest Mode Off) ─► Show Login Modal ──► POST /api/auth/login
         │
         └── authenticated ────────► [ Header Account Pill & Dropdown ]
                                        ├── Settings & Security Modal (Guest Mode Toggle, Quotas, Passwords)
@@ -264,7 +264,7 @@ MP3MetaFix integrates a zero-external-dependency authentication subsystem built 
 4. **Brute-Force Rate Limiting (`LoginRateLimiter`)**:
    - Enforces a 5-attempt sliding window per client IP per 60 seconds with an automatic 5-minute cooldown period upon threshold violation.
 5. **Configurable Guest Mode Policy**:
-   - Administrator-toggled policy allowing anonymous visitors to access the focused `/app` single-track editor while restricting the Gateway Hub (`/`), Desktop MetaManager (`/manager`), System Telemetry (`/api/system/stats`), and Settings to authenticated administrators.
+   - Administrator-toggled policy allowing anonymous visitors to access the Gateway Hub (`/`) and focused single-track editor (`/app`) while restricting Desktop MetaManager (`/manager`), System Telemetry (`/api/system/stats`), and Settings to authenticated administrators.
 
 ---
 
