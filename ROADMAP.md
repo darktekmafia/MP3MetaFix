@@ -57,6 +57,8 @@ Provide a complete in-app lifecycle updater directly from the web interface, lev
   - Success banner prompting the user to reload the page once the new version is verified online.
 - [x] **Portable Systemd Service Migration (`scripts/migrate_service.py`) [COMPLETED]**:
   - Safe, non-destructive migration helper in `install.sh --update` to upgrade legacy service units to use `--no-proxy-headers` and dynamic host/port bindings while preserving administrator customizations.
+- [x] **Service Network Access & LAN Configuration Helper (`scripts/configure_access.py`) [COMPLETED]**:
+  - Maintenance CLI workflow (`install.sh --access`, `--lan`, `--local`, `--bind`) to inspect binding and switch between localhost-only and LAN network reachability safely with automatic daemon reloading and healthcheck verification.
 
 ---
 

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.4] - 2026-09-19
 
+### Added
+- **Service Access & LAN Maintenance Commands (`--access`, `--lan`, `--local`, `--bind`)**:
+  - Added dedicated maintenance options in `install.sh` to inspect current host/port binding, service health status, and detected LAN access URLs without requiring manual systemd unit editing.
+  - Added quick switching commands `--lan` (listen on all network interfaces `0.0.0.0`) and `--local` (restrict to localhost `127.0.0.1`) with automatic systemd daemon reloading, service restarting, and health verification.
+- **Service Configuration Helper (`scripts/configure_access.py`)**:
+  - Implemented standalone Python helper for reading and updating `MP3METAFIX_HOST` and `MP3METAFIX_PORT` inside systemd `[Service]` sections with strict host/port validation (preventing shell injection), atomic file replacement, and permission preservation.
+- **Enhanced Post-Installation and Status Guidance**:
+  - Updated post-installation summary output and `./install.sh --status` to display active URLs and clear instructions on enabling LAN access for headless and container environments.
+
 ### Documentation & Lifecycle
 - **Pre-Handoff vs Handoff-Capable Update Transition Semantics**:
   - Clarified that systems upgrading from legacy pre-migration versions (`v0.3.0` & `v0.3.1`) require a second `./install.sh --update` invocation (or manual migration execution) because the legacy in-memory script completes its old flow before on-disk code is refreshed.

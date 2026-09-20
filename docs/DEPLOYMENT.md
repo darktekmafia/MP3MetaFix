@@ -54,7 +54,17 @@ The installer will:
 - Prepare the Python virtual environment in `/opt/mp3metafix/.venv`.
 - Install and start the systemd service `/etc/systemd/system/mp3metafix.service`.
 
-### Step 3: Managing the Service
+### Step 3: Enabling LAN Access (Optional)
+By default, fresh installations bind to `127.0.0.1` (localhost only) for security. To reach the MP3MetaFix web UI from other machines on your local network:
+```bash
+# Switch service to listen on all interfaces (0.0.0.0)
+sudo ./install.sh --lan
+
+# Verify access URLs and service status
+./install.sh --access
+```
+
+### Step 4: Managing the Service
 ```bash
 # Check service status
 sudo systemctl status mp3metafix.service
@@ -68,7 +78,41 @@ sudo systemctl restart mp3metafix.service
 
 ---
 
-## 3. Reverse Proxy Configuration
+## 3. Network Access & Binding Management (`--access`, `--lan`, `--local`, `--bind`)
+
+MP3MetaFix includes built-in maintenance commands to inspect and adjust network binding without manually modifying systemd unit files:
+
+### View Current Binding & Network URLs
+```bash
+./install.sh --access
+```
+Displays:
+- Current configured bind host and port (`MP3METAFIX_HOST` and `MP3METAFIX_PORT`).
+- Service status (active/inactive) and health check probe status.
+- Localhost URL (`http://127.0.0.1:8844`) and detected LAN IP endpoints (e.g. `http://192.168.1.104:8844`).
+
+### Enable LAN Access (All Interfaces)
+```bash
+sudo ./install.sh --lan
+# (or ./install.sh --bind 0.0.0.0)
+```
+Safely updates the systemd unit `Environment="MP3METAFIX_HOST=0.0.0.0"`, reloads the systemd daemon, restarts the service, and verifies the `/api/health` probe.
+
+### Restrict to Localhost Only
+```bash
+sudo ./install.sh --local
+# (or ./install.sh --bind 127.0.0.1)
+```
+Restricts listening to local loopback `127.0.0.1`.
+
+### Custom Host / IP Binding
+```bash
+sudo ./install.sh --bind 192.168.1.50
+```
+
+---
+
+## 4. Reverse Proxy Configuration
 
 MP3MetaFix ships with proxy trust **disabled by default** (`MP3METAFIX_TRUST_PROXIES=false`) for secure standalone and local workstation operation. When placing MP3MetaFix behind a reverse proxy (e.g. Nginx, Caddy, Traefik, Apache, HAProxy, or Nginx Proxy Manager), configure proxy trust according to your topology:
 
@@ -148,7 +192,7 @@ When the reverse proxy (e.g. Nginx Proxy Manager, external load balancer, or gat
 
 ---
 
-## 4. Updates and Upgrades
+## 5. Updates and Upgrades
 
 To update MP3MetaFix in-place via CLI:
 ```bash
@@ -185,7 +229,7 @@ sudo systemctl restart mp3metafix.service
 
 ---
 
-## 5. Environment Variables & Security Configuration
+## 6. Environment Variables & Security Configuration
 
 The server behavior and security thresholds can be customized via environment variables in systemd units or `.env` files:
 

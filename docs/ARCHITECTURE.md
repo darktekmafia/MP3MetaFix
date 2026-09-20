@@ -116,12 +116,20 @@ To allow instantaneous scrubbing and preview in web browsers, the `GET /api/stre
 
 ---
 
-## 6. Service Lifecycle & Systemd Unit Migration Architecture
+## 6. Service Lifecycle, Network Configuration & Migration Architecture
 
-MP3MetaFix packages an intelligent, non-destructive migration engine (`scripts/migrate_service.py`) for systemd unit maintenance across updates:
+MP3MetaFix packages an intelligent, non-destructive maintenance engine for systemd units and network configuration:
+
+### Systemd Unit Migration (`scripts/migrate_service.py`)
 - **Scope Isolation**: Parsing and edits are strictly confined to the `[Service]` section.
 - **Safe Command Tokenization**: Uses POSIX-compliant `shlex` tokenization to preserve arguments with spaces while avoiding destructive whitespace splitting.
 - **Safety Rejection**: Explicitly rejects compound commands, subshells, shell pipelines (`|`), redirects (`>`), and invalid syntax to prevent unit corruption.
 - **Atomic State Updates**: Creates temporary unit files in the target directory, mirrors original POSIX file mode and ownership, and performs atomic replacement via `os.replace`.
 - **Customization Preservation**: Updates only the Uvicorn launch flags (`--no-proxy-headers`, `--host $MP3METAFIX_HOST`, `--port $MP3METAFIX_PORT`) while preserving all administrator-defined environment variables, workers, and sandboxing limits (`MemoryMax`, `TasksMax`, `CPUQuota`).
 - **Self-Re-Executing Updates**: Re-executes the installer process image in-place (`exec bash`) when new commits are pulled, guaranteeing that newly introduced migrations and fixes execute immediately during the initial update run.
+
+### Network Access Configuration (`scripts/configure_access.py`)
+- **Safe Binding Management**: Inspects and adjusts `MP3METAFIX_HOST` and `MP3METAFIX_PORT` directives inside `[Service]` without manual unit file editing.
+- **Strict Input Validation**: Validates IPv4/IPv6 addresses and RFC 1123 hostnames before modifying configuration; rejects metacharacters, semicolons, and injection strings.
+- **Atomic Replacement**: Employs permissions-preserving atomic file replacement matching `scripts/migrate_service.py`.
+- **Automated Lifecycle Integration**: Integrated with `install.sh` (`--access`, `--lan`, `--local`, `--bind`) to automate daemon reloading, service restarts, and active health verification.

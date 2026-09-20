@@ -106,6 +106,10 @@ The server will run in your active terminal session and stop when you press <kbd
 | `--install` | Default: Installs dependencies, sets up systemd service, and adds desktop integration |
 | `--update` | Pulls latest Git updates, updates python dependencies, and restarts the systemd service |
 | `--status` | Checks systemd service status and HTTP endpoint health |
+| `--access` | Displays current network binding, status, and LAN access URLs |
+| `--lan` | Switches service to listen on all network interfaces (`0.0.0.0`) for LAN reachability |
+| `--local` | Switches service to listen on localhost only (`127.0.0.1`) |
+| `--bind <HOST>` | Sets custom bind host (e.g. `0.0.0.0`, `127.0.0.1`, or specific IP) |
 | `--uninstall` | Stops and removes systemd service, desktop entries, and launchers |
 | `--no-service` | Skips systemd service registration (standalone mode) |
 | `--headless` | Force Headless / Server / LXC mode (skips GUI desktop entries) |
@@ -118,7 +122,7 @@ The server will run in your active terminal session and stop when you press <kbd
 
 ## 🌐 Proxmox LXC & Reverse Proxy Deployment
 
-For hosting inside a Proxmox LXC (Ubuntu/Debian) behind Nginx or Caddy:
+For hosting inside a Proxmox LXC (Ubuntu/Debian) behind Nginx, Caddy, or standalone on a local network:
 
 1. In your LXC container:
    ```bash
@@ -126,7 +130,12 @@ For hosting inside a Proxmox LXC (Ubuntu/Debian) behind Nginx or Caddy:
    cd /opt/mp3metafix
    sudo ./install.sh --headless --port 8844
    ```
-2. Set up your reverse proxy using the provided templates in `deploy/`:
+2. Enable LAN access or inspect access endpoints:
+   ```bash
+   sudo ./install.sh --lan    # Enable LAN access across all interfaces (0.0.0.0)
+   ./install.sh --access      # View detected network endpoints & service health
+   ```
+3. Set up your reverse proxy using the provided templates in `deploy/`:
    - [Nginx Configuration](deploy/nginx.conf)
    - [Caddyfile](deploy/Caddyfile)
 

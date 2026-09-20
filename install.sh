@@ -53,6 +53,10 @@ show_help() {
     echo "  --update            Pull latest updates and rebuild dependencies"
     echo "  --uninstall         Remove MP3MetaFix service, desktop launcher, and configs"
     echo "  --status            Check installation and service status"
+    echo "  --access            Show network bind address, status, and LAN access URLs"
+    echo "  --lan               Switch service to listen on all network interfaces (0.0.0.0)"
+    echo "  --local             Switch service to listen on localhost only (127.0.0.1)"
+    echo "  --bind <HOST>       Set custom bind host (e.g. 0.0.0.0, 127.0.0.1, or IP)"
     echo "  --version, -v       Display application version"
     echo "  --no-service        Skip installing systemd service"
     echo "  --headless          Force headless server / LXC installation mode"
@@ -366,7 +370,8 @@ do_install() {
 
     echo ""
     log_success "MP3MetaFix installation complete!"
-    echo -e "  • ${BOLD}Web Access:${NC}      http://127.0.0.1:${TARGET_PORT}"
+    echo -e "  • ${BOLD}Web Access:${NC}      http://127.0.0.1:${TARGET_PORT} (Localhost only)"
+    echo -e "  • ${BOLD}LAN Access:${NC}      Run '${CYAN}./install.sh --lan${NC}' to allow access from other machines"
     echo -e "  • ${BOLD}Service Status:${NC}  systemctl --user status mp3metafix.service (or sudo systemctl status mp3metafix.service)"
     if [ "$ENV_TYPE" = "desktop" ]; then
         echo -e "  • ${BOLD}App Launcher:${NC}    Available in your system Application Menu"
@@ -531,6 +536,202 @@ do_update() {
     fi
 }
 
+# Locate active MP3MetaFix service file
+get_active_service_file() {
+    local user_home
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        user_home=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    else
+        user_home="$HOME"
+    fi
+    local user_svc="${user_home}/.config/systemd/user/mp3metafix.service"
+    local sys_svc="/etc/systemd/system/mp3metafix.service"
+
+    if [ -f "$user_svc" ]; then
+        echo "${user_svc}:user"
+    elif [ -f "$sys_svc" ]; then
+        echo "${sys_svc}:system"
+    else
+        echo ""
+    fi
+}
+
+# Network Access Configuration & Inspection Workflow
+do_access_config() {
+    print_banner
+    local target_host="$1"
+    local target_port="$2"
+    local cfg_script="${INSTALL_DIR}/scripts/configure_access.py"
+
+    if [ ! -f "$cfg_script" ] || [ ! -f "${INSTALL_DIR}/.venv/bin/python" ]; then
+        log_error "Configuration helper or virtual environment not found in ${INSTALL_DIR}."
+        exit 1
+    fi
+
+    local svc_info
+    svc_info="$(get_active_service_file)"
+    if [ -z "$svc_info" ]; then
+        log_warn "No installed MP3MetaFix systemd service unit found."
+        log_info "To install MP3MetaFix and create the service, run: ./install.sh"
+        exit 1
+    fi
+
+    local svc_file="${svc_info%%:*}"
+    local svc_type="${svc_info##*:}"
+
+    # If no modification is requested, perform inspection
+    if [ -z "$target_host" ] && [ -z "$target_port" ]; then
+        log_info "Inspecting network access configuration (${svc_type} service: ${svc_file})..."
+        local json_info
+        json_info="$("${INSTALL_DIR}/.venv/bin/python" "$cfg_script" get "$svc_file")"
+        local cur_host cur_port
+        cur_host=$(echo "$json_info" | grep -oP '(?<="host": ")[^"]+' || echo "127.0.0.1")
+        cur_port=$(echo "$json_info" | grep -oP '(?<="port": ")[^"]+' || echo "8844")
+
+        echo ""
+        echo -e "${BOLD}Current Service Network Configuration:${NC}"
+        echo -e "  • ${BOLD}Configured Bind Host:${NC} ${cur_host}"
+        echo -e "  • ${BOLD}Configured Port:${NC}      ${cur_port}"
+        echo -e "  • ${BOLD}Service File:${NC}         ${svc_file} (${svc_type})"
+
+        # Check service status
+        if [ "$svc_type" = "user" ]; then
+            if systemctl --user is-active --quiet mp3metafix.service 2>/dev/null; then
+                echo -e "  • ${BOLD}Service Status:${NC}       ${GREEN}ACTIVE (User Service Running)${NC}"
+            else
+                echo -e "  • ${BOLD}Service Status:${NC}       ${YELLOW}INACTIVE${NC}"
+            fi
+        else
+            if systemctl is-active --quiet mp3metafix.service 2>/dev/null; then
+                echo -e "  • ${BOLD}Service Status:${NC}       ${GREEN}ACTIVE (System Service Running)${NC}"
+            else
+                echo -e "  • ${BOLD}Service Status:${NC}       ${YELLOW}INACTIVE${NC}"
+            fi
+        fi
+
+        # Check HTTP health
+        if curl -s -f "http://127.0.0.1:${cur_port}/api/health" >/dev/null 2>&1; then
+            echo -e "  • ${BOLD}Health Check:${NC}         ${GREEN}OK (Responding on port ${cur_port})${NC}"
+        else
+            echo -e "  • ${BOLD}Health Check:${NC}         ${YELLOW}NOT RESPONDING on port ${cur_port}${NC}"
+        fi
+
+        echo ""
+        echo -e "${BOLD}Access URLs:${NC}"
+        echo -e "  • ${BOLD}Localhost:${NC}            http://127.0.0.1:${cur_port}"
+
+        # Detect LAN IPs
+        local lan_ips
+        lan_ips=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^127\.' | grep -v '^$' || true)
+        if [ -n "$lan_ips" ]; then
+            if [ "$cur_host" = "0.0.0.0" ] || [ "$cur_host" = "::" ]; then
+                echo -e "  • ${BOLD}LAN Access:${NC}            ${GREEN}ENABLED${NC} on all interfaces:"
+                while IFS= read -r ip_addr; do
+                    [ -n "$ip_addr" ] && echo -e "      ➜ http://${ip_addr}:${cur_port}"
+                done <<< "$lan_ips"
+            else
+                echo -e "  • ${BOLD}LAN Access:${NC}            ${YELLOW}DISABLED${NC} (Bound to ${cur_host} only)"
+                echo -e "    Detected network IPs on this machine:"
+                while IFS= read -r ip_addr; do
+                    [ -n "$ip_addr" ] && echo -e "      ➜ http://${ip_addr}:${cur_port} (Unreachable until LAN access enabled)"
+                done <<< "$lan_ips"
+                echo ""
+                echo -e "${BOLD}Quick Switching Commands:${NC}"
+                echo -e "  • Enable LAN access:      ${CYAN}./install.sh --lan${NC} (or ./install.sh --bind 0.0.0.0)"
+                echo -e "  • Restrict to localhost:  ${CYAN}./install.sh --local${NC} (or ./install.sh --bind 127.0.0.1)"
+            fi
+        else
+            if [ "$cur_host" = "0.0.0.0" ]; then
+                echo -e "  • ${BOLD}LAN Access:${NC}            ${GREEN}ENABLED${NC} (Listening on 0.0.0.0)"
+            else
+                echo -e "  • ${BOLD}LAN Access:${NC}            ${YELLOW}DISABLED${NC} (Bound to ${cur_host})"
+            fi
+        fi
+        return 0
+    fi
+
+    # Update host/port binding
+    log_info "Updating MP3MetaFix network binding in ${svc_file}..."
+    local py_args=("set" "$svc_file")
+    if [ -n "$target_host" ]; then
+        py_args+=("--host" "$target_host")
+    fi
+    if [ -n "$target_port" ]; then
+        py_args+=("--port" "$target_port")
+    fi
+
+    set +e
+    if [ "$svc_type" = "system" ] && [ "$EUID" -ne 0 ]; then
+        sudo "${INSTALL_DIR}/.venv/bin/python" "$cfg_script" "${py_args[@]}"
+        local update_res=$?
+    else
+        "${INSTALL_DIR}/.venv/bin/python" "$cfg_script" "${py_args[@]}"
+        local update_res=$?
+    fi
+    set -e
+
+    if [ "$update_res" -ne 0 ] && [ "$update_res" -ne 2 ]; then
+        log_error "Failed to update network binding in ${svc_file}."
+        exit 1
+    fi
+
+    log_info "Reloading systemd daemon and restarting service..."
+    if [ "$svc_type" = "user" ]; then
+        systemctl --user daemon-reload
+        systemctl --user restart mp3metafix.service
+    else
+        if [ "$EUID" -eq 0 ]; then
+            systemctl daemon-reload
+            systemctl restart mp3metafix.service
+        else
+            sudo systemctl daemon-reload
+            sudo systemctl restart mp3metafix.service
+        fi
+    fi
+
+    # Read effective host and port
+    local json_info
+    json_info="$("${INSTALL_DIR}/.venv/bin/python" "$cfg_script" get "$svc_file")"
+    local eff_host eff_port
+    eff_host=$(echo "$json_info" | grep -oP '(?<="host": ")[^"]+' || echo "127.0.0.1")
+    eff_port=$(echo "$json_info" | grep -oP '(?<="port": ")[^"]+' || echo "8844")
+
+    # Verify health probe
+    log_info "Verifying service health on port ${eff_port}..."
+    local health_ok=false
+    for i in {1..20}; do
+        if curl -s -f "http://127.0.0.1:${eff_port}/api/health" >/dev/null 2>&1; then
+            health_ok=true
+            break
+        fi
+        sleep 0.2
+    done
+
+    echo ""
+    if [ "$health_ok" = true ]; then
+        log_success "Service successfully updated and verified healthy!"
+    else
+        log_warn "Service restarted, but health check probe on port ${eff_port} has not responded yet."
+    fi
+
+    echo -e "${BOLD}Active MP3MetaFix Access URLs:${NC}"
+    echo -e "  • ${BOLD}Localhost:${NC}  http://127.0.0.1:${eff_port}"
+
+    if [ "$eff_host" = "0.0.0.0" ] || [ "$eff_host" = "::" ]; then
+        local lan_ips
+        lan_ips=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^127\.' | grep -v '^$' || true)
+        if [ -n "$lan_ips" ]; then
+            echo -e "  • ${BOLD}LAN Access:${NC}"
+            while IFS= read -r ip_addr; do
+                [ -n "$ip_addr" ] && echo -e "      ➜ http://${ip_addr}:${eff_port}"
+            done <<< "$lan_ips"
+        fi
+    else
+        echo -e "  • ${BOLD}LAN Access:${NC}  ${YELLOW}RESTRICTED${NC} (Bound to ${eff_host} only)"
+        echo -e "    Run '${CYAN}./install.sh --lan${NC}' anytime to enable access from other machines on your LAN."
+    fi
+}
+
 # Check Status
 do_status() {
     print_banner
@@ -539,6 +740,21 @@ do_status() {
 
     detect_environment
     echo "Detected Mode:      ${ENV_TYPE^^}"
+
+    local svc_info
+    svc_info="$(get_active_service_file)"
+    local cur_host="127.0.0.1"
+    local cur_port="${DEFAULT_PORT}"
+
+    if [ -n "$svc_info" ] && [ -f "${INSTALL_DIR}/scripts/configure_access.py" ] && [ -f "${INSTALL_DIR}/.venv/bin/python" ]; then
+        local svc_file="${svc_info%%:*}"
+        local json_info
+        json_info="$("${INSTALL_DIR}/.venv/bin/python" "${INSTALL_DIR}/scripts/configure_access.py" get "$svc_file" 2>/dev/null || true)"
+        if [ -n "$json_info" ]; then
+            cur_host=$(echo "$json_info" | grep -oP '(?<="host": ")[^"]+' || echo "127.0.0.1")
+            cur_port=$(echo "$json_info" | grep -oP '(?<="port": ")[^"]+' || echo "8844")
+        fi
+    fi
 
     if systemctl --user is-active --quiet mp3metafix.service 2>/dev/null; then
         echo -e "Systemd Service:    ${GREEN}ACTIVE (User Service Running)${NC}"
@@ -550,10 +766,25 @@ do_status() {
         echo -e "Systemd Service:    ${RED}NOT INSTALLED / DISABLED${NC}"
     fi
 
-    if curl -s -f "http://127.0.0.1:${DEFAULT_PORT}/api/health" >/dev/null 2>&1; then
-        echo -e "HTTP Endpoint:      ${GREEN}RESPONDING on http://127.0.0.1:${DEFAULT_PORT}${NC}"
+    echo -e "Configured Bind:    ${cur_host}:${cur_port}"
+
+    if curl -s -f "http://127.0.0.1:${cur_port}/api/health" >/dev/null 2>&1; then
+        echo -e "HTTP Endpoint:      ${GREEN}RESPONDING on http://127.0.0.1:${cur_port}${NC}"
     else
-        echo -e "HTTP Endpoint:      ${YELLOW}NOT RESPONDING on port ${DEFAULT_PORT}${NC}"
+        echo -e "HTTP Endpoint:      ${YELLOW}NOT RESPONDING on port ${cur_port}${NC}"
+    fi
+
+    if [ "$cur_host" = "0.0.0.0" ] || [ "$cur_host" = "::" ]; then
+        local lan_ips
+        lan_ips=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^127\.' | grep -v '^$' || true)
+        if [ -n "$lan_ips" ]; then
+            echo -e "LAN Endpoints:"
+            while IFS= read -r ip_addr; do
+                [ -n "$ip_addr" ] && echo -e "  ➜ http://${ip_addr}:${cur_port}"
+            done <<< "$lan_ips"
+        fi
+    else
+        echo -e "LAN Access:         ${YELLOW}RESTRICTED (Localhost only)${NC} — Run './install.sh --lan' to allow LAN access"
     fi
 }
 
@@ -597,6 +828,8 @@ FORCE_HEADLESS=false
 FORCE_DESKTOP=false
 SKIP_SERVICE=false
 TARGET_PORT="$DEFAULT_PORT"
+TARGET_BIND_HOST=""
+TARGET_PORT_ARG=""
 SERVICE_USER="${SUDO_USER:-$USER}"
 
 while [[ $# -gt 0 ]]; do
@@ -605,6 +838,26 @@ while [[ $# -gt 0 ]]; do
         --update) ACTION="update"; shift ;;
         --uninstall) ACTION="uninstall"; shift ;;
         --status) ACTION="status"; shift ;;
+        --access) ACTION="access"; shift ;;
+        --lan)
+            ACTION="access"
+            TARGET_BIND_HOST="0.0.0.0"
+            shift
+            ;;
+        --local)
+            ACTION="access"
+            TARGET_BIND_HOST="127.0.0.1"
+            shift
+            ;;
+        --bind)
+            ACTION="access"
+            if [[ $# -ge 2 && ! "$2" =~ ^-- ]]; then
+                TARGET_BIND_HOST="$2"
+                shift 2
+            else
+                shift 1
+            fi
+            ;;
         --version|-v)
             echo "MP3MetaFix v${VERSION}"
             exit 0
@@ -612,7 +865,11 @@ while [[ $# -gt 0 ]]; do
         --no-service) SKIP_SERVICE=true; shift ;;
         --headless) FORCE_HEADLESS=true; shift ;;
         --desktop) FORCE_DESKTOP=true; shift ;;
-        --port) TARGET_PORT="$2"; shift 2 ;;
+        --port)
+            TARGET_PORT="$2"
+            TARGET_PORT_ARG="$2"
+            shift 2
+            ;;
         --user) SERVICE_USER="$2"; shift 2 ;;
         --help|-h) show_help ;;
         *)
@@ -626,5 +883,6 @@ case "$ACTION" in
     install) do_install ;;
     update) do_update ;;
     status) do_status ;;
+    access) do_access_config "$TARGET_BIND_HOST" "$TARGET_PORT_ARG" ;;
     uninstall) do_uninstall ;;
 esac

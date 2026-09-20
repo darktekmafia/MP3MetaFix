@@ -1253,6 +1253,295 @@ echo "V034_MIGRATION_EXECUTED"
     assert "V034_MIGRATION_EXECUTED" in res2.stdout
 
 
+def test_configure_access_validation():
+    """Verify validation of bind host and port values in configure_access."""
+    from scripts.configure_access import validate_bind_host, validate_bind_port
+
+    # Valid hosts
+    assert validate_bind_host("127.0.0.1") is True
+    assert validate_bind_host("0.0.0.0") is True
+    assert validate_bind_host("192.168.1.104") is True
+    assert validate_bind_host("10.0.0.1") is True
+    assert validate_bind_host("::") is True
+    assert validate_bind_host("::1") is True
+    assert validate_bind_host("localhost") is True
+    assert validate_bind_host("lan") is True
+    assert validate_bind_host("local") is True
+    assert validate_bind_host("mp3metafix.lan") is True
+
+    # Invalid hosts & injection attempts
+    assert validate_bind_host("") is False
+    assert validate_bind_host("   ") is False
+    assert validate_bind_host(None) is False
+    assert validate_bind_host("127.0.0.1; rm -rf /") is False
+    assert validate_bind_host("0.0.0.0 && whoami") is False
+    assert validate_bind_host("127.0.0.1 | bash") is False
+    assert validate_bind_host("$(whoami)") is False
+    assert validate_bind_host("`id`") is False
+    assert validate_bind_host('127.0.0.1 "test"') is False
+    assert validate_bind_host("127.0.0.1 8844") is False
+    assert validate_bind_host("127.0.0.1\n") is False
+
+    # Valid ports
+    assert validate_bind_port(8844) is True
+    assert validate_bind_port("8844") is True
+    assert validate_bind_port(1) is True
+    assert validate_bind_port(65535) is True
+
+    # Invalid ports
+    assert validate_bind_port(0) is False
+    assert validate_bind_port(-1) is False
+    assert validate_bind_port(65536) is False
+    assert validate_bind_port("abc") is False
+    assert validate_bind_port(None) is False
+
+
+def test_configure_access_get_and_set_service_binding():
+    """Verify inspection and modification of host and port in service unit content."""
+    from scripts.configure_access import ConfigStatus, get_service_binding, set_service_binding
+
+    sample_unit = """[Unit]
+Description=MP3MetaFix Web Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mp3metafix
+Environment="MP3METAFIX_HOST=127.0.0.1"
+Environment="MP3METAFIX_PORT=8844"
+Environment="MP3METAFIX_DATA_DIR=/opt/mp3metafix/data"
+Environment="MP3METAFIX_TRUST_PROXIES=false"
+ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app --host $MP3METAFIX_HOST --port $MP3METAFIX_PORT --workers 2 --no-proxy-headers
+Restart=always
+MemoryMax=512M
+
+[Install]
+WantedBy=default.target
+"""
+    # 1. Test get_service_binding
+    binding = get_service_binding(sample_unit)
+    assert binding["host"] == "127.0.0.1"
+    assert binding["port"] == "8844"
+    assert binding["trust_proxies"] == "false"
+    assert binding["is_configured"] is True
+
+    # 2. Test set_service_binding with LAN alias
+    new_content, status, err = set_service_binding(sample_unit, host="lan")
+    assert status == ConfigStatus.CHANGED
+    assert err is None
+    assert 'Environment="MP3METAFIX_HOST=0.0.0.0"' in new_content
+    assert 'Environment="MP3METAFIX_PORT=8844"' in new_content
+    assert "MemoryMax=512M" in new_content
+    assert 'Environment="MP3METAFIX_TRUST_PROXIES=false"' in new_content
+
+    # 3. Test idempotent set_service_binding
+    same_content, status2, _ = set_service_binding(new_content, host="0.0.0.0")
+    assert status2 == ConfigStatus.UNCHANGED
+    assert same_content == new_content
+
+    # 4. Test changing port
+    port_content, status3, _ = set_service_binding(sample_unit, port=9000)
+    assert status3 == ConfigStatus.CHANGED
+    assert 'Environment="MP3METAFIX_PORT=9000"' in port_content
+    assert 'Environment="MP3METAFIX_HOST=127.0.0.1"' in port_content
+
+    # 5. Test invalid host / port rejection
+    _, bad_status, bad_err = set_service_binding(sample_unit, host="127.0.0.1; whoami")
+    assert bad_status == ConfigStatus.FAILED
+    assert "Invalid bind host" in bad_err
+
+    _, bad_status2, bad_err2 = set_service_binding(sample_unit, port="99999")
+    assert bad_status2 == ConfigStatus.FAILED
+    assert "Invalid bind port" in bad_err2
+
+
+def test_configure_access_file_on_disk_permissions_and_atomicity(tmp_path: Path):
+    """Verify atomic file update and strict preservation of file permissions."""
+    import stat
+    from scripts.configure_access import ConfigStatus, update_service_file
+
+    svc_file = tmp_path / "mp3metafix.service"
+    svc_file.write_text("""[Unit]
+Description=MP3MetaFix
+[Service]
+Environment="MP3METAFIX_HOST=127.0.0.1"
+Environment="MP3METAFIX_PORT=8844"
+ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app --host $MP3METAFIX_HOST --port $MP3METAFIX_PORT
+[Install]
+WantedBy=default.target
+""", encoding="utf-8")
+
+    # Set custom permission mode (0640)
+    svc_file.chmod(0o640)
+
+    status, msg = update_service_file(svc_file, host="0.0.0.0")
+    assert status == ConfigStatus.CHANGED
+    assert "Updated network binding" in msg
+
+    # Verify content
+    updated_text = svc_file.read_text(encoding="utf-8")
+    assert 'Environment="MP3METAFIX_HOST=0.0.0.0"' in updated_text
+
+    # Verify mode is preserved
+    mode = stat.S_IMODE(svc_file.stat().st_mode)
+    assert mode == 0o640
+
+    # Verify no temporary files remain in directory
+    temp_files = list(tmp_path.glob(".*.tmp.*"))
+    assert len(temp_files) == 0
+
+
+def test_configure_access_cli(tmp_path: Path):
+    """Verify CLI interface of configure_access.py (get and set commands)."""
+    import json
+    import subprocess
+    import sys
+
+    svc_file = tmp_path / "mp3metafix.service"
+    svc_file.write_text("""[Unit]
+Description=MP3MetaFix
+[Service]
+Environment="MP3METAFIX_HOST=127.0.0.1"
+Environment="MP3METAFIX_PORT=8844"
+ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app
+[Install]
+WantedBy=default.target
+""", encoding="utf-8")
+
+    script_path = Path(__file__).resolve().parent.parent / "scripts" / "configure_access.py"
+
+    # Test get command
+    res_get = subprocess.run(
+        [sys.executable, str(script_path), "get", str(svc_file)],
+        capture_output=True,
+        text=True,
+    )
+    assert res_get.returncode == 0
+    info = json.loads(res_get.stdout)
+    assert info["host"] == "127.0.0.1"
+    assert info["port"] == "8844"
+
+    # Test set command
+    res_set = subprocess.run(
+        [sys.executable, str(script_path), "set", str(svc_file), "--host", "0.0.0.0"],
+        capture_output=True,
+        text=True,
+    )
+    assert res_set.returncode == 0
+    assert "[+]" in res_set.stdout
+
+    # Test idempotent set command (exit code 2)
+    res_set_idem = subprocess.run(
+        [sys.executable, str(script_path), "set", str(svc_file), "--host", "0.0.0.0"],
+        capture_output=True,
+        text=True,
+    )
+    assert res_set_idem.returncode == 2
+
+    # Test set with invalid host (exit code 1)
+    res_set_bad = subprocess.run(
+        [sys.executable, str(script_path), "set", str(svc_file), "--host", "bad host; rm -rf"],
+        capture_output=True,
+        text=True,
+    )
+    assert res_set_bad.returncode == 1
+    assert "[!]" in res_set_stderr if (res_set_stderr := res_set.stderr) else res_set.stdout
+
+
+def test_installer_access_and_binding_commands(tmp_path: Path):
+    """Verify that install.sh --access, --lan, --local, and --bind operate correctly."""
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    test_root = tmp_path / "app"
+    test_root.mkdir()
+    scripts_dir = test_root / "scripts"
+    scripts_dir.mkdir()
+    venv_bin = test_root / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+
+    # Symlink python to venv/bin/python
+    (venv_bin / "python").symlink_to(Path(sys.executable))
+
+    # Copy install.sh and scripts
+    src_install = Path(__file__).resolve().parent.parent / "install.sh"
+    src_cfg = Path(__file__).resolve().parent.parent / "scripts" / "configure_access.py"
+    shutil.copy(src_install, test_root / "install.sh")
+    shutil.copy(src_cfg, scripts_dir / "configure_access.py")
+    (test_root / "VERSION").write_text("0.3.4\n")
+
+    # Create mock user systemd service
+    config_user_systemd = tmp_path / ".config" / "systemd" / "user"
+    config_user_systemd.mkdir(parents=True)
+    svc_file = config_user_systemd / "mp3metafix.service"
+    svc_file.write_text("""[Unit]
+Description=MP3MetaFix
+[Service]
+Environment="MP3METAFIX_HOST=127.0.0.1"
+Environment="MP3METAFIX_PORT=8844"
+ExecStart=/opt/mp3metafix/.venv/bin/uvicorn backend.main:app
+[Install]
+WantedBy=default.target
+""", encoding="utf-8")
+
+    # Mock systemctl and curl binaries
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    mock_systemctl = bin_dir / "systemctl"
+    mock_systemctl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    mock_systemctl.chmod(0o755)
+
+    mock_curl = bin_dir / "curl"
+    mock_curl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    mock_curl.chmod(0o755)
+
+    env = dict(os.environ)
+    env["HOME"] = str(tmp_path)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    # 1. Test install.sh --access (Inspection mode)
+    res_access = subprocess.run(
+        ["bash", str(test_root / "install.sh"), "--access"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert res_access.returncode == 0
+    assert "Configured Bind Host:" in res_access.stdout
+    assert "127.0.0.1" in res_access.stdout
+    assert "Configured Port:" in res_access.stdout
+    assert "8844" in res_access.stdout
+    assert "Localhost:" in res_access.stdout
+
+    # 2. Test install.sh --lan (Switch to 0.0.0.0)
+    res_lan = subprocess.run(
+        ["bash", str(test_root / "install.sh"), "--lan"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert res_lan.returncode == 0
+    assert "Service successfully updated" in res_lan.stdout
+    updated_svc = svc_file.read_text(encoding="utf-8")
+    assert 'Environment="MP3METAFIX_HOST=0.0.0.0"' in updated_svc
+
+    # 3. Test install.sh --local (Switch back to 127.0.0.1)
+    res_local = subprocess.run(
+        ["bash", str(test_root / "install.sh"), "--local"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert res_local.returncode == 0
+    assert "Service successfully updated" in res_local.stdout
+    updated_svc2 = svc_file.read_text(encoding="utf-8")
+    assert 'Environment="MP3METAFIX_HOST=127.0.0.1"' in updated_svc2
+
+
+
+
 
 
 

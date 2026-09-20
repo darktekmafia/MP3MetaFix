@@ -24,6 +24,7 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 - [x] **16. Artwork Processing Error Sanitization**: Sanitize client-facing image decode errors and server log formats. *(Implemented in `backend/security.py`)*
 - [ ] **17. Update Installation Endpoint Access Control**: In-app updater endpoint disabled pending admin design. *(Implemented in `backend/main.py`)*
 - [x] **18. Safe Systemd Unit Parser Hardening & Migration**: Atomic in-place unit updates with POSIX quoting and shell injection defense. *(Implemented in `scripts/migrate_service.py` & `install.sh`)*
+- [x] **19. Safe Service Access & LAN Configuration Hardening**: Validated IP/hostname binding parameters with atomic permission-preserving updates. *(Implemented in `scripts/configure_access.py` & `install.sh`)*
 
 ---
 
@@ -107,6 +108,13 @@ This document logs the threat model, attack surface analysis, vulnerability vect
   3. Atomic file writes using unguessable directory-local temporary files (`mkstemp`) with explicit preservation of original POSIX file mode (`stat.S_IMODE`) and ownership (`os.chown`).
   4. Tri-state CLI exit codes (`0`=changed, `2`=unchanged, `1`=failed) ensuring the installer propagates failures and prevents reporting false successes.
   5. Process image replacement (`exec bash`) upon git updates guarded with commit hash checks and `_MP3METAFIX_REEXEC=1` environment variables to prevent infinite restart loops.
+
+### Vector 19: Safe Service Access & Network Binding Hardening [COMPLETED]
+- **Threat**: Attackers attempting command injection through malformed host parameters passed to service configuration scripts, or unintentional exposure of unauthenticated services on public/untrusted interfaces during automated setup.
+- **Defense**:
+  1. Strict validation in `scripts/configure_access.py` using Python's `ipaddress` module and RFC 1123 hostname regex, explicitly rejecting spaces, tabs, newlines, semicolons, shell metacharacters, and quote delimiters.
+  2. Secure default: Fresh installations retain the secure loopback default (`127.0.0.1`), requiring explicit administrative command execution (`./install.sh --lan` or `./install.sh --bind <IP>`) to allow external network reachability.
+  3. Safe atomic writes: Modifies only `Environment="MP3METAFIX_HOST=..."` and `Environment="MP3METAFIX_PORT=..."` within `[Service]`, preserving permissions, sandboxing limits, and other environment variables.
 
 
 
