@@ -24,15 +24,50 @@ def extract_suno_id(input_str: Optional[str]) -> Optional[str]:
     return None
 
 
+def unescape_nextjs_chunk(raw_chunk: str) -> str:
+    """Safely decodes Next.js serialized stream chunk without double-decoding UTF-8 characters."""
+    if not raw_chunk:
+        return ""
+    try:
+        # Standard JSON string parsing handles \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
+        # Normalize any unescaped physical newlines/tabs inside string before json.loads
+        normalized = raw_chunk.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
+        return json.loads(f'"{normalized}"')
+    except Exception:
+        pass
+
+    # Fallback to regex-based unicode and escape sequence replacement
+    def replace_escape(match: re.Match) -> str:
+        esc = match.group(0)
+        if esc.startswith("\\u"):
+            try:
+                return chr(int(esc[2:], 16))
+            except Exception:
+                return esc
+        elif esc == '\\"':
+            return '"'
+        elif esc == "\\\\":
+            return "\\"
+        elif esc == "\\n":
+            return "\n"
+        elif esc == "\\r":
+            return "\r"
+        elif esc == "\\t":
+            return "\t"
+        return esc[1:]
+
+    return re.sub(r"\\(?:u[0-9a-fA-F]{4}|[\"\\/bfnrt])", replace_escape, raw_chunk)
+
+
 def parse_next_f_payload(html: str) -> Dict[str, Any]:
     """Extracts and parses Next.js SSR stream payload chunks."""
     matches = re.findall(r"self\.__next_f\.push\(\[1,\"(.*?)\"\]\)", html)
     combined = ""
     for m in matches:
         try:
-            unescaped = m.encode("utf-8").decode("unicode_escape", errors="ignore")
-            combined += unescaped
-        except Exception:
+            combined += unescape_nextjs_chunk(m)
+        except Exception as e:
+            logger.debug(f"Chunk unescape error: {e}")
             continue
     return parse_suno_combined_stream(combined, html)
 

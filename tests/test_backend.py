@@ -1876,6 +1876,27 @@ def test_parse_suno_combined_stream():
     assert "$51" not in result["formatted_comment"]
 
 
+def test_parse_next_f_payload_unicode_encoding():
+    from backend.suno_extractor import parse_next_f_payload
+
+    # Simulates Next.js SSR push with UTF-8 curly quotes, apostrophes, and unicode escapes
+    html_sample = (
+        '<html><body><script>self.__next_f.push([1,"40:I[428621,[]]\\n51:T9d5,[Intro]\\n\\n[Verse]\\nIt’s time for coffee, you’re welcome!\\n'
+        '41:[\\\"$\\\",\\\"$L50\\\",null,{\\\"clip\\\":{\\\"id\\\":\\\"a362dcef-6a63-423a-8f6b-8990ff370c06\\\",\\\"status\\\":\\\"complete\\\",'
+        '\\\"title\\\":\\\"CK’s Coffee Shop\\\",\\\"display_name\\\":\\\"CK\\\\u2019s Cafe\\\",\\\"handle\\\":\\\"ck_cafe\\\",'
+        '\\\"created_at\\\":\\\"2026-09-03T21:26:05.728Z\\\",\\\"image_url\\\":\\\"https://cdn2.suno.ai/art.jpg\\\",'
+        '\\\"metadata\\\":{\\\"tags\\\":\\\"acoustic, indie rock\\\",\\\"prompt\\\":\\\"$51\\\"}}}]"])</script></body></html>'
+    )
+
+    data = parse_next_f_payload(html_sample)
+    assert data["title"] == "CK’s Coffee Shop"
+    assert "â" not in data["title"]
+    assert data["artist"] == "CK’s Cafe"
+    assert "â" not in data["artist"]
+    assert "you’re" in data["lyrics"]
+    assert "â" not in data["lyrics"]
+
+
 def test_api_suno_extract_endpoints(client):
     # 1. Invalid input returns HTTP 400
     res_invalid = client.post("/api/suno/extract", json={"query": "not-a-uuid"})
