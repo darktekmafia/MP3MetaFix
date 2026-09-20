@@ -47,6 +47,9 @@ from backend.config import (
     PORT,
     SESSION_COOKIE_NAME,
     SESSION_COOKIE_MAX_AGE,
+    SESSION_TTL_MINUTES,
+    MAX_UPLOAD_SIZE_MB,
+    MAX_GLOBAL_TEMP_STORAGE_MB,
 )
 from backend.security import (
     SecurityHeadersMiddleware,
@@ -78,6 +81,18 @@ from backend.updater import (
     get_system_version_info,
     check_github_updates,
     stream_install_update,
+)
+from backend.auth import (
+    auth_manager,
+    AUTH_COOKIE_NAME,
+    AUTH_COOKIE_MAX_AGE,
+    login_rate_limiter,
+    SetupRequest,
+    LoginRequest,
+    ChangePasswordRequest,
+    SettingsUpdateRequest,
+    create_auth_token,
+    verify_auth_token,
 )
 
 logging.basicConfig(
@@ -144,6 +159,182 @@ def get_current_session_id(request: Request) -> str:
             detail="Invalid or forged session token.",
         )
     return session_id
+
+
+# --- Account & Access Control Dependencies ---
+
+def get_current_user(request: Request) -> Optional[Dict[str, Any]]:
+    """Extract and verify authenticated user from HttpOnly auth cookie or Authorization header."""
+    token = request.cookies.get(AUTH_COOKIE_NAME)
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+        elif request.headers.get("X-Auth-Token"):
+            token = request.headers.get("X-Auth-Token")
+
+    if not token:
+        return None
+
+    user_id = verify_auth_token(token)
+    if not user_id:
+        return None
+
+    return auth_manager.get_user_by_id(user_id)
+
+
+def require_authenticated_user(request: Request) -> Dict[str, Any]:
+    """Dependency that enforces a valid logged-in user account."""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Please log in.",
+        )
+    return user
+
+
+def require_admin(request: Request) -> Dict[str, Any]:
+    """Dependency enforcing administrator privileges."""
+    user = require_authenticated_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator privilege required.",
+        )
+    return user
+
+
+def enforce_access_policy(request: Request) -> Optional[Dict[str, Any]]:
+    """Enforce access control on file-editing endpoints based on Guest Mode settings."""
+    user = get_current_user(request)
+    if user:
+        return user
+    if auth_manager.is_guest_mode_enabled():
+        return None
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required. Guest mode is disabled.",
+    )
+
+
+# --- Authentication & Settings API Routes ---
+
+@app.get("/api/auth/status")
+async def get_auth_status(request: Request):
+    """Return system setup state, current session identity, and guest mode policy."""
+    setup_req = auth_manager.is_setup_required()
+    user = get_current_user(request)
+    return {
+        "setup_required": setup_req,
+        "initialized": not setup_req,
+        "authenticated": user is not None,
+        "username": user["username"] if user else None,
+        "role": user["role"] if user else None,
+        "user": {"id": user["id"], "username": user["username"], "role": user["role"]} if user else None,
+        "guest_mode": auth_manager.is_guest_mode_enabled(),
+        "is_guest": user is None and auth_manager.is_guest_mode_enabled(),
+    }
+
+
+@app.post("/api/auth/setup")
+async def initial_setup(req: SetupRequest, request: Request, response: Response):
+    """First-time administrator account creation."""
+    if not auth_manager.is_setup_required():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Administrator account is already configured.",
+        )
+    try:
+        admin_user = auth_manager.create_initial_admin(req.username, req.password)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    token = create_auth_token(admin_user["id"])
+    is_https = (request.url.scheme == "https")
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        max_age=AUTH_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=is_https,
+        samesite="lax",
+        path="/",
+    )
+    return {"success": True, "user": admin_user}
+
+
+@app.post("/api/auth/login")
+async def login(req: LoginRequest, request: Request, response: Response):
+    """Authenticate with username and password, setting HttpOnly auth cookie."""
+    client_ip = upload_rate_limiter.get_client_ip(request)
+    if login_rate_limiter.is_blocked(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts. Please wait 5 minutes before trying again.",
+        )
+
+    user = auth_manager.authenticate(req.username, req.password)
+    if not user:
+        login_rate_limiter.record_failure(client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password.",
+        )
+
+    login_rate_limiter.record_success(client_ip)
+    token = create_auth_token(user["id"])
+    is_https = (request.url.scheme == "https")
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        max_age=AUTH_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=is_https,
+        samesite="lax",
+        path="/",
+    )
+    return {"success": True, "user": user}
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request, response: Response):
+    """Log out of the account session and clear auth cookie."""
+    is_https = (request.url.scheme == "https")
+    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/", secure=is_https, httponly=True)
+    return {"success": True}
+
+
+@app.post("/api/auth/change-password")
+async def change_password(req: ChangePasswordRequest, user: Dict[str, Any] = Depends(require_authenticated_user)):
+    """Change password for the currently logged-in account."""
+    try:
+        auth_manager.change_password(user["id"], req.current_password, req.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"success": True, "message": "Password updated successfully."}
+
+
+@app.get("/api/settings")
+async def get_settings(user: Dict[str, Any] = Depends(require_authenticated_user)):
+    """Get active system settings."""
+    settings = auth_manager.get_settings()
+    return {
+        "guest_mode_enabled": settings.get("guest_mode_enabled", False),
+        "session_ttl_minutes": settings.get("session_ttl_minutes", SESSION_TTL_MINUTES),
+        "max_upload_size_mb": settings.get("max_upload_size_mb", MAX_UPLOAD_SIZE_MB),
+        "max_global_storage_mb": settings.get("max_global_storage_mb", MAX_GLOBAL_TEMP_STORAGE_MB),
+        "version": VERSION,
+        "is_admin": user.get("role") == "admin",
+    }
+
+
+@app.post("/api/settings")
+async def update_settings(req: SettingsUpdateRequest, user: Dict[str, Any] = Depends(require_admin)):
+    """Update system settings (Admin only)."""
+    updates = req.model_dump(exclude_unset=True)
+    updated = auth_manager.update_settings(updates)
+    return {"success": True, "settings": updated}
 
 
 # --- API Routes ---
@@ -245,7 +436,7 @@ def get_system_telemetry() -> Dict[str, Any]:
 
 
 @app.api_route("/api/system/stats", methods=["GET", "HEAD"])
-async def get_system_stats():
+async def get_system_stats(user: Dict[str, Any] = Depends(require_admin)):
     """System telemetry and resource diagnostics endpoint."""
     return get_system_telemetry()
 
@@ -257,13 +448,13 @@ async def get_app_version():
 
 
 @app.get("/api/updates/check")
-async def check_updates(force: bool = False):
+async def check_updates(force: bool = False, user: Dict[str, Any] = Depends(require_admin)):
     """Check GitHub repository for new releases and changelog."""
     return await check_github_updates(force_refresh=force)
 
 
 @app.post("/api/updates/apply")
-async def apply_update(request: Request):
+async def apply_update(request: Request, user: Dict[str, Any] = Depends(require_admin)):
     """In-app update installation is disabled pending administrative authorization and privilege review."""
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -272,7 +463,12 @@ async def apply_update(request: Request):
 
 
 @app.post("/api/upload")
-async def upload_mp3(request: Request, response: Response, file: UploadFile = File(...)):
+async def upload_mp3(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
+):
     """Upload an MP3 file, validate magic bytes, create authenticated session cookie, and extract metadata."""
     # 1. Rate Limiting Check
     client_ip = upload_rate_limiter.get_client_ip(request)
@@ -363,7 +559,10 @@ async def upload_mp3(request: Request, response: Response, file: UploadFile = Fi
 
 
 @app.get("/api/artwork")
-async def get_artwork(session_id: str = Depends(get_current_session_id)):
+async def get_artwork(
+    session_id: str = Depends(get_current_session_id),
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
+):
     """Serve embedded or uploaded artwork binary for the authenticated session."""
     sdir = storage_manager.get_session_dir(session_id)
     if not sdir:
@@ -393,6 +592,7 @@ async def get_artwork(session_id: str = Depends(get_current_session_id)):
 async def upload_artwork(
     image: UploadFile = File(...),
     session_id: str = Depends(get_current_session_id),
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
     """Upload and stage new album art for the authenticated session."""
     sdir = storage_manager.get_session_dir(session_id)
@@ -420,7 +620,10 @@ async def upload_artwork(
 
 
 @app.delete("/api/artwork")
-async def remove_artwork_staging(session_id: str = Depends(get_current_session_id)):
+async def remove_artwork_staging(
+    session_id: str = Depends(get_current_session_id),
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
+):
     """Mark artwork for removal in the authenticated session."""
     sdir = storage_manager.get_session_dir(session_id)
     if not sdir:
@@ -449,7 +652,10 @@ class SunoApplyArtworkRequest(BaseModel):
 
 
 @app.post("/api/suno/extract")
-async def api_suno_extract(req: SunoExtractRequest):
+async def api_suno_extract(
+    req: SunoExtractRequest,
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
+):
     """Extract metadata and artwork information from a Suno Clip UUID or song URL."""
     try:
         meta = fetch_suno_metadata(req.query)
@@ -471,6 +677,7 @@ async def api_suno_extract(req: SunoExtractRequest):
 async def api_suno_apply_artwork(
     req: SunoApplyArtworkRequest,
     session_id: str = Depends(get_current_session_id),
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
     """Fetches high-res artwork from Suno CDN and stages it in the current editing session."""
     sdir = storage_manager.get_session_dir(session_id)
@@ -533,6 +740,7 @@ async def api_suno_apply_artwork(
 async def save_metadata(
     meta: MetadataModel,
     session_id: str = Depends(get_current_session_id),
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
     """Commit edited metadata and staged artwork to the MP3 file for the authenticated session."""
     audio_path = storage_manager.get_audio_path(session_id)
@@ -604,6 +812,7 @@ async def download_mp3(
     filename: Optional[str] = None,
     cleanup_after: bool = False,
     session_id: str = Depends(get_current_session_id),
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
     """Download the modified MP3 file with clean Content-Disposition headers for the authenticated session."""
     audio_path = storage_manager.get_audio_path(session_id)
@@ -636,6 +845,7 @@ async def download_mp3(
 async def stream_audio(
     request: Request,
     session_id: str = Depends(get_current_session_id),
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
     """Stream audio with deterministic single-range support (HTTP 206 Partial Content).
     
@@ -772,7 +982,10 @@ async def stream_audio(
 
 
 @app.get("/api/session")
-async def get_session_state(request: Request):
+async def get_session_state(
+    request: Request,
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
+):
     """Check if client has an active unexpired file session on disk and return current state."""
     token = request.cookies.get(SESSION_COOKIE_NAME) or request.headers.get("X-Session-Token")
     if not token:
@@ -840,6 +1053,7 @@ async def delete_session(
     request: Request,
     response: Response,
     session_id: str = Depends(get_current_session_id),
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
     """Explicitly terminate and purge a session, clearing the session cookie."""
     success = storage_manager.cleanup_session(session_id)

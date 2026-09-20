@@ -26,6 +26,8 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 - [x] **18. Safe Systemd Unit Parser Hardening & Migration**: Atomic in-place unit updates with POSIX quoting and shell injection defense. *(Implemented in `scripts/migrate_service.py` & `install.sh`)*
 - [x] **19. Safe Service Access & LAN Configuration Hardening**: Validated IP/hostname binding parameters with atomic permission-preserving updates. *(Implemented in `scripts/configure_access.py` & `install.sh`)*
 
+- [x] **20. Cryptographic Password Hashing & Brute-Force Rate Limiting**: Zero-dependency standard library PBKDF2-HMAC-SHA256 password security, distinct auth cookie trust boundaries, and brute-force lockout. *(Implemented in `backend/auth.py` & `frontend/js/auth.js`)*
+
 ---
 
 ## 🔍 Detailed Vector Analysis & Implementations
@@ -115,6 +117,16 @@ This document logs the threat model, attack surface analysis, vulnerability vect
   1. Strict validation in `scripts/configure_access.py` using Python's `ipaddress` module and RFC 1123 hostname regex, explicitly validating IPv4/IPv6 addresses, CIDR subnets, and domain/URL strings while rejecting spaces, tabs, newlines, semicolons, shell metacharacters, and quote delimiters.
   2. Secure default: Fresh installations retain the secure loopback default (`127.0.0.1`) and proxy trust disabled (`MP3METAFIX_TRUST_PROXIES=false`), requiring explicit administrative command execution (`./install.sh --lan`, `./install.sh --bind <IP>`, `./install.sh --proxy <IP>`, or `./install.sh --domain <DOMAIN>`) to allow external network reachability or upstream proxy trust.
   3. Safe atomic writes: Modifies only target directives (`MP3METAFIX_HOST`, `MP3METAFIX_PORT`, `MP3METAFIX_TRUST_PROXIES`, `MP3METAFIX_TRUSTED_PROXIES`, `MP3METAFIX_PROXY_HOST`) within `[Service]`, preserving permissions, sandboxing limits, and other environment variables.
+
+### Vector 20: User Authentication, PBKDF2 Password Security & Brute-Force Rate Limiting [COMPLETED]
+- **Threat**: Unauthorized users accessing administrative telemetry or file editor on public/LAN networks, credential stuffing, brute-force password guessing, and session token conflation.
+- **Defense**:
+  1. **Default Protected Mode**: All mutating APIs, Gateway Hub, Desktop MetaManager, and telemetry require authentication unless Guest Mode is explicitly toggled by the administrator.
+  2. **Zero-Dependency Password Hashing**: Utilizes standard library `hashlib.pbkdf2_hmac` (`sha256`, 600,000 iterations, unique 16-byte random salt) and timing-attack-resistant `secrets.compare_digest`.
+  3. **Distinct Cookie Trust Boundaries**: Decoupled `mp3metafix_auth` signed token `{user_id}.{timestamp}.{sig}` from `mp3metafix_session` `{session_id}.{timestamp}.{sig}`.
+  4. **POSIX 0700 & 0600 Filesystem Security**: Persistent users (`users.json`) and system settings (`settings.json`) stored in `data/auth/` under POSIX `0700` directory and `0600` file modes.
+  5. **Brute-Force Rate Limiter**: `LoginRateLimiter` enforces 5 failed attempts per client IP per 60s with automatic 5-minute cooldown.
+
 
 
 

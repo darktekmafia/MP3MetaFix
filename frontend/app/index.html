@@ -63,6 +63,7 @@
           </svg>
         </button>
         <span class="badge badge-status" id="serverStatus"><span class="status-dot"></span> Online</span>
+        <div class="header-auth-container" id="headerAuthContainer"></div>
       </div>
     </header>
 
@@ -738,9 +739,220 @@
     </div>
   </div>
 
+  <!-- Initial Administrator Setup Wizard Modal -->
+  <div id="setupModal" class="modal-overlay hidden" role="dialog" aria-labelledby="setupModalTitle" aria-modal="true" data-backdrop="static">
+    <div class="modal-card auth-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.35); color: #818cf8;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+          </div>
+          <div>
+            <h2 id="setupModalTitle" class="modal-title">Initial Setup Wizard</h2>
+            <p class="modal-subtitle">Create primary administrator account</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-body">
+        <div class="auth-intro-box">
+          <strong>Welcome to MP3MetaFix!</strong><br>
+          Please create your primary administrator account below. This account manages system security, settings, and workspace access.
+        </div>
+
+        <div id="setupErrorBanner" class="auth-error-banner hidden" role="alert">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+          <span id="setupErrorText">An error occurred during setup.</span>
+        </div>
+
+        <form id="formAuthSetup" class="auth-form">
+          <div class="form-group">
+            <label for="setupUsername" class="form-label">Administrator Username</label>
+            <input type="text" id="setupUsername" name="setupUsername" class="form-input" placeholder="e.g. admin" required minlength="3" autocomplete="username">
+          </div>
+
+          <div class="form-group">
+            <label for="setupPassword" class="form-label">Administrator Password</label>
+            <input type="password" id="setupPassword" name="setupPassword" class="form-input" placeholder="Minimum 8 characters" required minlength="8" autocomplete="new-password">
+          </div>
+
+          <div class="form-group">
+            <label for="setupConfirm" class="form-label">Confirm Password</label>
+            <input type="password" id="setupConfirm" name="setupConfirm" class="form-input" placeholder="Re-type password" required minlength="8" autocomplete="new-password">
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-block btn-lg" id="btnSubmitSetup" style="margin-top: 0.5rem;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            <span>Create Admin & Complete Setup</span>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sign In Modal -->
+  <div id="loginModal" class="modal-overlay hidden" role="dialog" aria-labelledby="loginModalTitle" aria-modal="true">
+    <div class="modal-card auth-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+              <polyline points="10 17 15 12 10 7"></polyline>
+              <line x1="15" y1="12" x2="3" y2="12"></line>
+            </svg>
+          </div>
+          <div>
+            <h2 id="loginModalTitle" class="modal-title">Sign In</h2>
+            <p class="modal-subtitle">Authenticate to access MP3MetaFix</p>
+          </div>
+        </div>
+        <button class="btn-close" id="btnCloseLoginModal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div id="loginErrorBanner" class="auth-error-banner hidden" role="alert">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+          <span id="loginErrorText">Invalid username or password.</span>
+        </div>
+
+        <form id="formAuthLogin" class="auth-form">
+          <div class="form-group">
+            <label for="loginUsername" class="form-label">Username</label>
+            <input type="text" id="loginUsername" name="loginUsername" class="form-input" placeholder="Username" required autocomplete="username">
+          </div>
+
+          <div class="form-group">
+            <label for="loginPassword" class="form-label">Password</label>
+            <input type="password" id="loginPassword" name="loginPassword" class="form-input" placeholder="Password" required autocomplete="current-password">
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-block btn-lg" id="btnSubmitLogin" style="margin-top: 0.5rem;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            <span>Sign In</span>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings & Security Modal -->
+  <div id="settingsModal" class="modal-overlay hidden" role="dialog" aria-labelledby="settingsModalTitle" aria-modal="true">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </div>
+          <div>
+            <h2 id="settingsModalTitle" class="modal-title">Settings & Security</h2>
+            <p class="modal-subtitle">Access control, guest mode, storage quotas, and credentials</p>
+          </div>
+        </div>
+        <button class="btn-close" id="btnCloseSettingsModal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Admin Settings Section -->
+        <div id="settingsAdminSection" class="settings-admin-wrapper">
+          <form id="formSystemSettings" class="settings-form">
+            <!-- Access & Guest Mode Card -->
+            <div class="settings-section-card">
+              <div class="settings-section-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                <span>Guest Mode & Public Access Policy</span>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label-group">
+                  <span class="settings-label">Enable Guest Mode for Single-Track Editor (/app)</span>
+                  <span class="settings-subtext">When enabled, visitors can use MP3MetaFix without logging in. The Gateway Hub, MetaManager, and Live Telemetry remain restricted to logged-in administrators.</span>
+                </div>
+                <label class="toggle-switch" aria-label="Toggle Guest Mode">
+                  <input type="checkbox" id="settingGuestMode">
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Session & Storage Quota Card -->
+            <div class="settings-section-card" style="margin-top: 1rem;">
+              <div class="settings-section-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                <span>Session & Storage Limits</span>
+              </div>
+              <div class="settings-inputs-grid">
+                <div class="form-group">
+                  <label for="settingMaxSessions" class="form-label">Max Active Sessions</label>
+                  <input type="number" id="settingMaxSessions" class="form-input" min="1" max="100" value="10">
+                  <span class="settings-subtext">Concurrency limit for active track sessions</span>
+                </div>
+                <div class="form-group">
+                  <label for="settingMaxStorage" class="form-label">Max Temp Storage Quota (MB)</label>
+                  <input type="number" id="settingMaxStorage" class="form-input" min="100" max="20480" value="2048">
+                  <span class="settings-subtext">Total disk quota for audio caching</span>
+                </div>
+              </div>
+
+              <div style="display: flex; justify-content: flex-end; margin-top: 0.5rem;">
+                <button type="submit" class="btn btn-primary btn-sm" id="btnSaveSettings">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                  <span>Save System Settings</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+
+        <!-- Password Change Card -->
+        <div class="settings-section-card" style="margin-top: 1rem;">
+          <div class="settings-section-header">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            <span>Change Password</span>
+          </div>
+
+          <div id="pwdErrorBanner" class="auth-error-banner hidden" role="alert">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+            <span id="pwdErrorText">Could not update password.</span>
+          </div>
+
+          <form id="formChangePassword" class="auth-form" style="margin-top: 0.5rem;">
+            <div class="form-group">
+              <label for="pwdCurrent" class="form-label">Current Password</label>
+              <input type="password" id="pwdCurrent" name="pwdCurrent" class="form-input" placeholder="Current password" required autocomplete="current-password">
+            </div>
+
+            <div class="settings-inputs-grid">
+              <div class="form-group">
+                <label for="pwdNew" class="form-label">New Password</label>
+                <input type="password" id="pwdNew" name="pwdNew" class="form-input" placeholder="Min 8 characters" required minlength="8" autocomplete="new-password">
+              </div>
+              <div class="form-group">
+                <label for="pwdConfirm" class="form-label">Confirm New Password</label>
+                <input type="password" id="pwdConfirm" name="pwdConfirm" class="form-input" placeholder="Re-type new password" required minlength="8" autocomplete="new-password">
+              </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; margin-top: 0.5rem;">
+              <button type="submit" class="btn btn-secondary btn-sm" id="btnChangePassword">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Update Password</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification Container -->
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
+  <script src="/js/auth.js?v=0.4.0"></script>
   <script src="/js/app.js?v=0.4.0"></script>
 </body>
 </html>

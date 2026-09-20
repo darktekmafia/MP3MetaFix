@@ -35,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Workspace Engineering Standards & Rule Hardening (`AGENTS.md`)**:
   - Added **Rule 8 (Mobile-First Responsive Design for `/app`)** mandating unobtrusive prompts, zero-overflow track flooring, and compact bottom sheets.
   - Added **Rule 9 (User Choice & Non-Destructive Data Merging)** guaranteeing user per-field control over metadata overwrites.
+- **Full System Authentication & Access Control Subsystem (`backend/auth.py`, `frontend/js/auth.js`)**:
+  - Implemented default protected mode requiring authentication across Gateway Hub (`/`), Desktop MetaManager (`/manager`), System Telemetry (`/api/system/stats`), and all file-editing APIs.
+  - **First-Run Administrator Setup Wizard**: Automated modal wizard displayed on initial visit prompting the owner to configure the primary administrator account (`POST /api/auth/setup`).
+  - **Cryptographic Security & Zero-Dependency Password Hashing**: Utilized standard-library `hashlib.pbkdf2_hmac` (600,000 rounds of HMAC-SHA256 with unique 16-byte cryptographically secure salts) and timing-attack-resistant `secrets.compare_digest`.
+  - **Distinct Cookie Trust Boundaries**: Separated account authentication (`mp3metafix_auth` signed token `{user_id}.{timestamp}.{sig}`) from temporary file session storage (`mp3metafix_session` token `{session_id}.{timestamp}.{sig}`) in strict compliance with project architecture rules.
+  - **Brute-Force Login Rate Limiting**: Built `LoginRateLimiter` enforcing a 5-attempt sliding window per IP with automatic 5-minute cooldown.
+  - **Configurable Guest Mode Policy**: Administrator-toggled Guest Mode in Settings allowing unauthenticated visitors to use the mobile-first single-track tagger at `/app` while restricting the Gateway Hub, live telemetry diagnostics, batch workspace, and server settings to logged-in administrators.
+  - **In-App Settings & Quota Management**: Dedicated Settings modal supporting password changes, guest mode toggling, active session concurrency limits, and temporary storage disk quotas with persistent storage in POSIX `0700`/`0600` `data/auth/`.
+  - **Header Account Pill & Dropdown**: Glassmorphic user pill with user initials avatar, role badge (`Admin`/`Guest`), and interactive dropdown menu for settings and sign out.
 - **Seamless Session Restoration & Memory Retention (`GET /api/session`)**:
   - Implemented session handshake endpoint (`GET /api/session`) checking the secure `HttpOnly` cookie against active storage sessions on disk.
   - Automatically restores open file sessions on page reload or when mobile operating systems reclaim browser memory during app switching, mounting the audio waveform and populating metadata fields without showing the dropzone.

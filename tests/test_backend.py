@@ -29,9 +29,42 @@ from backend.metadata_engine import (
 from backend.storage import SessionManager
 
 
+@pytest.fixture(autouse=True)
+def setup_auth_environment(tmp_path, monkeypatch):
+    """Ensure a clean, isolated auth state for each test."""
+    from backend.auth import AuthManager, login_rate_limiter
+    auth_dir = tmp_path / "auth"
+    test_auth_mgr = AuthManager(auth_dir=auth_dir)
+    monkeypatch.setattr("backend.main.auth_manager", test_auth_mgr)
+    monkeypatch.setattr("backend.auth.auth_manager", test_auth_mgr)
+    login_rate_limiter.failed_attempts.clear()
+    login_rate_limiter.blocked_until.clear()
+    # Create default admin for standard test runs
+    test_auth_mgr.create_initial_admin("admin", "AdminPass123!")
+    return test_auth_mgr
+
+
 @pytest.fixture
-def client():
+def auth_client(setup_auth_environment):
+    """TestClient pre-authenticated as administrator."""
+    from backend.auth import create_auth_token, AUTH_COOKIE_NAME
+    c = TestClient(app)
+    admin_user = setup_auth_environment._load_users()[0]
+    token = create_auth_token(admin_user["id"])
+    c.cookies.set(AUTH_COOKIE_NAME, token)
+    return c
+
+
+@pytest.fixture
+def unauth_client(setup_auth_environment):
+    """TestClient with no auth cookie."""
     return TestClient(app)
+
+
+@pytest.fixture
+def client(auth_client):
+    """Default client for existing tests is authenticated as admin."""
+    return auth_client
 
 
 @pytest.fixture
@@ -2019,6 +2052,170 @@ def test_api_get_session_lifecycle(client, sample_mp3_bytes, sample_image_bytes)
     res_after_del = client.get("/api/session")
     assert res_after_del.status_code == 200
     assert res_after_del.json() == {"active": False}
+
+
+# --- Authentication & Policy Subsystem Tests ---
+
+def test_auth_crypto_primitives():
+    from backend.auth import hash_password, verify_password, create_auth_token, verify_auth_token
+
+    # 1. PBKDF2-HMAC-SHA256 Password Hashing
+    pw = "SuperSecurePass123!"
+    h1 = hash_password(pw)
+    h2 = hash_password(pw)
+    assert h1 != h2  # Random salt uniqueness
+    assert verify_password(pw, h1) is True
+    assert verify_password(pw, h2) is True
+    assert verify_password("WrongPass", h1) is False
+    assert verify_password("", h1) is False
+
+    # 2. Signed Token Cryptography
+    user_id = "test-user-uuid-1234"
+    tok = create_auth_token(user_id)
+    assert verify_auth_token(tok) == user_id
+
+    # Tampered token rejected
+    tampered = tok[:-4] + "abcd"
+    assert verify_auth_token(tampered) is None
+
+    # Expired token rejected
+    expired_tok = f"{user_id}.{int(time.time() - 1000000)}.fake_sig"
+    assert verify_auth_token(expired_tok) is None
+
+
+def test_auth_first_time_setup_workflow(tmp_path, monkeypatch):
+    from backend.auth import AuthManager
+    from backend.main import app
+
+    auth_dir = tmp_path / "fresh_auth"
+    fresh_auth_mgr = AuthManager(auth_dir=auth_dir)
+    monkeypatch.setattr("backend.main.auth_manager", fresh_auth_mgr)
+    monkeypatch.setattr("backend.auth.auth_manager", fresh_auth_mgr)
+
+    c = TestClient(app)
+
+    # 1. First visit reports setup_required: true
+    res_status = c.get("/api/auth/status")
+    assert res_status.status_code == 200
+    assert res_status.json()["setup_required"] is True
+    assert res_status.json()["authenticated"] is False
+
+    # 2. Setup with short password rejected
+    res_short = c.post("/api/auth/setup", json={"username": "admin", "password": "123"})
+    assert res_short.status_code == 422
+
+    # 3. Valid setup creates admin and sets auth cookie
+    res_setup = c.post("/api/auth/setup", json={"username": "sysadmin", "password": "StrongPassword99!"})
+    assert res_setup.status_code == 200
+    body = res_setup.json()
+    assert body["success"] is True
+    assert body["user"]["username"] == "sysadmin"
+    assert body["user"]["role"] == "admin"
+    assert "mp3metafix_auth" in c.cookies
+
+    # 4. Status now reports authenticated and setup_required: false
+    res_status2 = c.get("/api/auth/status")
+    assert res_status2.json()["setup_required"] is False
+    assert res_status2.json()["authenticated"] is True
+    assert res_status2.json()["user"]["username"] == "sysadmin"
+
+    # 5. Subsequent setup attempt rejected with HTTP 400
+    res_second = c.post("/api/auth/setup", json={"username": "hacker", "password": "HackerPassword99!"})
+    assert res_second.status_code == 400
+
+
+def test_auth_login_logout_lifecycle(unauth_client):
+    # 1. Unauthenticated status
+    res_init = unauth_client.get("/api/auth/status")
+    assert res_init.json()["authenticated"] is False
+
+    # 2. Bad credentials rejected with HTTP 401
+    res_bad = unauth_client.post("/api/auth/login", json={"username": "admin", "password": "WrongPassword"})
+    assert res_bad.status_code == 401
+
+    # 3. Correct credentials log in and set cookie
+    res_login = unauth_client.post("/api/auth/login", json={"username": "admin", "password": "AdminPass123!"})
+    assert res_login.status_code == 200
+    assert res_login.json()["success"] is True
+    assert "mp3metafix_auth" in unauth_client.cookies
+
+    # 4. Status reflects active session
+    res_auth = unauth_client.get("/api/auth/status")
+    assert res_auth.json()["authenticated"] is True
+    assert res_auth.json()["user"]["username"] == "admin"
+
+    # 5. Logout clears cookie
+    res_logout = unauth_client.post("/api/auth/logout")
+    assert res_logout.status_code == 200
+    res_after = unauth_client.get("/api/auth/status")
+    assert res_after.json()["authenticated"] is False
+
+
+def test_auth_rate_limiting_brute_force(unauth_client):
+    # 5 failed login attempts trigger 429
+    for _ in range(5):
+        unauth_client.post("/api/auth/login", json={"username": "admin", "password": "bad"})
+    
+    res_blocked = unauth_client.post("/api/auth/login", json={"username": "admin", "password": "bad"})
+    assert res_blocked.status_code == 429
+    assert "Too many failed login attempts" in res_blocked.json().get("detail", "")
+
+
+def test_auth_change_password(auth_client):
+    # 1. Change password with wrong current password rejected
+    res_wrong = auth_client.post("/api/auth/change-password", json={
+        "current_password": "WrongPassword",
+        "new_password": "NewAdminPass456!",
+    })
+    assert res_wrong.status_code == 400
+    assert "Current password is incorrect" in res_wrong.json().get("detail", "")
+
+    # 2. Change password with valid current password succeeds
+    res_ok = auth_client.post("/api/auth/change-password", json={
+        "current_password": "AdminPass123!",
+        "new_password": "NewAdminPass456!",
+    })
+    assert res_ok.status_code == 200
+    assert res_ok.json()["success"] is True
+
+    # 3. New password works for subsequent login
+    c = TestClient(app)
+    res_new_login = c.post("/api/auth/login", json={"username": "admin", "password": "NewAdminPass456!"})
+    assert res_new_login.status_code == 200
+
+
+def test_guest_mode_vs_protected_mode_enforcement(unauth_client, auth_client, sample_mp3_bytes):
+    from backend.auth import auth_manager
+
+    # --- Scenario A: Guest Mode Disabled (Default) ---
+    auth_manager.update_settings({"guest_mode_enabled": False})
+
+    # Unauthenticated visitor blocked from all protected and editing routes
+    assert unauth_client.get("/api/system/stats").status_code == 401
+    assert unauth_client.get("/api/updates/check").status_code == 401
+    assert unauth_client.post("/api/upload", files={"file": ("test.mp3", sample_mp3_bytes, "audio/mpeg")}).status_code == 401
+    assert unauth_client.get("/api/settings").status_code == 401
+
+    # Authenticated user has full access
+    assert auth_client.get("/api/system/stats").status_code == 200
+    assert auth_client.get("/api/settings").status_code == 200
+    res_up = auth_client.post("/api/upload", files={"file": ("test.mp3", sample_mp3_bytes, "audio/mpeg")})
+    assert res_up.status_code == 200
+
+    # --- Scenario B: Guest Mode Enabled by Admin ---
+    auth_client.post("/api/settings", json={"guest_mode_enabled": True})
+    assert auth_manager.is_guest_mode_enabled() is True
+
+    # Unauthenticated visitor CAN now use single-track /app editor endpoints
+    res_guest_up = unauth_client.post("/api/upload", files={"file": ("guest.mp3", sample_mp3_bytes, "audio/mpeg")})
+    assert res_guest_up.status_code == 200
+
+    # But unauthenticated visitor CANNOT access admin / manager telemetry
+    assert unauth_client.get("/api/system/stats").status_code == 401
+    assert unauth_client.get("/api/updates/check").status_code == 401
+    assert unauth_client.get("/api/settings").status_code == 401
+    assert unauth_client.post("/api/settings", json={"guest_mode_enabled": False}).status_code == 401
+
 
 
 

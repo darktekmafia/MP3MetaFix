@@ -26,6 +26,12 @@ Although MP3MetaFix runs as a unified high-performance Python FastAPI service wi
 The **Gateway Hub** serves as the front door and system dashboard for the MP3MetaFix instance. It provides instantaneous visibility into host health, temporary MP3 cache quotas, and clean one-click launching into specialized workspaces.
 
 ### Completed Features ✅
+- [x] **Full System Authentication & Access Control Subsystem**:
+  - Default protected mode requiring administrator login across Hub (`/`), Desktop MetaManager (`/manager`), System Diagnostics (`/api/system/stats`), and backend mutating APIs.
+  - Automated First-Run Setup Wizard modal for primary administrator account creation.
+  - Configurable Guest Mode toggle enabling public single-track tagging at `/app` without compromising server diagnostics or batch workspace.
+  - PBKDF2-HMAC-SHA256 (600,000 rounds) password hashing + brute-force rate-limiting.
+  - In-app Settings & Quota Management modal for session limits, disk quota, and password changes.
 - [x] **Live System Telemetry Quickbar (`GET /api/system/stats`)**:
   - Real-time CPU load (`1m`, `5m`, `15m`), memory utilization, disk space, and MP3 temporary cache quota tracking.
   - Responsive 2x2 micro-card mobile view with smooth-scrolling quick jump to full diagnostics.
@@ -37,8 +43,8 @@ The **Gateway Hub** serves as the front door and system dashboard for the MP3Met
   - High-contrast footers, readable links, and glassmorphic telemetry cards across all screen resolutions (320px–4K).
 
 ### Active Backlog & Future Vision 📋
-- [ ] **Guest & Public Mode Access Controls**:
-  - Administrator toggle allowing guest visitors to access only the single-track `/app` editor while locking `/manager` and system diagnostics behind authentication.
+- [ ] **Multi-User Role & Quota Policies**:
+  - Granular per-user storage quotas, tenant directories, and role management (Editor, Viewer, Admin).
 - [ ] **Service Daemon Maintenance Triggers**:
   - Authenticated admin actions to trigger cache cleanup, storage purge, or service restart directly from the web portal.
 - [ ] **Live Audio Processing Metrics**:

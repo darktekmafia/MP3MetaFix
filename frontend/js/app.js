@@ -172,6 +172,7 @@ document.addEventListener('DOMContentLoaded', () => {
       setTimeout(() => toast.remove(), 250);
     }, duration);
   }
+  window.showToast = showToast;
 
   // --- Upload Handling ---
   dropzone.addEventListener('click', () => fileInput.click());
@@ -257,6 +258,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } else {
         uploadProgressContainer.classList.add('hidden');
+        if (xhr.status === 401) {
+          showToast('Authentication required. Please sign in.', 'error');
+          if (window.MP3MetaFixAuth) window.MP3MetaFixAuth.openModal('loginModal');
+          return;
+        }
         try {
           const errData = JSON.parse(xhr.responseText);
           showToast(errData.detail || 'Upload failed', 'error');
@@ -1030,6 +1036,11 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       const res = await response.json();
+      if (response.status === 401) {
+        showToast('Authentication required. Please sign in.', 'error');
+        if (window.MP3MetaFixAuth) window.MP3MetaFixAuth.openModal('loginModal');
+        return;
+      }
       if (response.ok && res.success) {
         showToast('MP3 metadata saved successfully!', 'success');
         loadedFilename.textContent = res.target_filename;

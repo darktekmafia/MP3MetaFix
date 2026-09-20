@@ -228,6 +228,46 @@ MP3MetaFix integrates automated server-side extraction and non-destructive clien
 
 ---
 
-## 9. Sub-Project Roadmap Alignment
+## 9. Authentication & Access Control Subsystem
+
+MP3MetaFix integrates a zero-external-dependency authentication subsystem built on standard library cryptographic primitives:
+
+```
+[ Unauthenticated Client ]
+        │
+        ▼
+   [ GET /api/auth/status ]
+        │
+        ├── !initialized ─────────► [ First-Run Setup Wizard Modal ] ──► POST /api/auth/setup
+        │
+        ├── initialized & !auth ──► Check Guest Mode Policy:
+        │                              ├── If Guest Mode & /app ──► Allow Single-Track Tagging (Guest Pill)
+        │                              └── Else (/manager, /, stats) ─► Show Login Modal ──► POST /api/auth/login
+        │
+        └── authenticated ────────► [ Header Account Pill & Dropdown ]
+                                       ├── Settings & Security Modal (Guest Mode Toggle, Quotas, Passwords)
+                                       └── Sign Out ──► POST /api/auth/logout
+```
+
+### Key Subsystem Characteristics:
+1. **Zero-Dependency Password Hashing**:
+   - Standard library `hashlib.pbkdf2_hmac` (`sha256`, 600,000 iterations, unique 16-byte random salt).
+   - Format: `pbkdf2:sha256:600000${salt_hex}${hash_hex}`.
+   - Verification uses timing-attack-resistant `secrets.compare_digest`.
+2. **Distinct Cookie Trust Boundaries**:
+   - `mp3metafix_auth`: Manages user account authentication (`{user_id}.{timestamp}.{sig}`).
+   - `mp3metafix_session`: Manages isolated temporary file-editing storage (`{session_id}.{timestamp}.{sig}`).
+   - The two cookie layers are completely decoupled to prevent credential/session conflation.
+3. **Filesystem Security (POSIX 0700 / 0600)**:
+   - Account and system settings metadata are stored in `data/auth/users.json` and `data/auth/settings.json`.
+   - The `data/auth/` directory is created with POSIX `0700` (`rwx------`) permissions and files are created with POSIX `0600` (`rw-------`).
+4. **Brute-Force Rate Limiting (`LoginRateLimiter`)**:
+   - Enforces a 5-attempt sliding window per client IP per 60 seconds with an automatic 5-minute cooldown period upon threshold violation.
+5. **Configurable Guest Mode Policy**:
+   - Administrator-toggled policy allowing anonymous visitors to access the focused `/app` single-track editor while restricting the Gateway Hub (`/`), Desktop MetaManager (`/manager`), System Telemetry (`/api/system/stats`), and Settings to authenticated administrators.
+
+---
+
+## 10. Sub-Project Roadmap Alignment
 
 For full feature backlogs, milestones, and strategic plans for each interface, see [ROADMAP.md](../ROADMAP.md).
