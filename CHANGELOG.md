@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated post-installation summary output and `./install.sh --status` to display active URLs, reverse proxy trust status, proxy domain URLs, and clear instructions on enabling LAN access for headless and container environments.
 
 ### Fixed
+- **HTTP HEAD Support on Health & Version Endpoints**:
+  - Registered `/api/health` and `/api/version` endpoints with `methods=["GET", "HEAD"]` so `curl -I` requests, upstream reverse proxy health probes, and uptime monitors receive `HTTP 200 OK` rather than `HTTP 404 Not Found`.
 - **Custom Bind IP Health Probes & Endpoint Reporting**:
   - Configured health check probes and active access URL reporting to dynamically target the configured interface when bound to a specific IP (e.g. `--bind 192.168.0.190`), eliminating false timeout warnings caused by probing localhost on dedicated interface binds.
 - **Help Flag Aliases**:

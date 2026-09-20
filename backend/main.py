@@ -137,13 +137,13 @@ def get_current_session_id(request: Request) -> str:
 
 # --- API Routes ---
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint supporting both GET and HEAD requests."""
     return {"status": "ok", "version": VERSION}
 
 
-@app.get("/api/version")
+@app.api_route("/api/version", methods=["GET", "HEAD"])
 async def get_app_version():
     """Version and system inquiry endpoint returning detailed environment metadata."""
     return get_system_version_info()

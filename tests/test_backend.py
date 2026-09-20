@@ -193,9 +193,15 @@ def test_api_health_and_version(client):
     assert res_health.status_code == 200
     assert res_health.json()["status"] == "ok"
 
+    res_health_head = client.head("/api/health")
+    assert res_health_head.status_code == 200
+
     res_ver = client.get("/api/version")
     assert res_ver.status_code == 200
     assert res_ver.json()["version"] == VERSION
+
+    res_ver_head = client.head("/api/version")
+    assert res_ver_head.status_code == 200
 
 
 def test_api_upload_invalid_file(client):
