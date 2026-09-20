@@ -567,7 +567,15 @@ button {
 
 @media (max-width: 960px) {
   .workspace-grid {
+    grid-template-columns: 280px 1fr;
+    gap: 1.1rem;
+  }
+}
+
+@media (max-width: 720px) {
+  .workspace-grid {
     grid-template-columns: 1fr;
+    gap: 1rem;
   }
 }
 
@@ -921,6 +929,13 @@ button {
   padding-bottom: 0.8rem;
   margin-bottom: 1.5rem;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.tabs-header::-webkit-scrollbar {
+  display: none;
 }
 
 .tab-btn {
@@ -2933,7 +2948,9 @@ button {
     margin-bottom: 0.85rem;
   }
   .artwork-preview-container {
-    max-height: 300px;
+    max-width: 240px;
+    max-height: 240px;
+    margin: 0 auto;
   }
   .artwork-btn-group {
     grid-template-columns: repeat(3, 1fr);
@@ -3233,7 +3250,9 @@ button {
     padding: 0.15rem 0.45rem;
   }
   .artwork-preview-container {
-    max-height: 240px;
+    max-width: 210px;
+    max-height: 210px;
+    margin: 0 auto;
   }
   .artwork-btn-group .btn {
     padding: 0.4rem 0.25rem;
@@ -3247,6 +3266,17 @@ button {
   .tab-btn {
     padding: 0.35rem 0.5rem;
     font-size: 0.74rem;
+  }
+  .canned-comment-toolbar {
+    width: 100%;
+  }
+  .canned-select-wrapper {
+    flex: 1;
+    min-width: 0;
+  }
+  .select-canned-comment {
+    width: 100%;
+    max-width: 100%;
   }
 }
 
@@ -3263,6 +3293,15 @@ button {
   .badge {
     font-size: 0.62rem;
     padding: 0.12rem 0.35rem;
+  }
+  .artwork-preview-container {
+    max-width: 180px;
+    max-height: 180px;
+    margin: 0 auto;
+  }
+  .tab-btn {
+    padding: 0.3rem 0.4rem;
+    font-size: 0.7rem;
   }
 }
 
