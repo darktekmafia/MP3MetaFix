@@ -656,7 +656,8 @@ do_access_config() {
                     formatted_domain_url="http://${cur_domain%/}"
                     echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${GREEN}OK (Responding on ${formatted_domain_url})${NC}"
                 else
-                    echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${YELLOW}UNREACHABLE from this host (${formatted_domain_url}/api/health - check DNS / NAT)${NC}"
+                    echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${YELLOW}UNREACHABLE from this host (${formatted_domain_url}/api/health)${NC}"
+                    echo -e "    ${YELLOW}↳ Note:${NC} Homelab routers without Hairpin NAT (NAT loopback) cannot query their own public domain from within the LAN. External reachability is unaffected (see docs/DEPLOYMENT.md)."
                 fi
             fi
         fi
@@ -825,6 +826,7 @@ do_access_config() {
             echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${GREEN}OK (Responding on ${formatted_domain_url})${NC}"
         else
             echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${YELLOW}UNREACHABLE from this host (${formatted_domain_url}/api/health)${NC}"
+            echo -e "    ${YELLOW}↳ Note:${NC} Homelab routers without Hairpin NAT (NAT loopback) cannot query their own public domain from within the LAN. External reachability is unaffected (see docs/DEPLOYMENT.md)."
         fi
     fi
 

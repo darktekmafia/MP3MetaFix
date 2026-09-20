@@ -224,6 +224,33 @@ When the reverse proxy (e.g. Nginx Proxy Manager, external load balancer, or gat
 
 ---
 
+### Understanding Hairpin NAT (NAT Loopback) & Local Health Probes
+
+When configuring a public domain or reverse proxy hostname using `./install.sh --domain <DOMAIN>` inside an LXC container, Docker container, VM, or homelab network:
+
+1. **Local Probe vs External Reachability**:
+   - The installer automatically sends an informational health check to `https://<DOMAIN>/api/health` from the **local machine** executing the installer.
+   - If the local health probe reports:
+     ```
+     • Proxy Domain Health: UNREACHABLE from this host (https://... - check DNS / NAT)
+     ```
+     this indicates that the **local container/host cannot loop back to its own public domain from within the internal LAN**.
+
+2. **Why This Happens (Hairpin NAT)**:
+   - When a container or machine inside the LAN (`192.168.0.190`) requests its own public domain, DNS resolves to the external WAN IP (or Cloudflare/CDN proxy).
+   - For internal packets destined for the router's WAN IP to loop back inside to the reverse proxy host (`192.168.0.55`), the local router/gateway must support and enable **Hairpin NAT** (also known as *NAT Loopback* or *NAT Reflection*).
+   - Many consumer homelab routers, default container bridge interfaces, or Proxmox virtual networks do not hairpin loopback traffic from internal IPs back into the LAN.
+
+3. **External Client Access is Unaffected**:
+   - External clients (smartphones, office workstations, external browsers) route through standard internet DNS and WAN gateways to your reverse proxy without involving internal LAN loopback.
+   - To verify that your reverse proxy and MP3MetaFix instance are fully functional from outside the host, run from your client workstation:
+     ```bash
+     curl -I https://mp3metafix.yourdomain.com/api/health
+     ```
+     An `HTTP 200 OK` response confirms that DNS, Cloudflare/CDN, reverse proxy routing, and the MP3MetaFix backend are all working properly.
+
+---
+
 ## 5. Updates and Upgrades
 
 To update MP3MetaFix in-place via CLI:

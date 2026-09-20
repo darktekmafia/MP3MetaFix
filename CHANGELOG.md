@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Accepted `--h` and `-help` as aliases for `--help` / `-h` in `install.sh`.
 
 ### Documentation & Lifecycle
+- **Hairpin NAT (NAT Loopback) & Local Health Probe Guidance**:
+  - Documented in `docs/DEPLOYMENT.md` why local container health probes from within homelab/LAN networks may report external proxy domains as unreachable due to lack of router Hairpin NAT reflection while external client connectivity is unaffected.
+  - Added contextual diagnostic hints referencing `docs/DEPLOYMENT.md` to `install.sh --access` and `install.sh --domain`.
 - **Pre-Handoff vs Handoff-Capable Update Transition Semantics**:
   - Clarified that systems upgrading from legacy pre-migration versions (`v0.3.0` & `v0.3.1`) require a second `./install.sh --update` invocation (or manual migration execution) because the legacy in-memory script completes its old flow before on-disk code is refreshed.
   - Noted that `v0.3.2` introduced `scripts/migrate_service.py` directly, and releases `v0.3.3+` feature the in-place process handoff (`exec bash`) for automated single-invocation migration during updates.
