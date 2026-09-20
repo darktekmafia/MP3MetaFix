@@ -138,6 +138,22 @@ async def check_github_updates(force_refresh: bool = False) -> Dict[str, Any]:
                 result["error"] = "GitHub API rate limit exceeded. Please try again in a few minutes."
             else:
                 result["error"] = f"GitHub API responded with status {resp.status_code}."
+
+            # 3. If no newer version detected via Releases/Tags, check raw VERSION on main branch
+            if not result["update_available"]:
+                try:
+                    raw_version_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/VERSION"
+                    raw_resp = await client.get(raw_version_url)
+                    if raw_resp.status_code == 200:
+                        raw_ver = raw_resp.text.strip()
+                        if raw_ver and is_version_newer(raw_ver, current_version):
+                            result["latest_version"] = raw_ver
+                            result["release_name"] = f"v{raw_ver}"
+                            result["release_notes"] = f"New version v{raw_ver} is available on GitHub."
+                            result["html_url"] = f"{GITHUB_REPO_URL}"
+                            result["update_available"] = True
+                except Exception as exc:
+                    logger.debug(f"Raw branch VERSION fallback check: {exc}")
         except httpx.RequestError as exc:
             logger.warning(f"Could not reach GitHub API for update check: {exc}")
             result["error"] = "Could not connect to GitHub to check for updates. Check internet connection."
