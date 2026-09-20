@@ -649,10 +649,10 @@ do_access_config() {
                 formatted_domain_url="https://${formatted_domain_url}"
             fi
             formatted_domain_url="${formatted_domain_url%/}"
-            if curl -s -f -m 3 --connect-timeout 2 "${formatted_domain_url}/api/health" >/dev/null 2>&1; then
+            if curl -s -f -L -k -m 4 --connect-timeout 3 "${formatted_domain_url}/api/health" >/dev/null 2>&1; then
                 echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${GREEN}OK (Responding on ${formatted_domain_url})${NC}"
             else
-                if [[ ! "$cur_domain" =~ ^https?:// ]] && curl -s -f -m 3 --connect-timeout 2 "http://${cur_domain%/}/api/health" >/dev/null 2>&1; then
+                if [[ ! "$cur_domain" =~ ^https?:// ]] && curl -s -f -L -k -m 4 --connect-timeout 3 "http://${cur_domain%/}/api/health" >/dev/null 2>&1; then
                     formatted_domain_url="http://${cur_domain%/}"
                     echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${GREEN}OK (Responding on ${formatted_domain_url})${NC}"
                 else
@@ -797,9 +797,9 @@ do_access_config() {
             formatted_domain_url="https://${formatted_domain_url}"
         fi
         formatted_domain_url="${formatted_domain_url%/}"
-        if curl -s -f -m 3 --connect-timeout 2 "${formatted_domain_url}/api/health" >/dev/null 2>&1; then
+        if curl -s -f -L -k -m 4 --connect-timeout 3 "${formatted_domain_url}/api/health" >/dev/null 2>&1; then
             domain_probe_ok=true
-        elif [[ ! "$eff_domain" =~ ^https?:// ]] && curl -s -f -m 3 --connect-timeout 2 "http://${eff_domain%/}/api/health" >/dev/null 2>&1; then
+        elif [[ ! "$eff_domain" =~ ^https?:// ]] && curl -s -f -L -k -m 4 --connect-timeout 3 "http://${eff_domain%/}/api/health" >/dev/null 2>&1; then
             formatted_domain_url="http://${eff_domain%/}"
             domain_probe_ok=true
         fi
