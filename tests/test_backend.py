@@ -1817,6 +1817,145 @@ WantedBy=default.target
     assert 'Environment="MP3METAFIX_HOST=127.0.0.1"' in updated_svc2
 
 
+# --- Suno AI Extraction & Sync Tests ---
+
+def test_extract_suno_id():
+    from backend.suno_extractor import extract_suno_id
+
+    # 1. Raw UUID
+    raw_uuid = "a362dcef-6a63-423a-8f6b-8990ff370c06"
+    assert extract_suno_id(raw_uuid) == raw_uuid
+
+    # 2. Uppercase UUID
+    assert extract_suno_id(raw_uuid.upper()) == raw_uuid
+
+    # 3. Suno Song URL
+    url = f"https://suno.com/song/{raw_uuid}"
+    assert extract_suno_id(url) == raw_uuid
+
+    # 4. Suno Explore URL with query parameters
+    url_query = f"https://suno.com/song/{raw_uuid}?share=true&source=feed"
+    assert extract_suno_id(url_query) == raw_uuid
+
+    # 5. Comment tag string
+    comment = f"made with suno; created=2026-09-03T21:26:05.728464+00:00; id={raw_uuid}"
+    assert extract_suno_id(comment) == raw_uuid
+
+    # 6. Invalid inputs
+    assert extract_suno_id(None) is None
+    assert extract_suno_id("") is None
+    assert extract_suno_id("not-a-valid-uuid-string") is None
+    assert extract_suno_id("https://spotify.com/track/12345") is None
+
+
+def test_parse_suno_combined_stream():
+    from backend.suno_extractor import parse_suno_combined_stream
+
+    sample_stream = (
+        '40:I[428621,["/_next/static/immutable/chunks/04dur3iie4ddp.js"],"default"]\n'
+        '51:T9d5,[Intro]\n\n[Verse]\nNeon reflections on the rain\n[Chorus]\nSynthetic dreams\n[End]'
+        '41:["$","$L50",null,{"clip":{"status":"complete","title":"Synthetic Dreams","display_name":"CyberArtist",'
+        '"handle":"cyber_artist","created_at":"2026-09-03T21:26:05.728Z","image_url":"https://cdn2.suno.ai/art123.jpeg",'
+        '"image_large_url":"https://cdn2.suno.ai/art123_large.jpeg","major_model_version":"v5","model_name":"chirp-crow",'
+        '"metadata":{"tags":"synthwave, cyberpunk, 120 bpm","prompt":"$51"}}}]'
+    )
+
+    result = parse_suno_combined_stream(sample_stream)
+    assert result["title"] == "Synthetic Dreams"
+    assert result["artist"] == "CyberArtist"
+    assert result["handle"] == "cyber_artist"
+    assert result["year"] == "2026"
+    assert result["genre"] == "synthwave, cyberpunk, 120 bpm"
+    assert result["image_url"] == "https://cdn2.suno.ai/art123_large.jpeg"
+    assert "[Verse]" in result["lyrics"]
+    assert "Synthetic dreams" in result["lyrics"]
+    assert result["model"] == "v5 chirp-crow"
+    assert "Style: synthwave, cyberpunk, 120 bpm" in result["formatted_comment"]
+    assert "Created on Suno.com (@cyber_artist)" in result["formatted_comment"]
+    # $51 React reference should be filtered out
+    assert "$51" not in result["formatted_comment"]
+
+
+def test_api_suno_extract_endpoints(client):
+    # 1. Invalid input returns HTTP 400
+    res_invalid = client.post("/api/suno/extract", json={"query": "not-a-uuid"})
+    assert res_invalid.status_code == 400
+    assert "Invalid Suno Clip UUID" in res_invalid.json().get("detail", "")
+
+    # 2. Valid input with mocked extraction
+    from unittest.mock import patch
+    mock_data = {
+        "id": "a362dcef-6a63-423a-8f6b-8990ff370c06",
+        "title": "Broken Promises",
+        "artist": "Against The Grain",
+        "handle": "against_the_grain",
+        "genre": "acoustic progressive rock",
+        "prompt": "",
+        "lyrics": "[Verse]\nBroken promises\n[Chorus]\nNever go away",
+        "created_at": "2026-09-03T21:26:05.728Z",
+        "year": "2026",
+        "image_url": "https://cdn2.suno.ai/21eb08e7-bd94-4e2c-8bca-0245b480a711.jpeg",
+        "model": "v5 chirp-crow",
+        "formatted_comment": "Style: acoustic progressive rock | Created on Suno.com (@against_the_grain)",
+    }
+
+    with patch("backend.main.fetch_suno_metadata", return_value=mock_data):
+        res_valid = client.post(
+            "/api/suno/extract",
+            json={"query": "made with suno; created=2026-09-03T21:26:05; id=a362dcef-6a63-423a-8f6b-8990ff370c06"},
+        )
+        assert res_valid.status_code == 200
+        body = res_valid.json()
+        assert body["success"] is True
+        assert body["data"]["title"] == "Broken Promises"
+        assert body["data"]["artist"] == "Against The Grain"
+        assert body["data"]["year"] == "2026"
+        assert "[Verse]" in body["data"]["lyrics"]
+
+
+def test_api_suno_apply_artwork(client, sample_mp3_bytes, sample_image_bytes):
+    # 1. Unauthenticated request rejected
+    res_unauth = client.post(
+        "/api/suno/apply-artwork",
+        json={"image_url": "https://cdn2.suno.ai/sample.jpeg"},
+    )
+    assert res_unauth.status_code == 401
+
+    # 2. Upload MP3 to establish authenticated session
+    upload_res = client.post(
+        "/api/upload",
+        files={"file": ("test.mp3", sample_mp3_bytes, "audio/mpeg")},
+    )
+    assert upload_res.status_code == 200
+
+    # 3. SSRF Defense: Non-Suno domain rejected with HTTP 400
+    res_evil = client.post(
+        "/api/suno/apply-artwork",
+        json={"image_url": "https://evil-attacker.com/malicious.jpg"},
+    )
+    assert res_evil.status_code == 400
+    assert "Invalid artwork source domain" in res_evil.json().get("detail", "")
+
+    # 4. Valid Suno CDN domain with mocked image download
+    from unittest.mock import patch, MagicMock
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.read.return_value = sample_image_bytes
+    mock_resp.__enter__.return_value = mock_resp
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        res_apply = client.post(
+            "/api/suno/apply-artwork",
+            json={"image_url": "https://cdn2.suno.ai/21eb08e7-bd94-4e2c-8bca-0245b480a711.jpeg"},
+        )
+        assert res_apply.status_code == 200
+        body = res_apply.json()
+        assert body["success"] is True
+        assert body["mime_type"] == "image/jpeg"
+        assert "data:image/jpeg;base64," in body["preview_data_url"]
+
+
+
 
 
 

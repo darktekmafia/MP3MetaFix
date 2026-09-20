@@ -12,6 +12,8 @@ document.addEventListener('DOMContentLoaded', () => {
     artworkRemoved: false,
     audioDuration: 0,
     metadata: {},
+    detectedSunoId: null,
+    sunoExtractedData: null,
   };
 
   // --- DOM Elements ---
@@ -83,6 +85,33 @@ document.addEventListener('DOMContentLoaded', () => {
   const cannedPresetsList = document.getElementById('cannedPresetsList');
   const cannedPresetCount = document.getElementById('cannedPresetCount');
   const btnResetPresets = document.getElementById('btnResetPresets');
+
+  // --- Suno AI Extraction & Sync Elements ---
+  const sunoDetectedPill = document.getElementById('sunoDetectedPill');
+  const btnSunoEnrich = document.getElementById('btnSunoEnrich');
+  const sunoEnrichModal = document.getElementById('sunoEnrichModal');
+  const btnCloseSunoModal = document.getElementById('btnCloseSunoModal');
+  const formSunoFetch = document.getElementById('formSunoFetch');
+  const inputSunoQuery = document.getElementById('inputSunoQuery');
+  const btnSubmitSunoFetch = document.getElementById('btnSubmitSunoFetch');
+  const sunoFetchSpinner = document.getElementById('sunoFetchSpinner');
+  const sunoFetchBtnText = document.getElementById('sunoFetchBtnText');
+  const sunoFetchError = document.getElementById('sunoFetchError');
+  const sunoFetchErrorMsg = document.getElementById('sunoFetchErrorMsg');
+  const sunoResultsContainer = document.getElementById('sunoResultsContainer');
+  const sunoArtworkThumb = document.getElementById('sunoArtworkThumb');
+  const sunoSummaryTitle = document.getElementById('sunoSummaryTitle');
+  const sunoSummaryArtist = document.getElementById('sunoSummaryArtist');
+  const sunoSummaryModel = document.getElementById('sunoSummaryModel');
+  const sunoSummaryYear = document.getElementById('sunoSummaryYear');
+  const btnSunoSelectAll = document.getElementById('btnSunoSelectAll');
+  const btnSunoDeselectAll = document.getElementById('btnSunoDeselectAll');
+  const sunoDiffTableBody = document.getElementById('sunoDiffTableBody');
+  const btnSunoApplyMissing = document.getElementById('btnSunoApplyMissing');
+  const btnSunoApplyAll = document.getElementById('btnSunoApplyAll');
+  const btnSunoApplySelected = document.getElementById('btnSunoApplySelected');
+  const sunoApplySpinner = document.getElementById('sunoApplySpinner');
+  const sunoSelectedCount = document.getElementById('sunoSelectedCount');
 
   // --- Version & Update Manager Elements ---
   const updateBadge = document.getElementById('updateBadge');
@@ -312,6 +341,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Filename pattern setup
     updateFilenamePreview();
+
+    // Suno Auto-Detection
+    const sunoId = detectSunoId(data.metadata, data.original_filename);
+    if (sunoId) {
+      state.detectedSunoId = sunoId;
+      if (sunoDetectedPill) {
+        sunoDetectedPill.classList.remove('hidden');
+        sunoDetectedPill.title = `Suno Clip Detected (${sunoId}) - Click to sync metadata & artwork`;
+      }
+    } else {
+      state.detectedSunoId = null;
+      if (sunoDetectedPill) {
+        sunoDetectedPill.classList.add('hidden');
+      }
+    }
 
     // Show Editor, hide dropzone
     uploadSection.classList.add('hidden');
@@ -1524,6 +1568,392 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // --- Suno AI Extraction & Selective Merge Logic ---
+  const UUID_REGEX = /([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i;
+
+  function detectSunoId(meta, filename) {
+    if (!meta) return null;
+    const comment = meta.comment || '';
+    const genre = meta.genre || '';
+    const title = meta.title || '';
+    const fname = filename || '';
+
+    // Check comment (most common: "made with suno; ... id=...")
+    const commentMatch = comment.match(UUID_REGEX);
+    if (commentMatch) return commentMatch[1].toLowerCase();
+
+    // Check genre / filename
+    const genreMatch = genre.match(UUID_REGEX);
+    if (genreMatch) return genreMatch[1].toLowerCase();
+
+    const fileMatch = fname.match(UUID_REGEX);
+    if (fileMatch) return fileMatch[1].toLowerCase();
+
+    return null;
+  }
+
+  function openSunoModal(prefillQuery = '') {
+    if (!sunoEnrichModal) return;
+
+    if (sunoFetchError) sunoFetchError.classList.add('hidden');
+    
+    const query = prefillQuery || state.detectedSunoId || '';
+    if (inputSunoQuery) {
+      inputSunoQuery.value = query;
+    }
+
+    sunoEnrichModal.classList.remove('hidden');
+
+    if (query && (!state.sunoExtractedData || state.sunoExtractedData.id !== query)) {
+      fetchSunoData(query);
+    } else if (state.sunoExtractedData) {
+      renderSunoDiffTable(state.sunoExtractedData);
+    } else {
+      if (inputSunoQuery) inputSunoQuery.focus();
+    }
+  }
+
+  function closeSunoModal() {
+    if (sunoEnrichModal) {
+      sunoEnrichModal.classList.add('hidden');
+    }
+  }
+
+  function fetchSunoData(queryStr) {
+    const trimmed = (queryStr || '').trim();
+    if (!trimmed) {
+      showToast('Please enter a Suno URL or Clip UUID', 'error');
+      return;
+    }
+
+    if (sunoFetchSpinner) sunoFetchSpinner.classList.remove('hidden');
+    if (btnSubmitSunoFetch) btnSubmitSunoFetch.disabled = true;
+    if (sunoFetchError) sunoFetchError.classList.add('hidden');
+
+    fetch('/api/suno/extract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: trimmed }),
+    })
+      .then(res => res.json().then(data => ({ status: res.status, body: data })))
+      .then(({ status, body }) => {
+        if (sunoFetchSpinner) sunoFetchSpinner.classList.add('hidden');
+        if (btnSubmitSunoFetch) btnSubmitSunoFetch.disabled = false;
+
+        if (status === 200 && body.success && body.data) {
+          state.sunoExtractedData = body.data;
+          renderSunoDiffTable(body.data);
+          if (sunoResultsContainer) sunoResultsContainer.classList.remove('hidden');
+        } else {
+          const msg = body.detail || 'Failed to fetch information from Suno.com';
+          if (sunoFetchError && sunoFetchErrorMsg) {
+            sunoFetchErrorMsg.textContent = msg;
+            sunoFetchError.classList.remove('hidden');
+          }
+          showToast(msg, 'error');
+        }
+      })
+      .catch(err => {
+        if (sunoFetchSpinner) sunoFetchSpinner.classList.add('hidden');
+        if (btnSubmitSunoFetch) btnSubmitSunoFetch.disabled = false;
+        const msg = 'Network error contacting Suno service';
+        if (sunoFetchError && sunoFetchErrorMsg) {
+          sunoFetchErrorMsg.textContent = msg;
+          sunoFetchError.classList.remove('hidden');
+        }
+        showToast(msg, 'error');
+      });
+  }
+
+  function renderSunoDiffTable(sunoData) {
+    if (!sunoDiffTableBody) return;
+    sunoDiffTableBody.replaceChildren();
+
+    // Summary Header
+    if (sunoSummaryTitle) sunoSummaryTitle.textContent = sunoData.title || 'Untitled';
+    if (sunoSummaryArtist) {
+      const handleStr = sunoData.handle ? ` (@${sunoData.handle})` : '';
+      sunoSummaryArtist.textContent = `By ${sunoData.artist || 'Unknown'}${handleStr}`;
+    }
+    if (sunoSummaryModel) {
+      sunoSummaryModel.textContent = sunoData.model || 'Suno Audio';
+    }
+    if (sunoSummaryYear) {
+      sunoSummaryYear.textContent = sunoData.year || '2026';
+    }
+    if (sunoArtworkThumb && sunoData.image_url) {
+      sunoArtworkThumb.src = sunoData.image_url;
+    }
+
+    const fieldDefs = [
+      { key: 'title', label: 'Title', sunoVal: sunoData.title, currentVal: document.getElementById('inputTitle').value.trim() },
+      { key: 'artist', label: 'Artist', sunoVal: sunoData.artist, currentVal: document.getElementById('inputArtist').value.trim() },
+      { key: 'artwork', label: 'Cover Art', sunoVal: sunoData.image_url, currentVal: state.hasArtwork ? 'Embedded Artwork' : '', isArt: true },
+      { key: 'genre', label: 'Genre / Style', sunoVal: sunoData.genre, currentVal: document.getElementById('inputGenre').value.trim() },
+      { key: 'lyrics', label: 'Lyrics', sunoVal: sunoData.lyrics, currentVal: document.getElementById('inputLyrics').value.trim(), isLyrics: true },
+      { key: 'comment', label: 'Comments', sunoVal: sunoData.formatted_comment, currentVal: document.getElementById('inputComment').value.trim() },
+      { key: 'year', label: 'Year', sunoVal: sunoData.year, currentVal: document.getElementById('inputYear').value.trim() },
+    ];
+
+    fieldDefs.forEach(field => {
+      if (!field.sunoVal) return;
+
+      const tr = document.createElement('tr');
+      tr.className = 'suno-diff-row';
+      tr.dataset.fieldKey = field.key;
+
+      // Col Checkbox
+      const tdCheck = document.createElement('td');
+      tdCheck.className = 'col-check';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'suno-field-checkbox';
+      checkbox.id = `sunoCheck_${field.key}`;
+      checkbox.dataset.fieldKey = field.key;
+      checkbox.checked = true;
+      tdCheck.appendChild(checkbox);
+
+      // Col Field Name
+      const tdField = document.createElement('td');
+      tdField.className = 'col-field';
+      tdField.textContent = field.label;
+
+      // Col Current Value
+      const tdCurrent = document.createElement('td');
+      tdCurrent.className = 'col-current';
+      if (field.currentVal) {
+        if (field.isArt) {
+          tdCurrent.textContent = field.currentVal;
+        } else if (field.isLyrics) {
+          tdCurrent.textContent = field.currentVal.length > 80 ? field.currentVal.substring(0, 80) + '...' : field.currentVal;
+        } else {
+          tdCurrent.textContent = field.currentVal;
+        }
+      } else {
+        const emptySpan = document.createElement('span');
+        emptySpan.className = 'diff-empty-tag';
+        emptySpan.textContent = '(Empty)';
+        tdCurrent.appendChild(emptySpan);
+      }
+
+      // Col Suno Value
+      const tdSuno = document.createElement('td');
+      tdSuno.className = 'col-suno';
+      if (field.isArt) {
+        const artDiv = document.createElement('div');
+        artDiv.className = 'diff-art-preview';
+        const img = document.createElement('img');
+        img.src = field.sunoVal;
+        img.className = 'diff-art-thumb';
+        img.alt = 'Suno Artwork';
+        const artText = document.createElement('span');
+        artText.textContent = 'High-Res Artwork (1024×1024)';
+        artDiv.appendChild(img);
+        artDiv.appendChild(artText);
+        tdSuno.appendChild(artDiv);
+      } else if (field.isLyrics) {
+        const lyricsDiv = document.createElement('div');
+        lyricsDiv.className = 'diff-lyrics-preview';
+        lyricsDiv.textContent = field.sunoVal;
+        tdSuno.appendChild(lyricsDiv);
+      } else {
+        tdSuno.textContent = field.sunoVal;
+      }
+
+      tr.appendChild(tdCheck);
+      tr.appendChild(tdField);
+      tr.appendChild(tdCurrent);
+      tr.appendChild(tdSuno);
+
+      checkbox.addEventListener('change', () => {
+        tr.classList.toggle('row-selected', checkbox.checked);
+        updateSunoSelectedCount();
+      });
+
+      tr.addEventListener('click', (e) => {
+        if (e.target !== checkbox && !e.target.closest('input')) {
+          checkbox.checked = !checkbox.checked;
+          tr.classList.toggle('row-selected', checkbox.checked);
+          updateSunoSelectedCount();
+        }
+      });
+
+      if (checkbox.checked) {
+        tr.classList.add('row-selected');
+      }
+
+      sunoDiffTableBody.appendChild(tr);
+    });
+
+    updateSunoSelectedCount();
+  }
+
+  function updateSunoSelectedCount() {
+    const checkboxes = document.querySelectorAll('.suno-field-checkbox');
+    let checked = 0;
+    checkboxes.forEach(cb => { if (cb.checked) checked++; });
+    if (sunoSelectedCount) sunoSelectedCount.textContent = checked;
+    if (btnSunoApplySelected) btnSunoApplySelected.disabled = checked === 0;
+  }
+
+  function setSunoFieldSelection(mode) {
+    if (!state.sunoExtractedData) return;
+    const rows = document.querySelectorAll('.suno-diff-row');
+    rows.forEach(tr => {
+      const key = tr.dataset.fieldKey;
+      const cb = tr.querySelector('.suno-field-checkbox');
+      if (!cb) return;
+
+      if (mode === 'all') {
+        cb.checked = true;
+      } else if (mode === 'none') {
+        cb.checked = false;
+      } else if (mode === 'missing') {
+        let isEmpty = false;
+        if (key === 'title') isEmpty = !document.getElementById('inputTitle').value.trim();
+        else if (key === 'artist') isEmpty = !document.getElementById('inputArtist').value.trim();
+        else if (key === 'artwork') isEmpty = !state.hasArtwork;
+        else if (key === 'genre') isEmpty = !document.getElementById('inputGenre').value.trim();
+        else if (key === 'lyrics') isEmpty = !document.getElementById('inputLyrics').value.trim();
+        else if (key === 'comment') isEmpty = !document.getElementById('inputComment').value.trim();
+        else if (key === 'year') isEmpty = !document.getElementById('inputYear').value.trim();
+
+        cb.checked = isEmpty;
+      }
+      tr.classList.toggle('row-selected', cb.checked);
+    });
+    updateSunoSelectedCount();
+  }
+
+  async function applySunoData(mode = 'selected') {
+    if (!state.sunoExtractedData) return;
+    if (mode === 'all') {
+      setSunoFieldSelection('all');
+    } else if (mode === 'missing') {
+      setSunoFieldSelection('missing');
+    }
+
+    const suno = state.sunoExtractedData;
+    const isChecked = (key) => {
+      const cb = document.getElementById(`sunoCheck_${key}`);
+      return cb ? cb.checked : false;
+    };
+
+    let appliedFieldsCount = 0;
+
+    // Apply text fields
+    if (isChecked('title') && suno.title) {
+      const el = document.getElementById('inputTitle');
+      el.value = suno.title;
+      flashElement(el);
+      appliedFieldsCount++;
+    }
+    if (isChecked('artist') && suno.artist) {
+      const el = document.getElementById('inputArtist');
+      el.value = suno.artist;
+      flashElement(el);
+      appliedFieldsCount++;
+    }
+    if (isChecked('genre') && suno.genre) {
+      const el = document.getElementById('inputGenre');
+      el.value = suno.genre;
+      flashElement(el);
+      appliedFieldsCount++;
+    }
+    if (isChecked('lyrics') && suno.lyrics) {
+      const el = document.getElementById('inputLyrics');
+      el.value = suno.lyrics;
+      flashElement(el);
+      appliedFieldsCount++;
+    }
+    if (isChecked('comment') && suno.formatted_comment) {
+      const el = document.getElementById('inputComment');
+      el.value = suno.formatted_comment;
+      flashElement(el);
+      appliedFieldsCount++;
+    }
+    if (isChecked('year') && suno.year) {
+      const el = document.getElementById('inputYear');
+      el.value = suno.year;
+      flashElement(el);
+      appliedFieldsCount++;
+    }
+
+    // Apply artwork if checked
+    if (isChecked('artwork') && suno.image_url && state.hasSession) {
+      if (sunoApplySpinner) sunoApplySpinner.classList.remove('hidden');
+      if (btnSunoApplySelected) btnSunoApplySelected.disabled = true;
+
+      try {
+        const artRes = await fetch('/api/suno/apply-artwork', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_url: suno.image_url }),
+        });
+        const artData = await artRes.json();
+        if (artRes.status === 200 && artData.preview_data_url) {
+          setArtworkImage(artData.preview_data_url, 'Suno Art (1024px)');
+          appliedFieldsCount++;
+        } else {
+          showToast(artData.detail || 'Could not attach Suno artwork', 'error');
+        }
+      } catch (err) {
+        showToast('Network error attaching Suno artwork', 'error');
+      } finally {
+        if (sunoApplySpinner) sunoApplySpinner.classList.add('hidden');
+        if (btnSunoApplySelected) btnSunoApplySelected.disabled = false;
+      }
+    }
+
+    updateFilenamePreview();
+    closeSunoModal();
+
+    if (appliedFieldsCount > 0) {
+      showToast(`✨ Successfully merged ${appliedFieldsCount} Suno fields!`, 'success');
+    } else {
+      showToast('No fields selected to apply', 'info');
+    }
+  }
+
+  function flashElement(el) {
+    if (!el) return;
+    el.classList.remove('suno-highlight-flash');
+    void el.offsetWidth;
+    el.classList.add('suno-highlight-flash');
+  }
+
+  // Event Listeners for Suno
+  if (btnSunoEnrich) {
+    btnSunoEnrich.addEventListener('click', () => openSunoModal(state.detectedSunoId || ''));
+  }
+  if (sunoDetectedPill) {
+    sunoDetectedPill.addEventListener('click', () => openSunoModal(state.detectedSunoId || ''));
+  }
+  if (btnCloseSunoModal) {
+    btnCloseSunoModal.addEventListener('click', closeSunoModal);
+  }
+  if (formSunoFetch) {
+    formSunoFetch.addEventListener('submit', (e) => {
+      e.preventDefault();
+      fetchSunoData(inputSunoQuery ? inputSunoQuery.value : '');
+    });
+  }
+  if (btnSunoSelectAll) {
+    btnSunoSelectAll.addEventListener('click', () => setSunoFieldSelection('all'));
+  }
+  if (btnSunoDeselectAll) {
+    btnSunoDeselectAll.addEventListener('click', () => setSunoFieldSelection('none'));
+  }
+  if (btnSunoApplySelected) {
+    btnSunoApplySelected.addEventListener('click', () => applySunoData('selected'));
+  }
+  if (btnSunoApplyMissing) {
+    btnSunoApplyMissing.addEventListener('click', () => applySunoData('missing'));
+  }
+  if (btnSunoApplyAll) {
+    btnSunoApplyAll.addEventListener('click', () => applySunoData('all'));
+  }
+
   // Event Listeners for Version & Updater
   if (versionBadge) {
     versionBadge.addEventListener('click', openVersionModal);
@@ -1553,6 +1983,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (cannedCommentsModal && !cannedCommentsModal.classList.contains('hidden')) {
         closeCannedModal();
       }
+      if (sunoEnrichModal && !sunoEnrichModal.classList.contains('hidden')) {
+        closeSunoModal();
+      }
     }
   });
 
@@ -1568,6 +2001,14 @@ document.addEventListener('DOMContentLoaded', () => {
     cannedCommentsModal.addEventListener('click', (e) => {
       if (e.target === cannedCommentsModal) {
         closeCannedModal();
+      }
+    });
+  }
+
+  if (sunoEnrichModal) {
+    sunoEnrichModal.addEventListener('click', (e) => {
+      if (e.target === sunoEnrichModal) {
+        closeSunoModal();
       }
     });
   }

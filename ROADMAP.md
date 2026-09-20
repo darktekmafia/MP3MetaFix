@@ -70,18 +70,13 @@ The **Gateway Hub** serves as the front door and system dashboard for the MP3Met
   - Instant pattern-based renaming (`%artist% - %title%.mp3`, `%track% - %title%.mp3`) with preset buttons.
 - [x] **Native Save & Named File Download**:
   - Modern Chromium File System Access API with RFC 5987 UTF-8 download fallbacks.
+- [x] **Suno.com URL & Clip UUID Metadata / Artwork Extraction**:
+  - Server-side Next.js stream deserializer fetching Title, Creator (`@username`), Musical Style (`TCON`), Structured Lyrics with structure markers (`USLT`), High-Resolution Artwork (1024×1024 into `APIC`), and Model attribution (`COMM`).
+- [x] **Embedded Suno Tag Auto-Detection & Selective Merge Modal**:
+  - Automatic UUID recognition from uploaded MP3 comment tags (`made with suno; ... id=...`).
+  - Mobile-first, non-disruptive detection pill (`✨ Suno Detected`) and interactive per-field selective merge table with `Apply Selected`, `Fill Blank Only`, and `Apply All` presets (zero blind overwrites).
 
 ### Active Backlog & Future Vision 📋
-- [ ] **Suno.com URL & Share Link Auto-Parser**:
-  - Paste a Suno track link (`https://suno.com/song/...`) or Clip UUID to automatically fetch and populate:
-    - Track Title & Variation subtitle (`[Extended]`, `[Part 2]`, `[Full Song]`).
-    - User Style Prompt into Genre / Prompt tags.
-    - Generated Lyrics with structure markers (`[Verse]`, `[Chorus]`, `[Solo]`) into the ID3 `USLT` frame.
-    - High-resolution uncompressed original cover artwork (1024×1024) directly into the APIC frame.
-    - Model/Engine tags (`chirp-v3-5`, `chirp-v4`) and creator attribution (`@username`) into Comments.
-- [ ] **Embedded Prompt & Song Structure Tag Extractor**:
-  - Auto-detect Suno prompt patterns in uploaded MP3s (`TCON` / `COMM`).
-  - One-click tool to parse prompt keywords, extract musical BPM/key, and separate lyric sections from embedded raw comment strings.
 - [ ] **Native Web Share API (`navigator.share`)**:
   - One-tap mobile export to send modified MP3s directly to mobile audio players (VLC, Files, Telegram, Discord, Apple Music).
 - [ ] **MediaSession API Integration**:

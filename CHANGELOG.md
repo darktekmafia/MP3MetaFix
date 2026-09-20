@@ -24,8 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added balanced 2-column workspace layout on tablets ($\ge 720\text{px}$, e.g. iPad Mini) to prevent oversized album artwork scaling.
   - Added responsive `.btn-txt-full` / `.btn-txt-short` button label switching across toolbar actions (`New File` $\to$ `New`, `Save Changes` $\to$ `Save`, `Save & Download` $\to$ `Download`, `Upload Art` $\to$ `Upload`).
   - Added touch-scrolling and native scrollbar suppression on metadata form tab navigation.
-- **Sub-Project Product Roadmap Architecture (`ROADMAP.md`)**:
-  - Restructured the master roadmap into distinct sub-project focus tracks: **Gateway Hub (`/`)**, **MP3MetaFix (`/app`)**, **MP3MetaManager (`/manager`)**, and **Core Platform (`/api`)**, each with dedicated user personas, milestones, and feature backlogs.
+- **Suno.com Metadata Extraction & Next.js Stream Deserializer (`POST /api/suno/extract` & `POST /api/suno/apply-artwork`)**:
+  - Implemented server-side metadata extraction supporting Suno song URLs, share links, and clip UUIDs (`backend/suno_extractor.py`).
+  - Deserializes Next.js Server Component streaming payloads to extract Track Title, Creator Name & Handle (`@username`), Musical Style (`TCON`), Structured Lyrics with structural section markers (`USLT`), High-Resolution 1024×1024 Album Artwork (`APIC`), Release Year (`TDRC`), Model Version (`COMM`), and formatted attribution comments.
+  - Implemented SSRF-protected server-side artwork attachment (`/api/suno/apply-artwork`) with domain whitelisting and Pillow decompression bomb defense.
+- **Embedded Suno Tag Auto-Detection & Interactive Selective Merge Modal**:
+  - Added automatic Suno Clip UUID detection from uploaded MP3 comment strings (`made with suno; ... id=...`).
+  - Added mobile-first, non-disruptive detection micro-pill (`✨ Suno Detected`) in the track info bar.
+  - Implemented interactive side-by-side selective merge modal with per-field selection checkboxes, `Apply Selected`, `Fill Blank Only`, and `Apply All` presets enforcing the non-destructive data rule (zero blind overwrites).
+- **Workspace Engineering Standards & Rule Hardening (`AGENTS.md`)**:
+  - Added **Rule 8 (Mobile-First Responsive Design for `/app`)** mandating unobtrusive prompts, zero-overflow track flooring, and compact bottom sheets.
+  - Added **Rule 9 (User Choice & Non-Destructive Data Merging)** guaranteeing user per-field control over metadata overwrites.
 
 ---
 

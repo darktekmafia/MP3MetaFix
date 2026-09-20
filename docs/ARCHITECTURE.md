@@ -196,6 +196,33 @@ MP3MetaFix decouples user interaction into three specialized interfaces sharing 
 
 ---
 
-## 8. Sub-Project Roadmap Alignment
+## 8. Suno.com Metadata Extraction & Selective Merge Architecture
+
+MP3MetaFix integrates automated server-side extraction and non-destructive client merging for AI-generated music tracks from Suno.com:
+
+### Extraction Architecture (`backend/suno_extractor.py`)
+1. **UUID Identification**: Matches standard v4 UUIDs from direct strings, song URLs (`https://suno.com/song/{uuid}`), and embedded comment tags (`made with suno; ... id={uuid}`).
+2. **SSRF Defense & Strict Validation**: Requests are confined to `https://suno.com/song/{uuid}` with bounded timeouts (10s) and browser headers.
+3. **Next.js SSR Stream Deserializer**: Parses Server Component stream payloads (`self.__next_f.push`) to extract:
+   - Track Title (`TIT2`)
+   - Creator Display Name & Handle (`TPE1`, `TPE2`, `@username`)
+   - Musical Style & Prompt Tags (`TCON`)
+   - Structured Lyrics with structural section markers (`USLT`)
+   - High-Resolution Album Artwork (`APIC` up to 1024×1024 JPEG from Suno CDN)
+   - Creation Date / Year (`TDRC`)
+   - Model Engine / Version (`COMM`)
+4. **Artwork Staging & Validation (`POST /api/suno/apply-artwork`)**:
+   - Downloads artwork from Suno CDN domain (`cdn2.suno.ai`, `cdn1.suno.ai`).
+   - Normalizes and validates byte streams via Pillow with decompression bomb defenses (`MAX_IMAGE_PIXELS = 10,000,000`).
+   - Stages normalized artwork directly into the cryptographic session directory.
+
+### Non-Destructive Selective Merge Model (Zero Blind Overwrites)
+- **Automatic Detection**: When an uploaded MP3 contains a Suno UUID in comments, a non-disruptive micro-pill (`✨ Suno Detected`) appears in the file bar.
+- **Interactive Diff Table**: A side-by-side comparison displays Current MP3 values versus Suno Extracted values.
+- **Granular User Control**: Checkboxes allow the user to select specific fields to apply, with presets for `Apply Selected`, `Fill Blank Only` (enriches empty tags without modifying user edits), and `Apply All`.
+
+---
+
+## 9. Sub-Project Roadmap Alignment
 
 For full feature backlogs, milestones, and strategic plans for each interface, see [ROADMAP.md](../ROADMAP.md).

@@ -57,6 +57,8 @@ from backend.security import (
     verify_signed_session_token,
     upload_rate_limiter,
 )
+from pydantic import BaseModel, Field
+
 from backend.storage import (
     storage_manager,
     start_periodic_cleanup_loop,
@@ -66,6 +68,10 @@ from backend.metadata_engine import (
     extract_metadata_and_artwork,
     write_metadata_and_artwork,
     get_embedded_artwork_binary,
+)
+from backend.suno_extractor import (
+    fetch_suno_metadata,
+    extract_suno_id,
 )
 from backend.updater import (
     get_system_version_info,
@@ -431,6 +437,95 @@ async def remove_artwork_staging(session_id: str = Depends(get_current_session_i
 
     remove_marker.write_text("1")
     return {"success": True, "artwork_removed": True}
+
+
+class SunoExtractRequest(BaseModel):
+    query: str = Field(..., max_length=1000, description="Suno song URL, share link, comment string, or clip UUID")
+
+
+class SunoApplyArtworkRequest(BaseModel):
+    image_url: str = Field(..., max_length=2000, description="Suno CDN artwork URL")
+
+
+@app.post("/api/suno/extract")
+async def api_suno_extract(req: SunoExtractRequest):
+    """Extract metadata and artwork information from a Suno Clip UUID or song URL."""
+    try:
+        meta = fetch_suno_metadata(req.query)
+        return {
+            "success": True,
+            "data": meta,
+        }
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+    except Exception as e:
+        logger.error(f"Suno extraction unexpected error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to retrieve information from Suno. Please check the link or try again.",
+        )
+
+
+@app.post("/api/suno/apply-artwork")
+async def api_suno_apply_artwork(
+    req: SunoApplyArtworkRequest,
+    session_id: str = Depends(get_current_session_id),
+):
+    """Fetches high-res artwork from Suno CDN and stages it in the current editing session."""
+    sdir = storage_manager.get_session_dir(session_id)
+    if not sdir:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    # SSRF protection: only allow Suno CDN hostnames
+    parsed = urllib.parse.urlparse(req.image_url)
+    allowed_domains = ["cdn1.suno.ai", "cdn2.suno.ai", "cdn-o.suno.com", "images.suno.ai"]
+    if not parsed.hostname or not any(parsed.hostname.lower() == d or parsed.hostname.lower().endswith("." + d) for d in allowed_domains):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid artwork source domain.")
+
+    try:
+        img_req = urllib.request.Request(
+            req.image_url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
+        with urllib.request.urlopen(img_req, timeout=10) as resp:
+            if resp.status != 200:
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to download artwork from Suno CDN.")
+            img_bytes = resp.read()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching Suno artwork: {e}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Could not retrieve artwork from Suno.")
+
+    if len(img_bytes) > MAX_ARTWORK_SIZE_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Artwork file exceeds maximum size limit.")
+
+    # Validate and normalize image via Pillow decompression bomb defense
+    try:
+        clean_bytes, mime_type = validate_and_normalize_image(img_bytes, MAX_ARTWORK_SIZE_BYTES)
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+
+    # Stage artwork in session directory
+    temp_art = sdir / "artwork_pending.bin"
+    meta_art = sdir / "artwork_pending_mime.txt"
+    remove_marker = sdir / "artwork_remove.flag"
+
+    if remove_marker.exists():
+        remove_marker.unlink()
+
+    temp_art.write_bytes(clean_bytes)
+    meta_art.write_text(mime_type)
+
+    import base64
+    preview_url = f"data:{mime_type};base64,{base64.b64encode(clean_bytes).decode('ascii')}"
+
+    return {
+        "success": True,
+        "mime_type": mime_type,
+        "size_bytes": len(clean_bytes),
+        "preview_data_url": preview_url,
+    }
 
 
 @app.post("/api/save")

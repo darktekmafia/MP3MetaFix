@@ -115,12 +115,23 @@
                 <circle cx="18" cy="16" r="3"></circle>
               </svg>
             </div>
-            <div>
-              <div id="loadedFilename" class="loaded-filename" title="track.mp3">track.mp3</div>
+            <div class="file-meta-stack">
+              <div class="file-title-row">
+                <div id="loadedFilename" class="loaded-filename" title="track.mp3">track.mp3</div>
+                <!-- Mobile-First Non-Disruptive Suno Detection Micro-Pill -->
+                <button id="sunoDetectedPill" class="suno-detected-pill hidden" title="Suno track detected! Click to selectively enrich tags and high-res art">
+                  <span class="suno-pulse-dot"></span>
+                  <span class="suno-pill-text">✨ Suno Detected</span>
+                </button>
+              </div>
               <div id="loadedAudioSpecs" class="loaded-specs">320 kbps • 44.1 kHz • Stereo • 03:45</div>
             </div>
           </div>
           <div class="toolbar-actions">
+            <button id="btnSunoEnrich" class="btn btn-suno" title="Extract tags, structured lyrics & cover art from Suno.com">
+              <span class="suno-btn-sparkle">✨</span>
+              <span><span class="btn-txt-full">Suno Sync</span><span class="btn-txt-short">Suno</span></span>
+            </button>
             <button id="btnNewFile" class="btn btn-secondary" title="Upload a different MP3">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
@@ -532,6 +543,102 @@
                   <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>
                 </svg>
                 <span>Run install.sh --update on Server</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Suno AI Metadata Enrichment & Selective Merge Modal -->
+  <div id="sunoEnrichModal" class="modal-overlay hidden" role="dialog" aria-labelledby="sunoModalTitle" aria-modal="true">
+    <div class="modal-card modal-lg suno-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge suno-badge-icon">
+            <span>✨</span>
+          </div>
+          <div>
+            <h2 id="sunoModalTitle" class="modal-title">Suno.com Metadata & Artwork Sync</h2>
+            <p class="modal-subtitle">Extract high-res artwork, structured lyrics, prompt tags, and creator info</p>
+          </div>
+        </div>
+        <button class="btn-close" id="btnCloseSunoModal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- URL / UUID Input Form -->
+        <form id="formSunoFetch" class="suno-fetch-form">
+          <div class="suno-input-group">
+            <label for="inputSunoQuery" class="suno-input-label">Suno Song URL, Share Link, or Clip UUID:</label>
+            <div class="suno-input-row">
+              <input type="text" id="inputSunoQuery" class="form-input suno-query-input" placeholder="e.g. https://suno.com/song/a362dcef-... or a362dcef-..." required>
+              <button type="submit" class="btn btn-primary btn-suno-fetch" id="btnSubmitSunoFetch">
+                <span id="sunoFetchSpinner" class="spinner-small hidden"></span>
+                <span id="sunoFetchBtnText">Fetch Data</span>
+              </button>
+            </div>
+          </div>
+        </form>
+
+        <!-- Fetch Error Alert (hidden by default) -->
+        <div id="sunoFetchError" class="alert-box alert-danger hidden">
+          <span id="sunoFetchErrorMsg">Failed to fetch song data</span>
+        </div>
+
+        <!-- Extracted Preview & Selective Merge Diff Table (hidden until fetched) -->
+        <div id="sunoResultsContainer" class="suno-results-container hidden">
+          <div class="suno-results-header">
+            <div class="suno-track-summary">
+              <img id="sunoArtworkThumb" class="suno-thumb-preview" src="" alt="Suno Artwork">
+              <div class="suno-summary-text">
+                <h3 id="sunoSummaryTitle" class="suno-summary-title">Song Title</h3>
+                <p id="sunoSummaryArtist" class="suno-summary-artist">By Creator (@handle)</p>
+                <div class="suno-summary-badges">
+                  <span id="sunoSummaryModel" class="tag-pill tag-pill-sm tag-pill-accent">Model</span>
+                  <span id="sunoSummaryYear" class="tag-pill tag-pill-sm">Year</span>
+                </div>
+              </div>
+            </div>
+            <div class="suno-select-all-group">
+              <button type="button" class="btn btn-ghost btn-xs" id="btnSunoSelectAll">Select All</button>
+              <span class="divider-dot">•</span>
+              <button type="button" class="btn btn-ghost btn-xs" id="btnSunoDeselectAll">Deselect All</button>
+            </div>
+          </div>
+
+          <!-- Selective Field Diff Grid -->
+          <div class="suno-diff-table-wrapper">
+            <table class="suno-diff-table" aria-label="Field merge selection table">
+              <thead>
+                <tr>
+                  <th class="col-check">Apply</th>
+                  <th class="col-field">Field</th>
+                  <th class="col-current">Current MP3</th>
+                  <th class="col-suno">Suno Extracted Value</th>
+                </tr>
+              </thead>
+              <tbody id="sunoDiffTableBody">
+                <!-- Injected dynamically with safe DOM nodes -->
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Selective Merge Action Buttons -->
+          <div class="suno-action-footer">
+            <div class="suno-footer-presets">
+              <button type="button" class="btn btn-secondary btn-sm" id="btnSunoApplyMissing" title="Only populate fields that are currently empty">
+                <span>Fill Blank Only</span>
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnSunoApplyAll" title="Overwrite all fields with Suno data">
+                <span>Apply All</span>
+              </button>
+            </div>
+            <div class="suno-footer-confirm">
+              <button type="button" class="btn btn-primary" id="btnSunoApplySelected">
+                <span id="sunoApplySpinner" class="spinner-small hidden"></span>
+                <span>✨ Apply Selected (<span id="sunoSelectedCount">0</span>)</span>
               </button>
             </div>
           </div>
