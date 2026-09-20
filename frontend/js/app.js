@@ -275,24 +275,24 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- Load Session Into Editor ---
-  function loadSession(data) {
+  function loadSession(data, isRestore = false) {
     state.hasSession = true;
     state.originalFilename = data.original_filename;
-    state.targetFilename = data.original_filename;
-    state.hasArtwork = data.artwork.has_artwork;
+    state.targetFilename = data.target_filename || data.original_filename;
+    state.hasArtwork = !!(data.artwork && data.artwork.has_artwork);
     state.artworkRemoved = false;
-    state.metadata = data.metadata;
+    state.metadata = data.metadata || {};
 
     // Header specs
     loadedFilename.textContent = data.original_filename;
-    const duration = formatTime(data.audio_info.duration || 0);
-    const bitrate = data.audio_info.bitrate_kbps ? `${data.audio_info.bitrate_kbps} kbps` : 'MP3';
-    const sampleRate = data.audio_info.sample_rate_hz ? `${(data.audio_info.sample_rate_hz / 1000).toFixed(1)} kHz` : '';
-    const channels = data.audio_info.channels === 2 ? 'Stereo' : (data.audio_info.channels === 1 ? 'Mono' : '');
+    const duration = formatTime(data.audio_info?.duration || 0);
+    const bitrate = data.audio_info?.bitrate_kbps ? `${data.audio_info.bitrate_kbps} kbps` : 'MP3';
+    const sampleRate = data.audio_info?.sample_rate_hz ? `${(data.audio_info.sample_rate_hz / 1000).toFixed(1)} kHz` : '';
+    const channels = data.audio_info?.channels === 2 ? 'Stereo' : (data.audio_info?.channels === 1 ? 'Mono' : '');
     loadedAudioSpecs.textContent = [bitrate, sampleRate, channels, duration].filter(Boolean).join(' • ');
 
     // Fill Form fields
-    const meta = data.metadata;
+    const meta = data.metadata || {};
     document.getElementById('inputTitle').value = meta.title || '';
     document.getElementById('inputArtist').value = meta.artist || '';
     document.getElementById('inputAlbum').value = meta.album || '';
@@ -308,15 +308,19 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('inputComment').value = meta.comment || '';
     document.getElementById('inputLyrics').value = meta.lyrics || '';
 
+    if (data.target_filename && data.target_filename !== data.original_filename && inputCustomFilename) {
+      inputCustomFilename.value = data.target_filename;
+    }
+
     // Artwork UI
-    if (data.artwork.has_artwork && data.artwork.preview_data_url) {
+    if (data.artwork && data.artwork.has_artwork && data.artwork.preview_data_url) {
       setArtworkImage(data.artwork.preview_data_url, 'Embedded');
     } else {
       clearArtworkImage();
     }
 
     // Audio Player setup (clean endpoint using cookie session)
-    audioElement.src = '/api/stream';
+    audioElement.src = `/api/stream?t=${Date.now()}`;
     audioElement.load();
     playerCurrentTime.textContent = '00:00';
     playerTotalTime.textContent = duration;
@@ -329,7 +333,7 @@ document.addEventListener('DOMContentLoaded', () => {
         waveformVisualizer.loadFromBuffer(pendingArrayBuffer);
         pendingArrayBuffer = null;
       } else {
-        fetch('/api/stream')
+        fetch(`/api/stream?t=${Date.now()}`)
           .then(res => {
             if (!res.ok) throw new Error('Stream fetch failed');
             return res.arrayBuffer();
@@ -360,7 +364,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Show Editor, hide dropzone
     uploadSection.classList.add('hidden');
     editorSection.classList.remove('hidden');
-    showToast('MP3 loaded and parsed successfully', 'success');
+    showToast(isRestore ? 'Active session restored' : 'MP3 loaded and parsed successfully', 'success');
   }
 
   // --- Artwork Management ---
@@ -2013,9 +2017,24 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // --- Startup Session Restoration Handshake ---
+  async function restoreSessionIfExists() {
+    try {
+      const res = await fetch('/api/session');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.active) {
+        loadSession(data, true);
+      }
+    } catch (err) {
+      console.debug('Session restoration handshake error:', err);
+    }
+  }
+
   // Initial setup & silent background update check
   renderCannedCommentDropdown();
   loadSystemInfo();
+  restoreSessionIfExists();
   setTimeout(() => {
     checkForUpdates(false, true);
   }, 1500);

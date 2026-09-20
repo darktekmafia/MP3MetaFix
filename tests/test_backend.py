@@ -1976,6 +1976,52 @@ def test_api_suno_apply_artwork(client, sample_mp3_bytes, sample_image_bytes):
         assert "data:image/jpeg;base64," in body["preview_data_url"]
 
 
+def test_api_get_session_lifecycle(client, sample_mp3_bytes, sample_image_bytes):
+    # 1. Without session cookie, returns active: false cleanly without 401
+    res_none = client.get("/api/session")
+    assert res_none.status_code == 200
+    assert res_none.json() == {"active": False}
+
+    # 2. Upload MP3 to establish active session
+    upload_res = client.post(
+        "/api/upload",
+        files={"file": ("My Song.mp3", sample_mp3_bytes, "audio/mpeg")},
+    )
+    assert upload_res.status_code == 200
+
+    # 3. Handshake restores session on page load
+    res_active = client.get("/api/session")
+    assert res_active.status_code == 200
+    body = res_active.json()
+    assert body["active"] is True
+    assert body["original_filename"] == "My Song.mp3"
+    assert "metadata" in body
+    assert "audio_info" in body
+
+    # 4. Save updated metadata and verify GET /api/session reflects saved state
+    save_res = client.post(
+        "/api/save",
+        json={"title": "Updated Title", "artist": "Artist Name", "custom_filename": "Custom_Track.mp3"},
+    )
+    assert save_res.status_code == 200
+
+    res_after_save = client.get("/api/session")
+    assert res_after_save.status_code == 200
+    save_body = res_after_save.json()
+    assert save_body["active"] is True
+    assert save_body["metadata"]["title"] == "Updated Title"
+    assert save_body["target_filename"] == "Custom_Track.mp3"
+
+    # 5. Delete session purges session on disk and cookie
+    del_res = client.delete("/api/session")
+    assert del_res.status_code == 200
+
+    res_after_del = client.get("/api/session")
+    assert res_after_del.status_code == 200
+    assert res_after_del.json() == {"active": False}
+
+
+
 
 
 

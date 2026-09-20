@@ -3,6 +3,7 @@ import io
 import time
 import shutil
 import asyncio
+import base64
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -768,6 +769,70 @@ async def stream_audio(
         "Content-Type": "audio/mpeg",
     }
     return StreamingResponse(file_iterator(), status_code=206, headers=headers)
+
+
+@app.get("/api/session")
+async def get_session_state(request: Request):
+    """Check if client has an active unexpired file session on disk and return current state."""
+    token = request.cookies.get(SESSION_COOKIE_NAME) or request.headers.get("X-Session-Token")
+    if not token:
+        return {"active": False}
+
+    session_id = verify_signed_session_token(token)
+    if not session_id:
+        return {"active": False}
+
+    audio_path = storage_manager.get_audio_path(session_id)
+    sdir = storage_manager.get_session_dir(session_id)
+    if not audio_path or not sdir or not audio_path.is_file():
+        return {"active": False}
+
+    try:
+        parsed = extract_metadata_and_artwork(audio_path)
+    except Exception as e:
+        logger.warning(f"Failed to parse active session ID3 tags on restore: {e}")
+        return {"active": False}
+
+    session_info = storage_manager.get_session_info(session_id) or {}
+
+    # Check for staged artwork or explicit removal flag
+    temp_art = sdir / "artwork_pending.bin"
+    meta_art = sdir / "artwork_pending_mime.txt"
+    remove_marker = sdir / "artwork_remove.flag"
+
+    artwork_data = parsed.get("artwork", {})
+    if remove_marker.exists():
+        artwork_data = {
+            "has_artwork": False,
+            "preview_data_url": None,
+            "mime_type": None,
+            "size_bytes": 0,
+        }
+    elif temp_art.is_file() and meta_art.is_file():
+        try:
+            art_bytes = temp_art.read_bytes()
+            art_mime = meta_art.read_text().strip()
+            art_b64 = base64.b64encode(art_bytes).decode("ascii")
+            artwork_data = {
+                "has_artwork": True,
+                "preview_data_url": f"data:{art_mime};base64,{art_b64}",
+                "mime_type": art_mime,
+                "size_bytes": len(art_bytes),
+            }
+        except Exception as e:
+            logger.warning(f"Failed to read pending artwork: {e}")
+
+    orig_name = session_info.get("original_filename", "track.mp3")
+    target_name = session_info.get("target_filename", orig_name)
+
+    return {
+        "active": True,
+        "original_filename": orig_name,
+        "target_filename": target_name,
+        "metadata": parsed.get("metadata", {}),
+        "audio_info": parsed.get("audio_info", {}),
+        "artwork": artwork_data,
+    }
 
 
 @app.delete("/api/session")
