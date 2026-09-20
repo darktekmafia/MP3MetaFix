@@ -183,7 +183,7 @@ graph TD
     Quota --> Storage[("Decoupled Hashed Storage (POSIX 0700)")]
 ```
 
-For in-depth technical documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md).
+For in-depth technical documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md), and [docs/SUNO_TOS_COMPLIANCE.md](docs/SUNO_TOS_COMPLIANCE.md).
 
 ---
 

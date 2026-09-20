@@ -221,6 +221,11 @@ MP3MetaFix integrates automated server-side extraction and non-destructive clien
 - **Interactive Diff Table**: A side-by-side comparison displays Current MP3 values versus Suno Extracted values.
 - **Granular User Control**: Checkboxes allow the user to select specific fields to apply, with presets for `Apply Selected`, `Fill Blank Only` (enriches empty tags without modifying user edits), and `Apply All`.
 
+### Terms of Service & Acceptable Use Posture
+- The integration operates on the **Public Link Preview model** (identical to Discord/Twitter OpenGraph hydration).
+- Zero user account credentials, JWT tokens, or private generation endpoints are accessed.
+- For complete policy mapping and compliance specifications, see [`docs/SUNO_TOS_COMPLIANCE.md`](SUNO_TOS_COMPLIANCE.md).
+
 ---
 
 ## 9. Sub-Project Roadmap Alignment
