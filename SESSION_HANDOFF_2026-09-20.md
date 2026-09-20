@@ -113,7 +113,18 @@ Also completed: `git diff --check`, JS syntax validation, and implementation dif
 
 Owner's exact report: “It works perfect on .wav files, it could not parse the m4a file but I will work on that myself.”
 
-No failing sample, codec details, or backend log exception type was provided or examined. Do not claim a diagnosis or silently weaken validation.
+The owner subsequently supplied this browser error:
+
+```text
+app.js?v=0.5.0:283  POST http://localhost:8844/api/upload 422 (Unprocessable Content)
+handleFileUpload @ app.js?v=0.5.0:283
+await in handleFileUpload
+(anonymous) @ app.js?v=0.5.0:184
+```
+
+This confirms an HTTP 422 response from the upload endpoint. For a normal file upload, the current handler returns 400 for extension/header mismatches and 422 when container/metadata extraction fails, so the evidence points toward the parsing stage after the initial checks. FastAPI request validation can also return 422; inspect the response JSON and sanitized backend exception type to confirm which path was taken. The browser stack identifies the upload call, not the underlying parser error.
+
+No failing sample, codec details, response JSON, or backend log exception type was provided or examined. Do not claim a diagnosis or silently weaken validation.
 
 Likely investigation points, **hypotheses only**:
 

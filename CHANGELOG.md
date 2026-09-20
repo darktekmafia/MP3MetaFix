@@ -10,6 +10,7 @@ Historical release entries describe what was recorded at the time. Security comp
 ## [Unreleased]
 
 ### Documentation
+- Added the owner’s exact M4A upload HTTP 422 browser error to the session handoff, with parsing-stage interpretation and request-validation caveat.
 - Repaired relative documentation links and identified the missing standalone LICENSE file without inventing license text.
 - Added the permanent 2026-09-20 security audit and full session handoff, with unresolved findings, evidence, and verification limits.
 - Corrected security and deployment claims: multipart limits occur after spooling, artwork can serve active content, account recovery/token revocation remain incomplete, updater locking is worker-local, and the active user service lacks template hardening.
