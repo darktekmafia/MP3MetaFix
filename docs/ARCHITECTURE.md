@@ -137,22 +137,52 @@ MP3MetaFix packages an intelligent, non-destructive maintenance engine for syste
 
 ---
 
-## 7. Multi-Interface Architecture & System Telemetry Portal
+## 7. Multi-Interface Architecture & Sub-Project Decoupling
 
-MP3MetaFix decouples user interaction into two specialized frontends sharing a unified FastAPI backend, ID3 engine, and storage security model:
+MP3MetaFix decouples user interaction into three specialized interfaces sharing a unified FastAPI backend, Mutagen ID3 engine, and cryptographic storage security model. Each interface is engineered and maintained as an independent sub-project with its own dedicated product roadmap:
 
-1. **Gateway Hub & Telemetry Dashboard (`/`)**:
-   - Acts as the central portal for selecting the desired workspace.
-   - Provides real-time server telemetry via `GET /api/system/stats` (CPU load, memory capacity/usage, disk space, and MP3 temporary cache quota).
-   - Zero sensitive information exposure (no raw host paths or secrets).
+```
+                  ┌──────────────────────────────────────────────┐
+                  │          FastAPI Backend Core (/api)          │
+                  │  (HMAC Auth, Hashed Storage, Mutagen Engine) │
+                  └───────┬──────────────┬──────────────┬────────┘
+                          │              │              │
+         ┌────────────────┴───┐   ┌──────┴─────────┐   ┌┴────────────────────┐
+         │  Gateway Hub (/)   │   │ MP3MetaFix     │   │ MP3MetaManager      │
+         │                    │   │ (/app)         │   │ (/manager)          │
+         │ - Live Telemetry   │   │ - Mobile-First │   │ - Desktop Power-User│
+         │ - Diagnostics Modal│   │ - Single-Track │   │ - Multi-Track Table │
+         │ - App Dispatcher   │   │ - Waveform     │   │ - Synced Lyrics/LRC │
+         │ - Subnet Stats     │   │ - Canned Tags  │   │ - Stem Tree Manager │
+         └────────────────────┘   └────────────────┘   └─────────────────────┘
+```
 
-2. **MP3MetaFix Focused Editor (`/app`)**:
-   - Mobile-first, touch-friendly single-track ID3v2.4 editor.
-   - Tailored for fast metadata fixing, Suno AI prompt extraction, APIC cover art cropping, unsynchronized lyrics (`USLT`), and canned comment presets.
+### 1. Gateway Hub & Telemetry Dashboard (`/`)
+- **Target Persona**: System Administrators, Homelab Operators, Multi-Device Users.
+- **Design Philosophy**: High-contrast, WCAG AAA accessible system portal providing immediate visibility into host health and hardware resources.
+- **Core Endpoints**: `GET /api/system/stats` (CPU load averages, RAM capacity/usage, disk space, temporary storage quotas).
+- **Security & Privacy**: Zero sensitive information exposure (no host directory paths, internal IP leakage, or system secrets).
 
-3. **MP3MetaManager Desktop Workspace (`/manager`)**:
-   - Desktop-optimized interface for power-user multi-track management.
-   - Foundation for batch tagging, directory library exploration, Suno AI stem organization, and tap-to-sync karaoke timestamping (`SYLT`).
+### 2. MP3MetaFix Focused Editor (`/app`)
+- **Target Persona**: Mobile Creators, Smartphone/Tablet Users, Single-Track Producers.
+- **Design Philosophy**: Lightweight, touch-optimized, mobile-first design with zero horizontal overflow across 320px–4K displays.
+- **Responsive Architecture**:
+  - CSS Grid track floors enforced via `minmax(0, 1fr)` to prevent min-content text blowout on narrow screens.
+  - Constrained album artwork preview dimensions (`max-width: 210px` on mobile phones) to prevent massive vertical scrolling.
+  - Balanced 2-column workspace on tablets ($\ge 720\text{px}$) keeping artwork and metadata forms immediately accessible.
+  - Responsive button label typography (`.btn-txt-full` / `.btn-txt-short`).
+- **Core Capabilities**: Complete ID3v2.3/ID3v2.4 frame editing, Web Audio dynamic waveform canvas rendering, APIC cover art processing, canned comment presets, and File System Access API save integration.
 
-4. **Global App Switcher**:
-   - Embedded header pill navigation allowing instant switching between `/app`, `/manager`, and `/` without navigating away from the application.
+### 3. MP3MetaManager Desktop Workspace (`/manager`)
+- **Target Persona**: Desktop Power Users, DJs, Album Curators, Batch Producers.
+- **Design Philosophy**: High-density desktop workspace built for widescreen 1080p–4K displays.
+- **Core Capabilities**: Multi-file batch spreadsheet data table, sequential auto-numbering, bulk cover art extraction, Suno AI generation/stem lineage graph, and tap-to-sync karaoke timestamping (`.lrc` / ID3 `SYLT`).
+
+### 4. Global App Switcher
+- Embedded header pill navigation allowing instant switching between `/app`, `/manager`, and `/` across all interfaces without losing active context.
+
+---
+
+## 8. Sub-Project Roadmap Alignment
+
+For full feature backlogs, milestones, and strategic plans for each interface, see [ROADMAP.md](../ROADMAP.md).

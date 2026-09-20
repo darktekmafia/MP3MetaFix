@@ -195,9 +195,15 @@ For in-depth technical documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTU
 
 ---
 
-## 🗺️ Roadmap & Future Implementation
+## 🗺️ Master Product Roadmap & Sub-Projects
 
-See [ROADMAP.md](ROADMAP.md) for planned features, Suno AI workflow enhancements, Windows support, and multi-format audio ideas.
+MP3MetaFix features dedicated sub-project roadmaps tailored to each interface's target user persona and device context:
+- **[Gateway Hub (`/`) Roadmap](ROADMAP.md#-project-a-gateway-hub---system-portal--dispatcher-roadmap)**: Telemetry dashboard, guest mode, and service maintenance triggers.
+- **[MP3MetaFix (`/app`) Roadmap](ROADMAP.md#-project-b-mp3metafix-app--mobile-first-single-track-editor-roadmap)**: Mobile-first single-track editor, Suno URL auto-parser, Web Share API, and PWA manifest.
+- **[MP3MetaManager (`/manager`) Roadmap](ROADMAP.md#-project-c-mp3metamanager-manager--desktop-power-user-workspace-roadmap)**: Desktop power-user batch spreadsheet, stem tree organizer, and tap-to-sync karaoke timestamping (`.lrc` / `SYLT`).
+- **[Core Platform (`/api`) Roadmap](ROADMAP.md#-project-d-core-platform-security--infrastructure-roadmap)**: Multi-arch Docker images, native Windows executable, and multi-format audio engine.
+
+See [ROADMAP.md](ROADMAP.md) for full details.
 
 ---
 

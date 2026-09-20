@@ -1,194 +1,149 @@
-# MP3MetaFix Future Implementation & Roadmap
+# MP3MetaFix Master Product Roadmap & Multi-Interface Vision
 
-This document serves as the living backlog of ideas, enhancements, feature proposals, and architectural extensions for **MP3MetaFix**.
+This document details the multi-interface roadmap for **MP3MetaFix**. 
 
-Items are grouped by focus area and can be prioritized into structured version milestones as needs evolve.
-
----
-
-## 🎵 1. Suno.com AI Music Workflow & Tag Automation (Primary Focus)
-
-Because MP3MetaFix is tailored for processing AI-generated music downloads from platforms like [Suno.com](https://suno.com), specialized workflow enhancements can streamline tagging and organization:
-
-- [ ] **Synchronized Lyrics (.lrc) & ID3 SYLT Frame Tagging**:
-  - **"Tap-to-Sync" Timestamp Stamping**: Simple timestamp editor allowing creators to tap <kbd>Space</kbd> or click to stamp precise timestamps onto lyric lines during audio preview.
-  - **Export & Embedding**: Export standard time-stamped `.lrc` sidecar companion files or embed directly into the ID3 `SYLT` (Synchronized Lyrics) binary frame.
-- [ ] **Generation Lineage & Prompt Graph Tracker**:
-  - Track AI generation parentage (*v1 -> extend -> full song -> stems*).
-  - Store seed numbers, style prompts, and variation lineage in custom `TXXX:SUNO_ID` or `COMM` frames.
-- [ ] **Suno Metadata Auto-Parser**:
-  - Paste a Suno track URL, share link, or prompt text box to automatically parse and populate:
-    - Track Title & Subtitle / Variation name (e.g., *Full Song*, *Part 2*, *Extended*)
-    - Generated Lyrics / Structure tags (`[Verse 1]`, `[Chorus]`, `[Guitar Solo]`, `[Outro]`) into the ID3 `USLT` unsynchronized lyrics frame.
-    - Style / Prompt tags (e.g. *80s synthwave, female vocals, melancholic*) into Genre and Comments.
-- [ ] **Suno Artwork Importer**:
-  - Direct import or drag-and-drop of high-resolution Suno track thumbnail artwork without manual downloading and resizing.
-- [x] **Configurable Canned Comments & Quick Presets [COMPLETED]**:
-  - Quick-select dropdown on the Lyrics & Notes tab to instantly prefill comments.
-  - "Save Current" action to save any typed comment text as a reusable preset.
-  - Preset Manager modal for adding, editing, deleting, and restoring presets saved in `localStorage`.
-- [ ] **AI Music Tagging Presets**:
-  - Pre-configured tagging templates tailored for AI generations:
-    - Model/Engine tags in comment frame (e.g. `Generated with Suno v3.5 / v4`).
-    - Stems & Instrumental flags (`[Instrumental]`, `[Vocals Only]`).
-    - Prompt & Style preservation in custom ID3 `TXXX:PROMPT` or `COMM` frames.
-- [ ] **Dynamic Batch Filename Rules for Suno**:
-  - Pattern presets like `%artist% - %title% (%style%) [%model%].mp3`.
+Although MP3MetaFix runs as a unified high-performance Python FastAPI service with a single ID3 metadata engine and cryptographic storage model, **each frontend interface is treated as a distinct sub-project with its own dedicated roadmap, UX philosophy, and target user persona**.
 
 ---
 
-## 🔄 2. In-App Web Updater & Version Inspector [COMPLETED]
+## 🧭 Interface Overview & Strategy Matrix
 
-Provide a complete in-app lifecycle updater directly from the web interface, leveraging `install.sh --update --headless` and GitHub API:
-
-- [x] **Automated Background Update Checker**:
-  - Background version check on web UI page load comparing local `VERSION` against latest GitHub release/tag.
-  - Manual **"Check for Updates"** button in Settings / Header.
-  - **"Update Available"** badge in the navbar when a new version is detected.
-- [x] **Version Details & Release Notes Inspector**:
-  - **Currently Installed Details**: View active version, build date, Git commit hash, and running mode (Desktop launcher vs Systemd service).
-  - **New Version Preview**: Multi-line changelog and release notes modal displaying additions, fixes, and non-breaking/breaking change flags before updating.
-- [x] **In-Browser Update Execution & Live Console Stream**:
-  - **"Update Now"** action triggering `install.sh --update --headless` securely on the server.
-  - Live console modal streaming stdout/stderr in real-time (via Server-Sent Events or WebSocket) to monitor git pull, dependency upgrades, and service restart.
-  - Safety guards: Disable update trigger while an active MP3 session is being edited.
-- [x] **Auto-Reconnection & Refresh Prompt**:
-  - Automated client-side healthcheck polling (`/api/health`) as `install.sh` restarts the systemd service.
-  - Success banner prompting the user to reload the page once the new version is verified online.
-- [x] **Portable Systemd Service Migration (`scripts/migrate_service.py`) [COMPLETED]**:
-  - Safe, non-destructive migration helper in `install.sh --update` to upgrade legacy service units to use `--no-proxy-headers` and dynamic host/port bindings while preserving administrator customizations.
-- [x] **Service Network Access, Proxy Trust & LAN Configuration Helper (`scripts/configure_access.py`) [COMPLETED]**:
-  - Maintenance CLI workflow (`install.sh --access`, `--lan`, `--local`, `--bind`, `--proxy`, `--domain`, `--no-domain`, `--no-proxy`, `--trusted-proxies`) to inspect and update host/port bindings, proxy domains, and reverse proxy trust rules safely with automatic daemon reloading and healthcheck verification.
-- [x] **Multi-Interface Architecture & System Telemetry Portal [COMPLETED]**:
-  - Central Gateway Hub (`/`) featuring live system telemetry (CPU, RAM, Disk, MP3 temporary storage footprint) and interface selector cards.
-  - Dedicated sub-applications: MP3MetaFix mobile-first editor (`/app`) and MP3MetaManager desktop workspace foundation (`/manager`).
-  - Persistent Top Navigation App Switcher pill across headers.
-  - Real-time diagnostic telemetry endpoint (`GET /api/system/stats`).
+| Project / Interface | Route | Primary Target Persona | Screen & Form Factor | Key Design Focus |
+|---|---|---|---|---|
+| **Gateway Hub** | `/` | System Administrators, Homelab Users, Multi-Device Operators | All screens (320px–4K) | System telemetry, health diagnostics, app dispatching |
+| **MP3MetaFix Editor** | `/app` | Mobile Creators, Smartphone/Tablet Users, Single-Track Producers | Mobile-first (phones, tablets, responsive desktop) | Speed, friction-free single-track tagging, touch waveforms, canned presets |
+| **MP3MetaManager** | `/manager` | Desktop Power Users, DJs, Album Curators, Batch Producers | Desktop-first (widescreen, 1080p–4K displays) | High-density tables, multi-file batch tagging, stem trees, synced lyrics (LRC/SYLT) |
+| **Core Platform** | `/api` | DevOps, Package Maintainers, Infrastructure Engineers | CLI, Systemd, Reverse Proxies, Docker | Security hardening, zero-downtime updates, cross-platform deployment |
 
 ---
 
-## 🗂️ 3. MP3MetaManager Desktop Interface & Batch Power Tools
+## 🏠 Project A: Gateway Hub (`/`) — System Portal & Dispatcher Roadmap
 
-Dedicated desktop workspace (`/manager`) for deep multi-track workflows:
+The **Gateway Hub** serves as the front door and system dashboard for the MP3MetaFix instance. It provides instantaneous visibility into host health, temporary MP3 cache quotas, and clean one-click launching into specialized workspaces.
 
-- [ ] **High-Density Multi-Track Data Table**:
-  - Multi-column spreadsheet-like grid with keyboard navigation (<kbd>Tab</kbd>, <kbd>Enter</kbd>, arrow keys).
-  - Bulk tag applicator (apply common Artist, Album, Genre, Artwork to all selected rows).
-  - Sequential auto-numbering and track reordering.
+### Completed Features ✅
+- [x] **Live System Telemetry Quickbar (`GET /api/system/stats`)**:
+  - Real-time CPU load (`1m`, `5m`, `15m`), memory utilization, disk space, and MP3 temporary cache quota tracking.
+  - Responsive 2x2 micro-card mobile view with smooth-scrolling quick jump to full diagnostics.
+- [x] **Workspace Dispatcher Cards**:
+  - Compact selector cards for **MP3MetaFix** and **MP3MetaManager** with feature breakdown grids and direct entry buttons.
+- [x] **Interactive Hardware Diagnostics Modal**:
+  - Full system breakdown showing process memory, cgroup limits, runtime mode, and storage TTL status.
+- [x] **High-Contrast Responsive UI (WCAG AAA)**:
+  - High-contrast footers, readable links, and glassmorphic telemetry cards across all screen resolutions (320px–4K).
+
+### Active Backlog & Future Vision 📋
+- [ ] **Guest & Public Mode Access Controls**:
+  - Administrator toggle allowing guest visitors to access only the single-track `/app` editor while locking `/manager` and system diagnostics behind authentication.
+- [ ] **Service Daemon Maintenance Triggers**:
+  - Authenticated admin actions to trigger cache cleanup, storage purge, or service restart directly from the web portal.
+- [ ] **Live Audio Processing Metrics**:
+  - Real-time counters displaying active streaming sessions, total MP3s processed, and average save latency.
+- [ ] **System Health History & Historical Graphs**:
+  - Visual CPU and memory utilization trendlines over the past 24 hours.
+
+---
+
+## 📱 Project B: MP3MetaFix (`/app`) — Mobile-First Single-Track Editor Roadmap
+
+**MP3MetaFix** is the dedicated single-track audio metadata, cover art, and inspection workspace. Designed mobile-first for friction-free music tagging on smartphones, tablets, and desktops alike.
+
+### Completed Features ✅
+- [x] **Fluid Mobile-First Responsive Layout (320px to 4K)**:
+  - Zero right-edge overflow on narrow screens (tested across iPhone SE, iPhone 16 Pro Max, iPad Mini, and desktop).
+  - Balanced 2-column layout on tablets ($\ge 720\text{px}$) keeping artwork and metadata forms immediately accessible.
+  - Centered, constrained album art preview container (`max-width: 210px` on phones) to prevent massive vertical scrolling.
+- [x] **Complete ID3v2.3 / ID3v2.4 Metadata Tagging**:
+  - Track Title, Artist, Album, Album Artist, Genre, Year / Date, Track/Total, Disc/Total, BPM, Composer, Comments, and Lyrics.
+- [x] **Retina Canvas Audio Waveform Visualizer & Scrubber**:
+  - Web Audio API dynamic peak rendering, played/unplayed gradient states, continuous drag scrubbing, and hovering time tooltips.
+- [x] **Album Artwork APIC Extraction & Replacement**:
+  - Inspect embedded cover art, upload new images (PNG/JPEG/WebP normalized to JPEG), and extract/remove artwork.
+  - Responsive 3-button action row (`[ Upload ] [ Extract ] [ Remove ]`).
+- [x] **Canned Comment Presets & Preset Manager**:
+  - Quick dropdown prefilling for creator profiles (e.g. Suno links) and local storage management modal.
+- [x] **Dynamic Filename Formatter**:
+  - Instant pattern-based renaming (`%artist% - %title%.mp3`, `%track% - %title%.mp3`) with preset buttons.
+- [x] **Native Save & Named File Download**:
+  - Modern Chromium File System Access API with RFC 5987 UTF-8 download fallbacks.
+
+### Active Backlog & Future Vision 📋
+- [ ] **Suno.com URL & Share Link Auto-Parser**:
+  - Paste a Suno track link (`https://suno.com/song/...`) to automatically fetch and populate Track Title, Variation subtitle (`[Extended]`, `[Part 2]`), Prompt/Genre tags, Generated Lyrics (`USLT`), and high-res cover art.
+- [ ] **Native Web Share API (`navigator.share`)**:
+  - One-tap mobile export to send modified MP3s directly to mobile audio players (VLC, Files, Telegram, Discord, Apple Music).
+- [ ] **MediaSession API Integration**:
+  - Display track title, artist, album art, and seek controls in the mobile lockscreen and notification media widget during audio preview playback.
+- [ ] **Sticky Mobile Bottom Action Bar**:
+  - Persistent bottom toolbar housing Save/Download and Play/Pause controls for one-thumb editing when viewing long lyrics.
+- [ ] **PWA (Progressive Web App) Manifest**:
+  - Installable to home screen on iOS and Android with offline caching and standalone display mode.
+- [ ] **Light / Dark Theme Switcher**:
+  - User toggle between obsidian dark mode and clean glassmorphic light mode with OS `prefers-color-scheme` synchronization.
+
+---
+
+## 🗂️ Project C: MP3MetaManager (`/manager`) — Desktop Power-User Workspace Roadmap
+
+**MP3MetaManager** is the desktop-focused power-user interface engineered for heavy multi-track batch operations, album assembly, library management, and deep audio organization.
+
+### Completed Features ✅
+- [x] **Desktop Workspace Foundation**:
+  - Multi-panel desktop shell with structured sidebar categories (Batch Queue, Suno AI Stems, Synced Lyrics, Karaoke Tap-to-Sync).
+  - High-density top toolbar with search filter and batch action controls.
+- [x] **Global Header Switcher Integration**:
+  - Unified app switcher navigation pill linking back to `/app` and `/` seamlessly.
+
+### Active Backlog & Future Vision 📋
+- [ ] **High-Density Spreadsheet Batch Editor**:
+  - Multi-column spreadsheet grid supporting keyboard navigation (<kbd>Tab</kbd>, <kbd>Enter</kbd>, arrow keys) for editing hundreds of tracks simultaneously.
+  - Multi-row selection with bulk tag applicator (apply common Artist, Album, Genre, Year, Cover Art to all selected rows).
+  - Regex search and replace across track titles and filenames.
+  - Sequential auto-numbering (`1/12`, `2/12`, ...) and drag-and-drop track reordering.
+- [ ] **Batch File & Folder Ingestion**:
+  - Drag and drop dozens of audio files or whole folder trees using the File System Access Directory Picker.
+- [ ] **Tap-to-Sync Karaoke Lyric Stamping (`.lrc` & ID3 `SYLT`)**:
+  - Interactive "Tap-to-Sync" tool allowing creators to tap <kbd>Space</kbd> during playback to stamp exact timestamps onto lyric lines.
+  - Export standard `.lrc` sidecar companion files or embed directly into the ID3 `SYLT` binary frame.
 - [ ] **Suno AI Stem & Generation Tree Organizer**:
-  - Parent/child visual hierarchy for variations, extensions, and vocal/instrumental stems.
-- [ ] **Tap-to-Sync Karaoke Lyric Stamping**:
-  - Real-time timestamp stamping during audio playback for ID3 `SYLT` binary frames and `.lrc` companion export.
+  - Visual parent/child lineage graph organizing variations, extensions, and separated vocal/instrumental stems.
+- [ ] **Bulk Cover Art Manager**:
+  - Batch extract, resize, square-crop, and embed high-resolution artwork across an entire album or batch queue.
+- [ ] **Batch ZIP Archive Download & In-Place Writeback**:
+  - Download all modified tracks as a structured `.zip` archive or save modified tags directly back to the original files on disk.
+- [ ] **Audio Fingerprinting & Duplicate Detection**:
+  - Chromaprint / AcoustID audio fingerprinting to identify identical takes and duplicate audio renders.
 
 ---
 
-## 🪟 3. Windows Cross-Platform Support
+## ⚙️ Project D: Core Platform, Security & Infrastructure Roadmap
 
-A seamless Windows desktop and server experience without requiring WSL:
+The underlying Python backend, Mutagen audio engine, systemd service architecture, and deployment automation powering all frontends.
 
-- [ ] **Windows Standalone Scripts**:
-  - `run.bat` / `run.ps1` and `install.bat` that set up a Python virtual environment, install requirements, launch the FastAPI server, and open the default browser.
-- [ ] **Standalone Windows Executable (`.exe`)**:
-  - Bundled standalone binary using **PyInstaller** or **PyWebView** (Microsoft Edge WebView2 backend) for a single-file portable desktop app that runs without needing Python installed on the host.
-  - Windows system tray icon with quick start/stop and "Open Web Interface" actions.
-- [ ] **Windows Service Support**:
-  - Service configuration via **WinSW** or **NSSM** for running in the background on Windows Server instances.
+### Completed Features ✅
+- [x] **14-Point Security Perimeter**:
+  - Timestamped HMAC-SHA256 session cookies, POSIX `0700` filesystem isolation, decoupled SHA-256 hashed storage directories.
+  - Chunk-level magic bytes validation, decompression bomb defenses (Pillow 10 MP limit), sliding-window rate limiting with proxy anti-spoofing.
+  - Origin/Sec-Fetch-Site CSRF protection and exception masking.
+- [x] **Non-Destructive Systemd Migration Engine (`scripts/migrate_service.py`)**:
+  - Safe, atomic unit updates during upgrades while preserving administrator customizations, custom environment variables, and cgroup resource limits.
+- [x] **Service Network Access, Proxy Trust & LAN Maintenance CLI (`scripts/configure_access.py`)**:
+  - Fast maintenance commands (`install.sh --access`, `--lan`, `--local`, `--bind`, `--proxy`, `--domain`, `--no-domain`, `--no-proxy`, `--trusted-proxies`).
+- [x] **Self-Re-Executing Linux Installer (`install.sh`)**:
+  - Automated upgrade handoff executing newly pulled code immediately without requiring secondary update runs.
 
----
-
-## 📦 4. Batch Processing & Queue Management
-
-- [ ] **Multi-File Upload & Queue**:
-  - Drag and drop dozens of MP3 files at once.
-  - Batch table view with inline editing for titles, track numbers, and shared album metadata.
-- [ ] **Bulk Metadata Applicator**:
-  - Apply common Album, Artist, Genre, Year, and Cover Art across all files in the active queue with a single click.
-- [ ] **Sequential Auto-Numbering**:
-  - Auto-increment track numbers (`1/10`, `2/10`, ...) based on custom sorting or queue ordering.
-- [ ] **Bulk ZIP / Archive Download**:
-  - Download all modified tracks in the session as a structured `.zip` archive or directly write back to a chosen local directory via File System Access API.
-
----
-
-## 🎧 5. Multi-Format Audio Expansion
-
-Expand the underlying audio engine beyond MP3:
-
-- [ ] **FLAC (Free Lossless Audio Codec)**: Vorbis comment tagging and FLAC picture block embedding.
-- [ ] **M4A / AAC / ALAC (MP4 Container)**: iTunes-style atom metadata (`©nam`, `©ART`, `covr`).
-- [ ] **OGG / Opus**: Vorbis comment tagging.
-- [ ] **WAV / AIFF**: ID3 chunk and RIFF INFO list metadata.
-
----
-
-## ✂️ 6. Audio Analysis, Visualization & Editing Tools
-
-- [x] **Interactive Audio Waveform Display & Peak Scrubber** [COMPLETED]:
-  - Render a dynamic, multi-color audio waveform using the Web Audio API / Canvas.
-  - High-DPI canvas peak calculation, dynamic gradient played/unplayed splitting, glowing playhead, and direct click-to-seek / drag-scrubbing navigation.
-  - Hover vertical guideline with floating glassmorphic time tooltip and `ResizeObserver` responsive re-rendering.
-- [ ] **Automatic BPM & Musical Key Detection**:
-  - Auto-calculate musical tempo (BPM) and harmonic key (e.g. *8A / A minor*) using audio signal analysis.
-  - Automatically write standard ID3 `TBPM` and `TKEY` frames for DJ and playlist curation.
-- [ ] **Lossless Silence Trimming**:
-  - Auto-detect and trim lead-in and tail silence commonly present on AI-generated audio without re-encoding the audio stream.
-- [ ] **Audio Fading (Fade-in / Fade-out)**:
-  - Smooth 1–3 second fade-out tool for abrupt endings in generated tracks.
-- [ ] **Loudness Normalization & ReplayGain**:
-  - Calculate and write standard ReplayGain / EBU R128 volume tags and Spotify/YouTube mastering targets (-14 LUFS).
-
----
-
-## 🎨 7. UI/UX, Themes & Personalization
-
-- [ ] **Light Mode & Dark Mode Support**:
-  - Theme toggle switch in header/settings (Dark, Light, System Default).
-  - Clean, high-contrast light mode palette tailored with subtle glassmorphic cards, crisp borders, and modern typography.
-  - Persistent user preference saved in `localStorage`.
-  - Automatic synchronization with OS `prefers-color-scheme` media queries.
-  - Smooth CSS variable transitions between themes without jarring color jumps or reload flashes.
-- [ ] **Mobile-First Responsive Design & Touch Optimization (Suno On-the-Go)**:
-  - **Adaptive Viewport Layouts**: Fluid single-column responsive stacking for smartphones and tablets (`< 768px`), collapsible artwork manager, and compact metadata cards.
-  - **Sticky Mobile Bottom Action Bar**: Persistent bottom bar housing the Save/Download action and mini audio playback controls for seamless one-thumb operation while editing long lyrics or metadata fields.
-  - **Touch & Mobile File Pickers**: Enlarged 48px tap targets, mobile file drawer integration, and direct photo library picker for album art.
-  - **Native Web Share API (`navigator.share`)**: One-tap export to send fixed MP3s directly to mobile music players (VLC, Files, Telegram, Discord, audio apps) on Android and iOS.
-  - **MediaSession API Integration**: Display track title, artist, album art, and seek controls in the mobile lockscreen and notification shade during audio preview.
-- [ ] **UI Density & Customization**:
-  - Compact table view vs spacious editing panel mode.
-  - Customizable default landing tab (e.g. Essential vs Advanced tags vs Lyrics).
-
----
-
-## 🌐 8. Integrations, Packaging & Deployment
-
-- [ ] **Official Docker & OCI Container Images**:
-  - Multi-arch Dockerfile (`linux/amd64`, `linux/arm64`) published to GitHub Container Registry (GHCR) for unRAID, TrueNAS, and Kubernetes deployment.
-- [ ] **External Metadata Lookup**:
-  - Optional MusicBrainz / AcoustID fingerprinting for commercial and remix identification.
-- [ ] **PWA (Progressive Web App)**:
-  - Offline capability and installation as a standalone progressive desktop app.
-
----
-
-## 🏗️ 9. Architectural Foundations for File Storage & Manipulation Fork
-
-Foundational abstractions designed to enable seamless forking into a broader self-hosted file management, media asset storage, and manipulation platform:
-
+### Active Backlog & Future Vision 📋
+- [ ] **Multi-Arch Docker & OCI Container Images**:
+  - Official multi-architecture Dockerfile (`linux/amd64`, `linux/arm64`) published to GitHub Container Registry (GHCR) for unRAID, TrueNAS, and Docker Compose.
+- [ ] **Native Windows Desktop Experience**:
+  - Standalone bundled Windows `.exe` using PyInstaller / PyWebView (Edge WebView2 backend) with system tray integration and zero Python prerequisite.
+- [ ] **Multi-Format Audio Engine Expansion**:
+  - Extend Mutagen engine support to **FLAC** (Vorbis comments & picture blocks), **M4A / AAC / ALAC** (MP4 atoms), **OGG / Opus**, and **WAV / AIFF** (ID3 chunks).
 - [ ] **Pluggable Storage Backend Drivers (`StorageProvider`)**:
-  - Abstract storage interface (`get()`, `put()`, `stream()`, `list()`, `delete()`).
-  - Drivers for Local File System, TrueNAS/SMB/NFS shared mounts, and S3/MinIO Object Storage.
-- [ ] **Embedded SQLite / DuckDB Metadata & Library Catalog**:
-  - Lightweight WAL-mode database layer enabling persistent indexed search, tag filtering, key/BPM queries, deduplication hashing, and smart playlists across stored files.
-- [ ] **Asynchronous Task Worker Queue**:
-  - Non-blocking job runner with real-time SSE progress streaming for heavy batch audio transcoding (e.g. WAV -> MP3 320kbps), multi-gigabyte ZIP packaging, and video remuxing.
-- [ ] **Interactive Karaoke Studio & Fullscreen Teleprompter**:
-  - Fullscreen scrolling lyrics teleprompter synchronized with stored library tracks for singer-songwriters, rehearsal, and playback.
-  - Integration with multi-track vocal and instrumental stems.
-- [ ] **Universal Sidecar & NFO/JSON Exporter**:
-  - Automated generation of `.nfo`, `.json`, and `.xml` companion metadata files compatible with Plex, Jellyfin, Kodi, and media indexers.
-- [ ] **Deep Binary Header & Hex / Frame Inspector**:
-  - In-browser byte inspector for raw container streams, ID3 frame tables, EXIF metadata, and media tracks.
+  - Abstract storage interface supporting Local Filesystem, SMB/NFS shared network mounts, and S3 / MinIO Object Storage.
+- [ ] **Asynchronous Background Task Queue**:
+  - Worker queue for heavy batch audio transcoding and multi-gigabyte ZIP packaging with Server-Sent Events (SSE) progress streaming.
 
 ---
 
-*Note: Feel free to add, remove, or re-order ideas in this file as project priorities shift.*
+*Note: As each sub-project evolves, milestones and priorities are tracked and refined in this roadmap.*

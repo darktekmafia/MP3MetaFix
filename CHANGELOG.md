@@ -15,8 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Live System Telemetry & Diagnostic Endpoint (`GET /api/system/stats`)**:
   - Added real-time non-sensitive telemetry endpoint returning CPU load averages (`1m`, `5m`, `15m`, cores count), RAM memory capacity & utilization, host disk storage, and MP3 temporary cache quota usage.
   - Interactive live-updating telemetry cards on the Gateway Hub with auto-refresh intervals and smooth animated meters.
+  - High-density mobile telemetry quickbar formatted as a 2x2 micro-card grid with smooth-scroll jump to full system diagnostics.
 - **MP3MetaManager Desktop Workspace Foundation (`/manager`)**:
   - Built desktop workspace shell with responsive sidebar categories (Batch Queue, Suno AI Stems, Synced Lyrics SYLT, Karaoke Tap-to-Sync) and top-level search and batch action toolbars.
+- **Mobile-First Responsive Design & Viewport Density Overhaul**:
+  - Optimized layouts for all screen sizes from 320px narrow phones (iPhone SE) up to 4K widescreen displays.
+  - Eliminated horizontal overflow and right-edge clipping on narrow mobile viewports by enforcing `box-sizing: border-box`, `minmax(0, 1fr)` grid track floors, and text truncation on long file names and audio specs.
+  - Added balanced 2-column workspace layout on tablets ($\ge 720\text{px}$, e.g. iPad Mini) to prevent oversized album artwork scaling.
+  - Added responsive `.btn-txt-full` / `.btn-txt-short` button label switching across toolbar actions (`New File` $\to$ `New`, `Save Changes` $\to$ `Save`, `Save & Download` $\to$ `Download`, `Upload Art` $\to$ `Upload`).
+  - Added touch-scrolling and native scrollbar suppression on metadata form tab navigation.
+- **Sub-Project Product Roadmap Architecture (`ROADMAP.md`)**:
+  - Restructured the master roadmap into distinct sub-project focus tracks: **Gateway Hub (`/`)**, **MP3MetaFix (`/app`)**, **MP3MetaManager (`/manager`)**, and **Core Platform (`/api`)**, each with dedicated user personas, milestones, and feature backlogs.
 
 ---
 
