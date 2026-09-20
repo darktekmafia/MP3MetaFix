@@ -125,8 +125,13 @@ async def check_github_updates(force_refresh: bool = False) -> Dict[str, Any]:
                 tags_resp = await client.get(tags_url, headers=headers)
                 if tags_resp.status_code == 200:
                     tags = tags_resp.json()
-                    if tags and isinstance(tags, list):
-                        latest_tag = tags[0].get("name", "").strip().lstrip("vV")
+                    if tags and isinstance(tags, list) and len(tags) > 0:
+                        sorted_tags = sorted(
+                            tags,
+                            key=lambda t: parse_semver(t.get("name", "")),
+                            reverse=True
+                        )
+                        latest_tag = sorted_tags[0].get("name", "").strip().lstrip("vV")
                         if latest_tag:
                             result["latest_version"] = latest_tag
                             result["release_name"] = f"v{latest_tag}"
