@@ -37,6 +37,7 @@ MAX_ARTWORK_SIZE_BYTES = MAX_ARTWORK_SIZE_MB * 1024 * 1024
 TRUST_PROXIES = os.getenv("MP3METAFIX_TRUST_PROXIES", "false").lower() in ("true", "1", "yes")
 TRUSTED_PROXIES_RAW = os.getenv("MP3METAFIX_TRUSTED_PROXIES", "127.0.0.1,::1")
 TRUSTED_PROXIES = [p.strip() for p in TRUSTED_PROXIES_RAW.split(",") if p.strip()]
+PROXY_HOST = os.getenv("MP3METAFIX_PROXY_HOST", "").strip()
 
 # Cryptographic Session & Cookie Config
 def get_secret_key() -> str:

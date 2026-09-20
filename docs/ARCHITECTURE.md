@@ -129,7 +129,7 @@ MP3MetaFix packages an intelligent, non-destructive maintenance engine for syste
 - **Self-Re-Executing Updates**: Re-executes the installer process image in-place (`exec bash`) when new commits are pulled, guaranteeing that newly introduced migrations and fixes execute immediately during the initial update run.
 
 ### Network Access & Reverse Proxy Configuration (`scripts/configure_access.py`)
-- **Safe Binding & Proxy Management**: Inspects and adjusts `MP3METAFIX_HOST`, `MP3METAFIX_PORT`, `MP3METAFIX_TRUST_PROXIES`, and `MP3METAFIX_TRUSTED_PROXIES` directives inside `[Service]` without manual unit file editing.
+- **Safe Binding & Proxy Management**: Inspects and adjusts `MP3METAFIX_HOST`, `MP3METAFIX_PORT`, `MP3METAFIX_TRUST_PROXIES`, `MP3METAFIX_TRUSTED_PROXIES`, and `MP3METAFIX_PROXY_HOST` directives inside `[Service]` without manual unit file editing.
 - **Strict Input Validation**: Validates IPv4/IPv6 addresses, RFC 1123 hostnames, and comma-separated CIDR subnets before modifying configuration; rejects metacharacters, semicolons, and injection strings.
 - **Atomic Replacement**: Employs permissions-preserving atomic file replacement matching `scripts/migrate_service.py`.
-- **Automated Lifecycle Integration**: Integrated with `install.sh` (`--access`, `--lan`, `--local`, `--bind`, `--proxy`, `--no-proxy`, `--trusted-proxies`) to automate daemon reloading, service restarts, and active health verification.
+- **Automated Lifecycle & Health Probing**: Integrated with `install.sh` (`--access`, `--lan`, `--local`, `--bind`, `--proxy`, `--domain`, `--no-domain`, `--no-proxy`, `--trusted-proxies`) to automate daemon reloading, service restarts, and dual-probe health verification across both local interfaces and external proxy domains.

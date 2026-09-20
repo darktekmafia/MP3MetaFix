@@ -60,6 +60,8 @@ show_help() {
     echo "  --proxy [IPS]           Enable reverse proxy trust (optional comma-separated IPs)"
     echo "  --no-proxy              Disable reverse proxy trust (ignore forwarded headers)"
     echo "  --trusted-proxies <IPS> Set explicit trusted reverse proxy IPs/subnets"
+    echo "  --domain <DOMAIN>       Set reverse proxy domain/hostname or public URL"
+    echo "  --no-domain             Clear configured reverse proxy domain/hostname"
     echo "  --version, -v           Display application version"
     echo "  --no-service            Skip installing systemd service"
     echo "  --headless              Force headless server / LXC installation mode"
@@ -566,6 +568,7 @@ do_access_config() {
     local target_port="$2"
     local target_trust="$3"
     local target_trusted="$4"
+    local target_domain="$5"
     local cfg_script="${INSTALL_DIR}/scripts/configure_access.py"
 
     if [ ! -f "$cfg_script" ] || [ ! -f "${INSTALL_DIR}/.venv/bin/python" ]; then
@@ -585,15 +588,16 @@ do_access_config() {
     local svc_type="${svc_info##*:}"
 
     # If no modification is requested, perform inspection
-    if [ -z "$target_host" ] && [ -z "$target_port" ] && [ -z "$target_trust" ] && [ -z "$target_trusted" ]; then
+    if [ -z "$target_host" ] && [ -z "$target_port" ] && [ -z "$target_trust" ] && [ -z "$target_trusted" ] && [ -z "$target_domain" ]; then
         log_info "Inspecting network access configuration (${svc_type} service: ${svc_file})..."
         local json_info
         json_info="$("${INSTALL_DIR}/.venv/bin/python" "$cfg_script" get "$svc_file")"
-        local cur_host cur_port cur_trust cur_trusted
+        local cur_host cur_port cur_trust cur_trusted cur_domain
         cur_host=$(echo "$json_info" | grep -oP '(?<="host": ")[^"]+' || echo "127.0.0.1")
         cur_port=$(echo "$json_info" | grep -oP '(?<="port": ")[^"]+' || echo "8844")
         cur_trust=$(echo "$json_info" | grep -oP '(?<="trust_proxies": ")[^"]+' || echo "false")
         cur_trusted=$(echo "$json_info" | grep -oP '(?<="trusted_proxies": ")[^"]+' || echo "127.0.0.1,::1")
+        cur_domain=$(echo "$json_info" | grep -oP '(?<="proxy_host": ")[^"]+' || true)
 
         echo ""
         echo -e "${BOLD}Current Service Network Configuration:${NC}"
@@ -603,6 +607,9 @@ do_access_config() {
             echo -e "  • ${BOLD}Reverse Proxy Trust:${NC}  ${GREEN}ENABLED${NC} (Trusted: ${cur_trusted})"
         else
             echo -e "  • ${BOLD}Reverse Proxy Trust:${NC}  ${YELLOW}DISABLED${NC} (Forwarded headers ignored)"
+        fi
+        if [ -n "$cur_domain" ]; then
+            echo -e "  • ${BOLD}Reverse Proxy Domain:${NC} ${CYAN}${cur_domain}${NC}"
         fi
         echo -e "  • ${BOLD}Service File:${NC}         ${svc_file} (${svc_type})"
 
@@ -629,13 +636,37 @@ do_access_config() {
 
         # Check HTTP health
         if curl -s -f "http://${probe_host}:${cur_port}/api/health" >/dev/null 2>&1; then
-            echo -e "  • ${BOLD}Health Check:${NC}         ${GREEN}OK (Responding on http://${probe_host}:${cur_port})${NC}"
+            echo -e "  • ${BOLD}Service Health:${NC}       ${GREEN}OK (Responding on http://${probe_host}:${cur_port})${NC}"
         else
-            echo -e "  • ${BOLD}Health Check:${NC}         ${YELLOW}NOT RESPONDING on port ${cur_port}${NC}"
+            echo -e "  • ${BOLD}Service Health:${NC}       ${YELLOW}NOT RESPONDING on port ${cur_port}${NC}"
+        fi
+
+        # Check Proxy Domain Health if configured
+        local formatted_domain_url=""
+        if [ -n "$cur_domain" ]; then
+            formatted_domain_url="$cur_domain"
+            if [[ ! "$formatted_domain_url" =~ ^https?:// ]]; then
+                formatted_domain_url="https://${formatted_domain_url}"
+            fi
+            formatted_domain_url="${formatted_domain_url%/}"
+            if curl -s -f -m 3 --connect-timeout 2 "${formatted_domain_url}/api/health" >/dev/null 2>&1; then
+                echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${GREEN}OK (Responding on ${formatted_domain_url})${NC}"
+            else
+                if [[ ! "$cur_domain" =~ ^https?:// ]] && curl -s -f -m 3 --connect-timeout 2 "http://${cur_domain%/}/api/health" >/dev/null 2>&1; then
+                    formatted_domain_url="http://${cur_domain%/}"
+                    echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${GREEN}OK (Responding on ${formatted_domain_url})${NC}"
+                else
+                    echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${YELLOW}UNREACHABLE from this host (${formatted_domain_url}/api/health - check DNS / NAT)${NC}"
+                fi
+            fi
         fi
 
         echo ""
         echo -e "${BOLD}Access URLs:${NC}"
+
+        if [ -n "$formatted_domain_url" ]; then
+            echo -e "  • ${BOLD}Reverse Proxy / Domain:${NC} ${GREEN}${formatted_domain_url}${NC}"
+        fi
 
         if [ "$cur_host" = "127.0.0.1" ] || [ "$cur_host" = "localhost" ]; then
             echo -e "  • ${BOLD}Localhost:${NC}            http://127.0.0.1:${cur_port}"
@@ -672,11 +703,13 @@ do_access_config() {
         echo -e "  • Restrict to localhost:  ${CYAN}./install.sh --local${NC} (or ./install.sh --bind 127.0.0.1)"
         echo -e "  • Custom interface bind:  ${CYAN}./install.sh --bind <IP>${NC}"
         echo -e "  • Enable proxy trust:     ${CYAN}./install.sh --proxy [TRUSTED_IPS]${NC}"
+        echo -e "  • Set proxy domain:       ${CYAN}./install.sh --domain <DOMAIN_OR_URL>${NC}"
+        echo -e "  • Clear proxy domain:     ${CYAN}./install.sh --no-domain${NC}"
         echo -e "  • Disable proxy trust:    ${CYAN}./install.sh --no-proxy${NC}"
         return 0
     fi
 
-    # Update host/port/proxy configuration
+    # Update host/port/proxy/domain configuration
     log_info "Updating MP3MetaFix network configuration in ${svc_file}..."
     local py_args=("set" "$svc_file")
     if [ -n "$target_host" ]; then
@@ -690,6 +723,13 @@ do_access_config() {
     fi
     if [ -n "$target_trusted" ]; then
         py_args+=("--trusted-proxies" "$target_trusted")
+    fi
+    if [ -n "$target_domain" ]; then
+        if [ "$target_domain" = "__CLEAR__" ]; then
+            py_args+=("--no-domain")
+        else
+            py_args+=("--domain" "$target_domain")
+        fi
     fi
 
     set +e
@@ -721,14 +761,15 @@ do_access_config() {
         fi
     fi
 
-    # Read effective host, port, and proxy configuration
+    # Read effective host, port, proxy, and domain configuration
     local json_info
     json_info="$("${INSTALL_DIR}/.venv/bin/python" "$cfg_script" get "$svc_file")"
-    local eff_host eff_port eff_trust eff_trusted
+    local eff_host eff_port eff_trust eff_trusted eff_domain
     eff_host=$(echo "$json_info" | grep -oP '(?<="host": ")[^"]+' || echo "127.0.0.1")
     eff_port=$(echo "$json_info" | grep -oP '(?<="port": ")[^"]+' || echo "8844")
     eff_trust=$(echo "$json_info" | grep -oP '(?<="trust_proxies": ")[^"]+' || echo "false")
     eff_trusted=$(echo "$json_info" | grep -oP '(?<="trusted_proxies": ")[^"]+' || echo "127.0.0.1,::1")
+    eff_domain=$(echo "$json_info" | grep -oP '(?<="proxy_host": ")[^"]+' || true)
 
     # Determine probe host
     local probe_host="127.0.0.1"
@@ -747,6 +788,23 @@ do_access_config() {
         sleep 0.2
     done
 
+    # Check Proxy Domain Health if configured
+    local formatted_domain_url=""
+    local domain_probe_ok=false
+    if [ -n "$eff_domain" ]; then
+        formatted_domain_url="$eff_domain"
+        if [[ ! "$formatted_domain_url" =~ ^https?:// ]]; then
+            formatted_domain_url="https://${formatted_domain_url}"
+        fi
+        formatted_domain_url="${formatted_domain_url%/}"
+        if curl -s -f -m 3 --connect-timeout 2 "${formatted_domain_url}/api/health" >/dev/null 2>&1; then
+            domain_probe_ok=true
+        elif [[ ! "$eff_domain" =~ ^https?:// ]] && curl -s -f -m 3 --connect-timeout 2 "http://${eff_domain%/}/api/health" >/dev/null 2>&1; then
+            formatted_domain_url="http://${eff_domain%/}"
+            domain_probe_ok=true
+        fi
+    fi
+
     echo ""
     if [ "$health_ok" = true ]; then
         log_success "Service successfully updated and verified healthy!"
@@ -761,8 +819,20 @@ do_access_config() {
     else
         echo -e "  • ${BOLD}Reverse Proxy Trust:${NC}  ${YELLOW}DISABLED${NC} (Forwarded headers ignored)"
     fi
+    if [ -n "$eff_domain" ]; then
+        echo -e "  • ${BOLD}Reverse Proxy Domain:${NC} ${CYAN}${eff_domain}${NC}"
+        if [ "$domain_probe_ok" = true ]; then
+            echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${GREEN}OK (Responding on ${formatted_domain_url})${NC}"
+        else
+            echo -e "  • ${BOLD}Proxy Domain Health:${NC}  ${YELLOW}UNREACHABLE from this host (${formatted_domain_url}/api/health)${NC}"
+        fi
+    fi
 
     echo -e "${BOLD}Active Access URLs:${NC}"
+    if [ -n "$formatted_domain_url" ]; then
+        echo -e "  • ${BOLD}Reverse Proxy / Domain:${NC} ${GREEN}${formatted_domain_url}${NC}"
+    fi
+
     if [ "$eff_host" = "127.0.0.1" ] || [ "$eff_host" = "localhost" ]; then
         echo -e "  • ${BOLD}Localhost:${NC}            http://127.0.0.1:${eff_port}"
         echo -e "  • ${BOLD}LAN Access:${NC}            ${YELLOW}RESTRICTED${NC} (Bound to ${eff_host} only)"
@@ -799,6 +869,7 @@ do_status() {
     local cur_port="${DEFAULT_PORT}"
     local cur_trust="false"
     local cur_trusted="127.0.0.1,::1"
+    local cur_domain=""
 
     if [ -n "$svc_info" ] && [ -f "${INSTALL_DIR}/scripts/configure_access.py" ] && [ -f "${INSTALL_DIR}/.venv/bin/python" ]; then
         local svc_file="${svc_info%%:*}"
@@ -809,6 +880,7 @@ do_status() {
             cur_port=$(echo "$json_info" | grep -oP '(?<="port": ")[^"]+' || echo "8844")
             cur_trust=$(echo "$json_info" | grep -oP '(?<="trust_proxies": ")[^"]+' || echo "false")
             cur_trusted=$(echo "$json_info" | grep -oP '(?<="trusted_proxies": ")[^"]+' || echo "127.0.0.1,::1")
+            cur_domain=$(echo "$json_info" | grep -oP '(?<="proxy_host": ")[^"]+' || true)
         fi
     fi
 
@@ -828,6 +900,9 @@ do_status() {
     else
         echo -e "Proxy Trust:        ${YELLOW}DISABLED${NC}"
     fi
+    if [ -n "$cur_domain" ]; then
+        echo -e "Proxy Domain:       ${CYAN}${cur_domain}${NC}"
+    fi
 
     local probe_host="127.0.0.1"
     if [ "$cur_host" != "0.0.0.0" ] && [ "$cur_host" != "::" ] && [ "$cur_host" != "localhost" ] && [ "$cur_host" != "127.0.0.1" ]; then
@@ -838,6 +913,15 @@ do_status() {
         echo -e "HTTP Endpoint:      ${GREEN}RESPONDING on http://${probe_host}:${cur_port}${NC}"
     else
         echo -e "HTTP Endpoint:      ${YELLOW}NOT RESPONDING on port ${cur_port}${NC}"
+    fi
+
+    if [ -n "$cur_domain" ]; then
+        local formatted_domain_url="$cur_domain"
+        if [[ ! "$formatted_domain_url" =~ ^https?:// ]]; then
+            formatted_domain_url="https://${formatted_domain_url}"
+        fi
+        formatted_domain_url="${formatted_domain_url%/}"
+        echo -e "Proxy Domain URL:   ${GREEN}${formatted_domain_url}${NC}"
     fi
 
     if [ "$cur_host" = "0.0.0.0" ] || [ "$cur_host" = "::" ]; then
@@ -900,6 +984,7 @@ TARGET_BIND_HOST=""
 TARGET_PORT_ARG=""
 TARGET_TRUST_PROXIES=""
 TARGET_TRUSTED_PROXIES=""
+TARGET_PROXY_HOST=""
 SERVICE_USER="${SUDO_USER:-$USER}"
 
 while [[ $# -gt 0 ]]; do
@@ -953,6 +1038,20 @@ while [[ $# -gt 0 ]]; do
                 shift 1
             fi
             ;;
+        --domain|--proxy-host|--url|--public-url)
+            ACTION="access"
+            if [[ $# -ge 2 && ! "$2" =~ ^-- ]]; then
+                TARGET_PROXY_HOST="$2"
+                shift 2
+            else
+                shift 1
+            fi
+            ;;
+        --no-domain|--clear-domain|--no-proxy-host)
+            ACTION="access"
+            TARGET_PROXY_HOST="__CLEAR__"
+            shift 1
+            ;;
         --version|-v)
             echo "MP3MetaFix v${VERSION}"
             exit 0
@@ -978,6 +1077,6 @@ case "$ACTION" in
     install) do_install ;;
     update) do_update ;;
     status) do_status ;;
-    access) do_access_config "$TARGET_BIND_HOST" "$TARGET_PORT_ARG" "$TARGET_TRUST_PROXIES" "$TARGET_TRUSTED_PROXIES" ;;
+    access) do_access_config "$TARGET_BIND_HOST" "$TARGET_PORT_ARG" "$TARGET_TRUST_PROXIES" "$TARGET_TRUSTED_PROXIES" "$TARGET_PROXY_HOST" ;;
     uninstall) do_uninstall ;;
 esac

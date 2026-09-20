@@ -112,17 +112,27 @@ sudo ./install.sh --bind 192.168.0.190
 ```
 Binds the service specifically to a dedicated network interface. The health probe and endpoint reporting automatically target `http://192.168.0.190:8844`.
 
-### Reverse Proxy Trust Configuration (`--proxy`, `--no-proxy`, `--trusted-proxies`)
-Configure reverse proxy header processing (`X-Forwarded-For`, `X-Forwarded-Proto`) without manually editing unit files:
+### Reverse Proxy Trust & Domain Configuration (`--proxy`, `--domain`, `--no-proxy`, `--no-domain`)
+Configure reverse proxy header processing (`X-Forwarded-For`, `X-Forwarded-Proto`) and public domain URL routing without manually editing unit files:
 ```bash
 # Enable proxy trust with loopback defaults (127.0.0.1, ::1)
 sudo ./install.sh --proxy
 
 # Enable proxy trust for a dedicated reverse proxy IP / subnet (e.g. Nginx Proxy Manager)
-sudo ./install.sh --proxy 192.168.0.50
+sudo ./install.sh --proxy 192.168.0.55
+
+# Set public reverse proxy domain/hostname for automated proxy health checks and access links
+sudo ./install.sh --domain mp3.yourdomain.com
+# (or with full scheme: sudo ./install.sh --domain https://mp3.yourdomain.com)
+
+# Configure proxy IP and domain in a single command
+sudo ./install.sh --proxy 192.168.0.55 --domain mp3.yourdomain.com
+
+# Clear configured proxy domain
+sudo ./install.sh --no-domain
 
 # Specify multiple trusted proxy CIDR subnets
-sudo ./install.sh --trusted-proxies 127.0.0.1,192.168.0.50,10.0.0.0/8
+sudo ./install.sh --trusted-proxies 127.0.0.1,192.168.0.55,10.0.0.0/8
 
 # Disable proxy trust (direct client connections only)
 sudo ./install.sh --no-proxy

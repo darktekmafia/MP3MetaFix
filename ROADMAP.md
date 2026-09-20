@@ -58,7 +58,7 @@ Provide a complete in-app lifecycle updater directly from the web interface, lev
 - [x] **Portable Systemd Service Migration (`scripts/migrate_service.py`) [COMPLETED]**:
   - Safe, non-destructive migration helper in `install.sh --update` to upgrade legacy service units to use `--no-proxy-headers` and dynamic host/port bindings while preserving administrator customizations.
 - [x] **Service Network Access, Proxy Trust & LAN Configuration Helper (`scripts/configure_access.py`) [COMPLETED]**:
-  - Maintenance CLI workflow (`install.sh --access`, `--lan`, `--local`, `--bind`, `--proxy`, `--no-proxy`, `--trusted-proxies`) to inspect and update host/port bindings and reverse proxy trust rules safely with automatic daemon reloading and healthcheck verification.
+  - Maintenance CLI workflow (`install.sh --access`, `--lan`, `--local`, `--bind`, `--proxy`, `--domain`, `--no-domain`, `--no-proxy`, `--trusted-proxies`) to inspect and update host/port bindings, proxy domains, and reverse proxy trust rules safely with automatic daemon reloading and healthcheck verification.
 
 ---
 

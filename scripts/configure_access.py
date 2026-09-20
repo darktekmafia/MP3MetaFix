@@ -94,19 +94,84 @@ def validate_trusted_proxies(proxies_str: str) -> bool:
     return True
 
 
+def validate_proxy_host(domain_or_url: str) -> bool:
+    """Validate reverse proxy domain, hostname, or URL for health check probing.
+
+    Supports domain names (e.g. mp3.yourdomain.com), hostnames with ports,
+    full URLs (http:// or https://), and clear keywords (none, clear).
+    Rejects shell metacharacters, whitespace, semicolons, quotes, and dangerous characters.
+    """
+    if not domain_or_url or not isinstance(domain_or_url, str):
+        return False
+
+    disallowed = [" ", "\t", "\n", "\r", ";", "&", "|", "`", "$", "(", ")", "<", ">", '"', "'", "\\"]
+    if any(char in domain_or_url for char in disallowed):
+        return False
+
+    clean = domain_or_url.strip()
+    if clean.lower() in ("none", "clear", "disable", "disabled", "false"):
+        return True
+
+    # Strip scheme if present
+    if clean.lower().startswith("https://"):
+        clean = clean[8:]
+    elif clean.lower().startswith("http://"):
+        clean = clean[7:]
+
+    # Strip path / trailing slash if present
+    if "/" in clean:
+        clean = clean.split("/", 1)[0]
+
+    if not clean:
+        return False
+
+    # Handle IPv6 brackets if any e.g. [::1]:8844
+    if clean.startswith("[") and "]" in clean:
+        ip_part = clean[1:clean.index("]")]
+        port_part = clean[clean.index("]") + 1:]
+        if port_part.startswith(":"):
+            if not validate_bind_port(port_part[1:]):
+                return False
+        elif port_part != "":
+            return False
+        try:
+            ipaddress.IPv6Address(ip_part)
+            return True
+        except ValueError:
+            return False
+    elif ":" in clean:
+        host_part, port_part = clean.rsplit(":", 1)
+        if not validate_bind_port(port_part):
+            return False
+        clean = host_part
+
+    # Validate remaining host as IP address or RFC 1123 hostname
+    try:
+        ipaddress.ip_address(clean)
+        return True
+    except ValueError:
+        pass
+
+    hostname_regex = re.compile(
+        r"^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$"
+    )
+    return bool(hostname_regex.match(clean))
+
+
 def get_service_binding(content: str) -> Dict[str, Any]:
     """Extract network binding configuration from a systemd unit content.
 
     Only parses within the [Service] section.
 
     Returns:
-        Dict with keys: host, port, trust_proxies, trusted_proxies, is_configured
+        Dict with keys: host, port, trust_proxies, trusted_proxies, proxy_host, is_configured
     """
     result = {
         "host": "127.0.0.1",
         "port": "8844",
         "trust_proxies": "false",
         "trusted_proxies": "127.0.0.1,::1",
+        "proxy_host": "",
         "is_configured": False,
     }
 
@@ -137,6 +202,8 @@ def get_service_binding(content: str) -> Dict[str, Any]:
                         result["trust_proxies"] = item.split("=", 1)[1].lower()
                     elif item.startswith("MP3METAFIX_TRUSTED_PROXIES="):
                         result["trusted_proxies"] = item.split("=", 1)[1]
+                    elif item.startswith("MP3METAFIX_PROXY_HOST="):
+                        result["proxy_host"] = item.split("=", 1)[1]
 
     return result
 
@@ -147,8 +214,9 @@ def set_service_binding(
     port: Optional[str] = None,
     trust_proxies: Optional[Any] = None,
     trusted_proxies: Optional[str] = None,
+    proxy_host: Optional[str] = None,
 ) -> Tuple[str, str, Optional[str]]:
-    """Update host, port, and/or proxy trust configuration in systemd service unit content.
+    """Update host, port, proxy trust, and/or proxy domain configuration in systemd service unit content.
 
     Strictly modifies only the [Service] section and preserves all other directives.
 
@@ -200,6 +268,17 @@ def set_service_binding(
     else:
         target_trusted_proxies = None
 
+    if proxy_host is not None:
+        norm_ph = str(proxy_host).strip()
+        if norm_ph.lower() in ("", "none", "clear", "disable", "disabled", "false"):
+            target_proxy_host = ""
+        else:
+            if not validate_proxy_host(norm_ph):
+                return content, ConfigStatus.FAILED, f"Invalid proxy domain / hostname: '{proxy_host}'"
+            target_proxy_host = norm_ph
+    else:
+        target_proxy_host = None
+
     if not content or not content.strip():
         return content, ConfigStatus.FAILED, "Unit content is empty."
 
@@ -213,6 +292,7 @@ def set_service_binding(
     port_line_idx = None
     trust_line_idx = None
     trusted_line_idx = None
+    proxy_host_line_idx = None
 
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -235,6 +315,8 @@ def set_service_binding(
                     trust_line_idx = i
                 if "MP3METAFIX_TRUSTED_PROXIES=" in stripped:
                     trusted_line_idx = i
+                if "MP3METAFIX_PROXY_HOST=" in stripped:
+                    proxy_host_line_idx = i
 
     if service_start_idx is None:
         return content, ConfigStatus.FAILED, "No [Service] section found in unit content."
@@ -256,6 +338,8 @@ def set_service_binding(
                 trust_line_idx += 1
             if trusted_line_idx is not None and trusted_line_idx >= insert_pos:
                 trusted_line_idx += 1
+            if proxy_host_line_idx is not None and proxy_host_line_idx >= insert_pos:
+                proxy_host_line_idx += 1
 
     # 2. Update or insert port
     if target_port is not None:
@@ -270,6 +354,8 @@ def set_service_binding(
                 trust_line_idx += 1
             if trusted_line_idx is not None and trusted_line_idx >= insert_pos:
                 trusted_line_idx += 1
+            if proxy_host_line_idx is not None and proxy_host_line_idx >= insert_pos:
+                proxy_host_line_idx += 1
 
     # 3. Update or insert trust_proxies
     if target_trust_proxies is not None:
@@ -282,6 +368,8 @@ def set_service_binding(
                 exec_idx += 1
             if trusted_line_idx is not None and trusted_line_idx >= insert_pos:
                 trusted_line_idx += 1
+            if proxy_host_line_idx is not None and proxy_host_line_idx >= insert_pos:
+                proxy_host_line_idx += 1
 
     # 4. Update or insert trusted_proxies
     if target_trusted_proxies is not None:
@@ -290,6 +378,22 @@ def set_service_binding(
         else:
             insert_pos = exec_idx if exec_idx is not None else service_start_idx + 1
             new_lines.insert(insert_pos, f'Environment="MP3METAFIX_TRUSTED_PROXIES={target_trusted_proxies}"')
+            if exec_idx is not None:
+                exec_idx += 1
+            if proxy_host_line_idx is not None and proxy_host_line_idx >= insert_pos:
+                proxy_host_line_idx += 1
+
+    # 5. Update, insert, or clear proxy_host
+    if target_proxy_host is not None:
+        if target_proxy_host == "":
+            if proxy_host_line_idx is not None:
+                del new_lines[proxy_host_line_idx]
+        else:
+            if proxy_host_line_idx is not None:
+                new_lines[proxy_host_line_idx] = f'Environment="MP3METAFIX_PROXY_HOST={target_proxy_host}"'
+            else:
+                insert_pos = exec_idx if exec_idx is not None else service_start_idx + 1
+                new_lines.insert(insert_pos, f'Environment="MP3METAFIX_PROXY_HOST={target_proxy_host}"')
 
     new_content = "\n".join(new_lines)
     if content.endswith("\n") and not new_content.endswith("\n"):
@@ -307,6 +411,7 @@ def update_service_file(
     port: Optional[str] = None,
     trust_proxies: Optional[Any] = None,
     trusted_proxies: Optional[str] = None,
+    proxy_host: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Safely update network binding in a service file on disk.
 
@@ -326,6 +431,7 @@ def update_service_file(
         port=port,
         trust_proxies=trust_proxies,
         trusted_proxies=trusted_proxies,
+        proxy_host=proxy_host,
     )
     if status == ConfigStatus.FAILED:
         return ConfigStatus.FAILED, f"Configuration rejected: {err_msg}"
@@ -375,7 +481,7 @@ def update_service_file(
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: configure_access.py <get|set> <path_to_service_file> [--host HOST] [--port PORT] [--trust-proxies true|false] [--trusted-proxies IPS]", file=sys.stderr)
+        print("Usage: configure_access.py <get|set> <path_to_service_file> [--host HOST] [--port PORT] [--trust-proxies true|false] [--trusted-proxies IPS] [--domain DOMAIN]", file=sys.stderr)
         sys.exit(1)
 
     cmd = sys.argv[1].lower()
@@ -399,7 +505,7 @@ def main():
 
     elif cmd == "set":
         if len(sys.argv) < 3:
-            print("Usage: configure_access.py set <path_to_service_file> [--host HOST] [--port PORT] [--trust-proxies true|false] [--trusted-proxies IPS]", file=sys.stderr)
+            print("Usage: configure_access.py set <path_to_service_file> [--host HOST] [--port PORT] [--trust-proxies true|false] [--trusted-proxies IPS] [--domain DOMAIN]", file=sys.stderr)
             sys.exit(1)
         target_path = Path(sys.argv[2])
 
@@ -407,6 +513,7 @@ def main():
         target_port = None
         target_trust = None
         target_trusted = None
+        target_domain = None
         idx = 3
         while idx < len(sys.argv):
             arg = sys.argv[idx]
@@ -434,12 +541,21 @@ def main():
             elif arg.startswith("--trusted-proxies=") or arg.startswith("--trusted-proxy="):
                 target_trusted = arg.split("=", 1)[1]
                 idx += 1
+            elif arg in ("--domain", "--proxy-host", "--url", "--public-url") and idx + 1 < len(sys.argv):
+                target_domain = sys.argv[idx + 1]
+                idx += 2
+            elif arg.startswith("--domain=") or arg.startswith("--proxy-host=") or arg.startswith("--url=") or arg.startswith("--public-url="):
+                target_domain = arg.split("=", 1)[1]
+                idx += 1
+            elif arg in ("--no-domain", "--clear-domain", "--no-proxy-host"):
+                target_domain = ""
+                idx += 1
             else:
                 print(f"[!] Error: Unknown argument '{arg}'", file=sys.stderr)
                 sys.exit(1)
 
-        if target_host is None and target_port is None and target_trust is None and target_trusted is None:
-            print("[!] Error: At least one parameter (--host, --port, --trust-proxies, --trusted-proxies) must be specified for 'set'.", file=sys.stderr)
+        if target_host is None and target_port is None and target_trust is None and target_trusted is None and target_domain is None:
+            print("[!] Error: At least one parameter (--host, --port, --trust-proxies, --trusted-proxies, --domain) must be specified for 'set'.", file=sys.stderr)
             sys.exit(1)
 
         status, msg = update_service_file(
@@ -448,6 +564,7 @@ def main():
             port=target_port,
             trust_proxies=target_trust,
             trusted_proxies=target_trusted,
+            proxy_host=target_domain,
         )
         if status == ConfigStatus.CHANGED:
             print(f"[+] {msg}")

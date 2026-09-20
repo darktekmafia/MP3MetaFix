@@ -1309,6 +1309,24 @@ def test_configure_access_validation():
     assert validate_trusted_proxies("not-an-ip") is False
     assert validate_trusted_proxies("192.168.1.999") is False
 
+    # Valid proxy domain / host
+    from scripts.configure_access import validate_proxy_host
+    assert validate_proxy_host("mp3.yourdomain.com") is True
+    assert validate_proxy_host("https://mp3.yourdomain.com") is True
+    assert validate_proxy_host("http://mp3.local:8844") is True
+    assert validate_proxy_host("192.168.0.55") is True
+    assert validate_proxy_host("https://192.168.0.55:8443/") is True
+    assert validate_proxy_host("none") is True
+    assert validate_proxy_host("clear") is True
+
+    # Invalid proxy domain / host
+    assert validate_proxy_host("") is False
+    assert validate_proxy_host(None) is False
+    assert validate_proxy_host("mp3.domain.com; rm -rf") is False
+    assert validate_proxy_host("mp3 domain com") is False
+    assert validate_proxy_host("https://") is False
+    assert validate_proxy_host("mp3.domain.com:99999") is False
+
 
 def test_configure_access_get_and_set_service_binding():
     """Verify inspection and modification of host, port, and proxy trust in service unit content."""
@@ -1373,7 +1391,23 @@ WantedBy=default.target
     assert 'Environment="MP3METAFIX_HOST=127.0.0.1"' in port_content
     assert 'Environment="MP3METAFIX_TRUST_PROXIES=false"' in port_content
 
-    # 5. Test invalid host / port / proxy rejection
+    # 5. Test setting and clearing proxy domain
+    domain_content, status_dom, _ = set_service_binding(
+        sample_unit,
+        proxy_host="mp3.yourdomain.com",
+    )
+    assert status_dom == ConfigStatus.CHANGED
+    assert 'Environment="MP3METAFIX_PROXY_HOST=mp3.yourdomain.com"' in domain_content
+
+    # Clear domain
+    cleared_content, status_clr, _ = set_service_binding(
+        domain_content,
+        proxy_host="none",
+    )
+    assert status_clr == ConfigStatus.CHANGED
+    assert "MP3METAFIX_PROXY_HOST" not in cleared_content
+
+    # 6. Test invalid host / port / proxy / domain rejection
     _, bad_status, bad_err = set_service_binding(sample_unit, host="127.0.0.1; whoami")
     assert bad_status == ConfigStatus.FAILED
     assert "Invalid bind host" in bad_err
@@ -1385,6 +1419,10 @@ WantedBy=default.target
     _, bad_status3, bad_err3 = set_service_binding(sample_unit, trusted_proxies="bad_ip_address")
     assert bad_status3 == ConfigStatus.FAILED
     assert "Invalid trusted_proxies" in bad_err3
+
+    _, bad_status4, bad_err4 = set_service_binding(sample_unit, proxy_host="bad host; rm -rf")
+    assert bad_status4 == ConfigStatus.FAILED
+    assert "Invalid proxy domain" in bad_err4
 
 
 def test_configure_access_file_on_disk_permissions_and_atomicity(tmp_path: Path):
@@ -1406,7 +1444,7 @@ WantedBy=default.target
     # Set custom permission mode (0640)
     svc_file.chmod(0o640)
 
-    status, msg = update_service_file(svc_file, host="0.0.0.0", trust_proxies=True, trusted_proxies="192.168.0.50")
+    status, msg = update_service_file(svc_file, host="0.0.0.0", trust_proxies=True, trusted_proxies="192.168.0.50", proxy_host="mp3.example.com")
     assert status == ConfigStatus.CHANGED
     assert "Updated network configuration" in msg
 
@@ -1415,6 +1453,7 @@ WantedBy=default.target
     assert 'Environment="MP3METAFIX_HOST=0.0.0.0"' in updated_text
     assert 'Environment="MP3METAFIX_TRUST_PROXIES=true"' in updated_text
     assert 'Environment="MP3METAFIX_TRUSTED_PROXIES=192.168.0.50"' in updated_text
+    assert 'Environment="MP3METAFIX_PROXY_HOST=mp3.example.com"' in updated_text
 
     # Verify mode is preserved
     mode = stat.S_IMODE(svc_file.stat().st_mode)
@@ -1458,7 +1497,7 @@ WantedBy=default.target
     assert info["port"] == "8844"
     assert info["trust_proxies"] == "false"
 
-    # Test set command with host and proxy trust
+    # Test set command with host, proxy trust, and domain
     res_set = subprocess.run(
         [
             sys.executable,
@@ -1471,6 +1510,8 @@ WantedBy=default.target
             "true",
             "--trusted-proxies",
             "192.168.0.50,10.0.0.0/8",
+            "--domain",
+            "mp3.yourdomain.com",
         ],
         capture_output=True,
         text=True,
@@ -1491,11 +1532,22 @@ WantedBy=default.target
             "true",
             "--trusted-proxies",
             "192.168.0.50,10.0.0.0/8",
+            "--domain",
+            "mp3.yourdomain.com",
         ],
         capture_output=True,
         text=True,
     )
     assert res_set_idem.returncode == 2
+
+    # Test clearing domain
+    res_set_clr = subprocess.run(
+        [sys.executable, str(script_path), "set", str(svc_file), "--no-domain"],
+        capture_output=True,
+        text=True,
+    )
+    assert res_set_clr.returncode == 0
+    assert "MP3METAFIX_PROXY_HOST" not in svc_file.read_text(encoding="utf-8")
 
     # Test set with invalid host (exit code 1)
     res_set_bad = subprocess.run(
@@ -1508,7 +1560,7 @@ WantedBy=default.target
 
 
 def test_installer_access_and_binding_commands(tmp_path: Path):
-    """Verify that install.sh --access, --lan, --local, --bind, --proxy, and --h operate correctly."""
+    """Verify that install.sh --access, --lan, --local, --bind, --proxy, --domain, and --h operate correctly."""
     import os
     import shutil
     import subprocess
@@ -1613,20 +1665,41 @@ WantedBy=default.target
     updated_svc_ip = svc_file.read_text(encoding="utf-8")
     assert 'Environment="MP3METAFIX_HOST=192.168.0.190"' in updated_svc_ip
 
-    # 5. Test install.sh --proxy 192.168.0.50 (Enable proxy trust with custom IP)
+    # 5. Test install.sh --proxy 192.168.0.50 --domain mp3.mydomain.com
     res_proxy = subprocess.run(
-        ["bash", str(test_root / "install.sh"), "--proxy", "192.168.0.50,10.0.0.0/8"],
+        [
+            "bash",
+            str(test_root / "install.sh"),
+            "--proxy",
+            "192.168.0.50,10.0.0.0/8",
+            "--domain",
+            "mp3.mydomain.com",
+        ],
         capture_output=True,
         text=True,
         env=env,
     )
     assert res_proxy.returncode == 0
     assert "Service successfully updated" in res_proxy.stdout
+    assert "https://mp3.yourdomain.com" in res_proxy.stdout or "mp3.mydomain.com" in res_proxy.stdout
     updated_svc_proxy = svc_file.read_text(encoding="utf-8")
     assert 'Environment="MP3METAFIX_TRUST_PROXIES=true"' in updated_svc_proxy
     assert 'Environment="MP3METAFIX_TRUSTED_PROXIES=192.168.0.50,10.0.0.0/8"' in updated_svc_proxy
+    assert 'Environment="MP3METAFIX_PROXY_HOST=mp3.mydomain.com"' in updated_svc_proxy
 
-    # 6. Test install.sh --no-proxy (Disable proxy trust)
+    # 6. Test install.sh --no-domain (Clear proxy domain)
+    res_no_domain = subprocess.run(
+        ["bash", str(test_root / "install.sh"), "--no-domain"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert res_no_domain.returncode == 0
+    assert "Service successfully updated" in res_no_domain.stdout
+    updated_svc_no_domain = svc_file.read_text(encoding="utf-8")
+    assert "MP3METAFIX_PROXY_HOST" not in updated_svc_no_domain
+
+    # 7. Test install.sh --no-proxy (Disable proxy trust)
     res_no_proxy = subprocess.run(
         ["bash", str(test_root / "install.sh"), "--no-proxy"],
         capture_output=True,
@@ -1638,7 +1711,7 @@ WantedBy=default.target
     updated_svc_no_proxy = svc_file.read_text(encoding="utf-8")
     assert 'Environment="MP3METAFIX_TRUST_PROXIES=false"' in updated_svc_no_proxy
 
-    # 7. Test install.sh --local (Switch back to 127.0.0.1)
+    # 8. Test install.sh --local (Switch back to 127.0.0.1)
     res_local = subprocess.run(
         ["bash", str(test_root / "install.sh"), "--local"],
         capture_output=True,
