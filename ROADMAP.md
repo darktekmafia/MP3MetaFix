@@ -11,8 +11,8 @@ Although MP3MetaFix runs as a unified high-performance Python FastAPI service wi
 | Project / Interface | Route | Primary Target Persona | Screen & Form Factor | Key Design Focus |
 |---|---|---|---|---|
 | **Gateway Hub** | `/` | System Administrators, Homelab Users, Multi-Device Operators | All screens (320px–4K) | System telemetry, health diagnostics, app dispatching |
-| **MP3MetaFix Editor** | `/app` | Mobile Creators, Smartphone/Tablet Users, Single-Track Producers | Mobile-first (phones, tablets, responsive desktop) | Speed, friction-free single-track tagging, touch waveforms, canned presets |
-| **MP3MetaManager** | `/manager` | Desktop Power Users, DJs, Album Curators, Batch Producers | Desktop-first (widescreen, 1080p–4K displays) | High-density tables, multi-file batch tagging, stem trees, synced lyrics (LRC/SYLT) |
+| **MP3MetaFix Editor** | `/app` | Mobile Creators, Smartphone/Tablet Users, Single-Track Producers | Mobile-first (phones, tablets, responsive desktop) | Speed, friction-free single-track tagging, touch waveforms, Suno prompt parsing, canned presets |
+| **MP3MetaManager** | `/manager` | Desktop Power Users, DJs, Album Curators, Batch Producers | Desktop-first (widescreen, 1080p–4K displays) | High-density tables, multi-file batch tagging, deep ID3 frame inspector/editor, stem trees, synced lyrics (LRC/SYLT) |
 | **Core Platform** | `/api` | DevOps, Package Maintainers, Infrastructure Engineers | CLI, Systemd, Reverse Proxies, Docker | Security hardening, zero-downtime updates, cross-platform deployment |
 
 ---
@@ -69,7 +69,15 @@ The **Gateway Hub** serves as the front door and system dashboard for the MP3Met
 
 ### Active Backlog & Future Vision 📋
 - [ ] **Suno.com URL & Share Link Auto-Parser**:
-  - Paste a Suno track link (`https://suno.com/song/...`) to automatically fetch and populate Track Title, Variation subtitle (`[Extended]`, `[Part 2]`), Prompt/Genre tags, Generated Lyrics (`USLT`), and high-res cover art.
+  - Paste a Suno track link (`https://suno.com/song/...`) or Clip UUID to automatically fetch and populate:
+    - Track Title & Variation subtitle (`[Extended]`, `[Part 2]`, `[Full Song]`).
+    - User Style Prompt into Genre / Prompt tags.
+    - Generated Lyrics with structure markers (`[Verse]`, `[Chorus]`, `[Solo]`) into the ID3 `USLT` frame.
+    - High-resolution uncompressed original cover artwork (1024×1024) directly into the APIC frame.
+    - Model/Engine tags (`chirp-v3-5`, `chirp-v4`) and creator attribution (`@username`) into Comments.
+- [ ] **Embedded Prompt & Song Structure Tag Extractor**:
+  - Auto-detect Suno prompt patterns in uploaded MP3s (`TCON` / `COMM`).
+  - One-click tool to parse prompt keywords, extract musical BPM/key, and separate lyric sections from embedded raw comment strings.
 - [ ] **Native Web Share API (`navigator.share`)**:
   - One-tap mobile export to send modified MP3s directly to mobile audio players (VLC, Files, Telegram, Discord, Apple Music).
 - [ ] **MediaSession API Integration**:
@@ -93,8 +101,22 @@ The **Gateway Hub** serves as the front door and system dashboard for the MP3Met
   - High-density top toolbar with search filter and batch action controls.
 - [x] **Global Header Switcher Integration**:
   - Unified app switcher navigation pill linking back to `/app` and `/` seamlessly.
+- [x] **Coming Soon State & Navigation Safety**:
+  - Clear placeholder state with active editor handoff buttons to prevent dead-end interactions while in development.
 
 ### Active Backlog & Future Vision 📋
+- [ ] **Universal ID3 Frame & Raw Metadata Inspector / Editor ("View/Edit All Embedded Information")**:
+  - **Comprehensive Frame Manager**: View, add, edit, and delete **any** embedded ID3v2.3 / ID3v2.4 frame:
+    - *Standard Text Frames*: `TIT1` (Grouping), `TIT2` (Title), `TIT3` (Subtitle), `TPE1`–`TPE4` (Artists/Conductor), `TALB` (Album), `TOAL` (Original Album), `TCOM` (Composer), `TEXT` (Lyricist), `TCON` (Genre), `TCOP` (Copyright), `TPUB` (Publisher), `TDRC`/`TYER` (Recording Date), `TRCK` (Track), `TPOS` (Disc), `TBPM` (BPM), `TKEY` (Initial Key), `TLAN` (Language), `TSRC` (ISRC), `TSSE` (Encoder).
+    - *User-Defined & Extended Text Frames (`TXXX`)*: Inspect and create custom key-value pairs (e.g. `SUNO_ID`, `PROMPT`, `SEED`, `MODEL_VERSION`, `REPLAYGAIN_TRACK_GAIN`, `REPLAYGAIN_TRACK_PEAK`).
+    - *URL Frames (`WXXX` / `WOAR` / `WCOM`)*: Official artist webpage, audio source webpage, copyright links.
+    - *Multi-Language Comments (`COMM`)* and *Unsynchronized Lyrics (`USLT`)*: Manage multiple comment/lyric descriptors with custom ISO-639 language codes.
+    - *Synchronized Lyrics (`SYLT`)* and *Event Timing Codes (`ETCO`)*: Embedded time-coded lyric cues and tempo events.
+    - *Multi-Picture APIC Manager*: View, extract, or embed multiple artwork types within a single file (Front Cover `0x03`, Back Cover `0x04`, Media/CD `0x06`, Artist Lead `0x08`, Leaflet `0x01`).
+    - *Specialized Binary Frames*: `PRIV` (Private software metadata), `GEOB` (General Encapsulated Objects), `UFID` (Unique File Identifier), `POPM` (Popularimeter ratings & play counts), `RVA2` (Relative Volume Adjustment), `MCDI` (Music CD Identifier).
+  - **MPEG Stream & Low-Level Byte Inspector**:
+    - Detailed audio container analysis: MPEG audio layer, channel mode, LAME/Xing VBR headers, padding byte allocation, and ID3 header flags (unsynchronization, extended header, experimental).
+    - Raw Frame Hex Viewer: Inspect raw byte offsets, header flags, and hex payloads for any frame.
 - [ ] **High-Density Spreadsheet Batch Editor**:
   - Multi-column spreadsheet grid supporting keyboard navigation (<kbd>Tab</kbd>, <kbd>Enter</kbd>, arrow keys) for editing hundreds of tracks simultaneously.
   - Multi-row selection with bulk tag applicator (apply common Artist, Album, Genre, Year, Cover Art to all selected rows).
