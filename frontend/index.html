@@ -50,13 +50,15 @@
 
         <!-- Live Telemetry Quick Status Bar (Instant visibility at top) -->
         <a href="#systemTelemetry" class="telemetry-quickbar" title="Jump to Detailed System Diagnostics & Live Telemetry">
-          <span class="quick-pill"><span class="q-dot dot-cpu"></span> CPU: <strong id="quickCpu">--%</strong></span>
-          <span class="quick-sep">&bull;</span>
-          <span class="quick-pill"><span class="q-dot dot-ram"></span> RAM: <strong id="quickRam">--%</strong></span>
-          <span class="quick-sep">&bull;</span>
-          <span class="quick-pill"><span class="q-dot dot-disk"></span> Disk: <strong id="quickDisk">--%</strong></span>
-          <span class="quick-sep">&bull;</span>
-          <span class="quick-pill"><span class="q-dot dot-storage"></span> Cache: <strong id="quickStorage">0 MB</strong></span>
+          <div class="quickbar-metrics">
+            <span class="quick-pill"><span class="q-dot dot-cpu"></span> CPU: <strong id="quickCpu">--%</strong></span>
+            <span class="quick-sep">&bull;</span>
+            <span class="quick-pill"><span class="q-dot dot-ram"></span> RAM: <strong id="quickRam">--%</strong></span>
+            <span class="quick-sep">&bull;</span>
+            <span class="quick-pill"><span class="q-dot dot-disk"></span> Disk: <strong id="quickDisk">--%</strong></span>
+            <span class="quick-sep">&bull;</span>
+            <span class="quick-pill"><span class="q-dot dot-storage"></span> Cache: <strong id="quickStorage">0 MB</strong></span>
+          </div>
           <span class="quick-cta">
             <span>Diagnostics</span>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>

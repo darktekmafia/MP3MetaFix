@@ -2109,15 +2109,25 @@ button {
   transform: translateY(-1px);
 }
 
+.quickbar-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
 .quick-pill {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+  white-space: nowrap;
 }
 
 .quick-pill strong {
   color: #fff;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .q-dot {
@@ -2761,14 +2771,33 @@ button {
     max-width: 95%;
   }
   .telemetry-quickbar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     gap: 0.4rem;
-    padding: 0.35rem 0.65rem;
-    font-size: 0.72rem;
+    padding: 0.45rem 0.85rem;
+    font-size: 0.74rem;
     margin-top: 0.75rem;
+    border-radius: var(--radius-md);
+    max-width: 380px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .quickbar-metrics {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .quick-pill {
+    font-size: 0.74rem;
   }
   .quick-cta {
-    font-size: 0.68rem;
-    padding: 0.1rem 0.4rem;
+    font-size: 0.7rem;
+    padding: 0.15rem 0.65rem;
+    margin-left: 0;
   }
 
   /* Compact Cards for mobile so both fit with minimal scrolling */
@@ -2960,12 +2989,35 @@ button {
     font-size: 0.78rem;
   }
   .telemetry-quickbar {
-    padding: 0.3rem 0.5rem;
-    font-size: 0.68rem;
-    gap: 0.3rem;
+    padding: 0.45rem 0.6rem;
+    gap: 0.35rem;
+    border-radius: var(--radius-md);
+  }
+  .quickbar-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.3rem 0.45rem;
+    width: 100%;
+  }
+  .quick-sep {
+    display: none;
   }
   .quick-pill {
-    gap: 0.25rem;
+    font-size: 0.72rem;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.04);
+    padding: 0.25rem 0.4rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    white-space: nowrap;
+  }
+  .quick-cta {
+    width: 100%;
+    justify-content: center;
+    font-size: 0.7rem;
+    padding: 0.22rem 0.5rem;
+    margin-top: 0.1rem;
+    border-radius: var(--radius-sm);
   }
   .app-card {
     padding: 0.95rem 1rem;
