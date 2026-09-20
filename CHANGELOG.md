@@ -5,7 +5,18 @@ All notable changes to **MP3MetaFix** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Historical release entries describe what was recorded at the time. Security completion claims in older entries are superseded by the [2026-09-20 audit](docs/SECURITY_AUDIT_2026-09-20.md); those findings remain unresolved.
+
 ## [Unreleased]
+
+### Documentation
+- Repaired relative documentation links and identified the missing standalone LICENSE file without inventing license text.
+- Added the permanent 2026-09-20 security audit and full session handoff, with unresolved findings, evidence, and verification limits.
+- Corrected security and deployment claims: multipart limits occur after spooling, artwork can serve active content, account recovery/token revocation remain incomplete, updater locking is worker-local, and the active user service lacks template hardening.
+- Recorded the owner-confirmed WAV success and unresolved real-file M4A parsing failure despite passing synthetic AAC checks.
+- Clarified that `/manager` is a shell with shared-engine parity planned, not a completed batch editor; distinguished stored settings from runtime enforcement and public static pages from protected APIs.
+- Replaced unsupported Suno compliance assertions with implementation scope and an explicit unverified policy-review status.
+
 
 ## [0.5.0] - 2026-09-20
 

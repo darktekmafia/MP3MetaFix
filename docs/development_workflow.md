@@ -2,6 +2,10 @@
 
 These rules govern all agentic modifications, architecture, security, documentation, and Git workflows for the **MP3MetaFix** project.
 
+## Current implementation assessment
+
+These rules are engineering requirements, not proof that the application or installed service already satisfies them. Read [SECURITY_AUDIT_2026-09-20.md](SECURITY_AUDIT_2026-09-20.md) and [SECURITY_HARDENING.md](SECURITY_HARDENING.md) for unresolved findings, and [the session handoff](../SESSION_HANDOFF_2026-09-20.md) for continuation context. The authoritative workflow is this file; `.agents/rules/development_workflow.md` is a legacy copy and must not override it. The owner requires local Git only until explicit remote approval.
+
 ---
 
 ## 🛡️ 1. Security by Design (Strict Requirement)
@@ -78,13 +82,13 @@ Before implementing or modifying command execution, installers, service manageme
 Before any changes are committed to local Git:
 
 1. **CHANGELOG.md**:
-   - Every feature, security patch, bug fix, or dependency update must be documented in [CHANGELOG.md](CHANGELOG.md) under the appropriate version section following [Keep a Changelog](https://keepachangelog.com/).
+   - Every feature, security patch, bug fix, or dependency update must be documented in [CHANGELOG.md](../CHANGELOG.md) under the appropriate version section following [Keep a Changelog](https://keepachangelog.com/).
 2. **README.md & Docs**:
-   - Ensure [README.md](README.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), and [docs/SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md) reflect current behavior, architecture diagrams, and configuration variables.
+   - Ensure [README.md](../README.md), [docs/ARCHITECTURE.md](ARCHITECTURE.md), [docs/DEPLOYMENT.md](DEPLOYMENT.md), and [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md) reflect current behavior, architecture diagrams, and configuration variables.
 3. **ROADMAP.md**:
-   - Keep [ROADMAP.md](ROADMAP.md) updated when items are started, completed, or newly proposed.
+   - Keep [ROADMAP.md](../ROADMAP.md) updated when items are started, completed, or newly proposed.
 4. **Version Consistency**:
-   - Keep version strings synchronized across [VERSION](VERSION), [backend/config.py](backend/config.py), [frontend/index.html](frontend/index.html), and [install.sh](install.sh).
+   - Keep version strings synchronized across [VERSION](../VERSION), [backend/config.py](../backend/config.py), [frontend/index.html](../frontend/index.html), and [install.sh](../install.sh).
 
 ---
 

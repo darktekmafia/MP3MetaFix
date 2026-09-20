@@ -6,7 +6,7 @@ This document details the software architecture, metadata processing engine, sec
 
 ## 1. System Overview
 
-MP3MetaFix is built as a lightweight, secure client-server application:
+MP3MetaFix is a client-server application with known security gaps:
 - **Backend**: Python 3.14 + FastAPI + Starlette + Mutagen + Pillow.
 - **Frontend**: Zero-framework Vanilla JS + CSS Glassmorphism Design System.
 - **IPC / Transport**: RESTful JSON APIs and HTTP 206 Partial Content audio streaming.
@@ -15,68 +15,20 @@ MP3MetaFix is built as a lightweight, secure client-server application:
 
 ## 2. Security Perimeter & Threat Model
 
-Because MP3MetaFix accepts arbitrary user uploads and is intended to run exposed behind reverse proxies and domain names, security is enforced across every layer:
+The implemented boundaries and open gaps are documented in [SECURITY_HARDENING.md](SECURITY_HARDENING.md) and the [2026-09-20 audit](SECURITY_AUDIT_2026-09-20.md). They are not a completed security perimeter.
 
-```
-[ Incoming Request ]
-        │
-        ▼
-[ SecurityHeadersMiddleware ] (CSP, HSTS, X-Content-Type-Options: nosniff, SAMEORIGIN)
-        │
-        ▼
-[ ProxyHeadersMiddleware ] (Handles X-Forwarded-For, X-Forwarded-Proto safely)
-        │
-        ▼
-[ CSRFProtectionMiddleware ] (Blocks cross-site mutating requests & unauthorized origins)
-        │
-        ▼
-[ InMemoryRateLimiter ] (Sliding-window IP rate limiting with trusted-proxy anti-spoofing)
-        │
-        ▼
-[ Timestamped HMAC Cookie Authenticator ] (Validates HttpOnly {uuid}.{timestamp}.{signature})
-        │
-        ▼
-[ Upload & Metadata Validator ]
-  ├── 1. Chunk-level Magic Bytes Verification (ID3 / MPEG Frame Sync 0xFF 0xFB/FA/F3/F2)
-  ├── 2. Upload Size Quota Enforcement (default: 150MB limit streamed)
-  ├── 3. Decompression Bomb Defense (Pillow MAX_IMAGE_PIXELS = 10 MP, 4096x4096px limit)
-  ├── 4. Pydantic Payload Length Constraints (Bounded title, artist, lyrics, comments)
-  └── 5. Client Filename Sanitization (Replaces path traversals, control characters)
-        │
-        ▼
-[ Decoupled Hashed Storage (POSIX 0700) ] (/data/temp/{SHA256(secret:uuid4)[:32]}/)
-        │
-        ▼
-[ Quota Guard & Background TTL Purge ]
-  ├── Global Storage Quota Guard (Auto-LRU pruning when disk storage reaches max quota)
-  └── Periodic TTL Worker (Purges expired sessions > 60 minutes)
-```
+Actual upload processing is important: HTTP middleware handles proxy/CSRF/header behavior; FastAPI parses multipart data into temporary files **before** dependency authorization and endpoint upload rate/size checks. After access checks, the endpoint validates the initial audio signature, streams to hashed session storage with a byte counter, and parses the container. Earlier diagrams incorrectly implied authentication and size limits preceded all disk writes.
 
-### Key Security Controls:
-1. **Zero Raw Identifier Exposure**:
-   - Internal session UUIDs and filesystem folder paths are never exposed in browser URLs, JavaScript state, or responses.
-   - Authentication is maintained via an `HttpOnly`, `SameSite=Lax` cookie containing an HMAC-SHA256 signed token with embedded issuance timestamp (`session_id.timestamp.signature`).
-2. **Decoupled Hashed Filesystem Storage & 0700 Permissions**:
-   - Physical storage directories on the host filesystem are named using a one-way deterministic cryptographic hash: `SHA-256(server_secret:session_id)[:32]`.
-   - All session directories are created with `0700` (`rwx------`) permissions, isolating temp storage across multi-tenant Linux hosts.
-3. **Magic Bytes Header Verification**:
-   - Files are inspected at the byte level before full persistence. Disguised executable files (e.g. `.exe`, `.elf`, `.php`, `.sh` renamed to `.mp3`) are rejected immediately with `HTTP 400 Bad Request`.
-4. **Automated Lifecycle & Storage Quota LRU**:
-   - Dynamic LRU session pruning triggers if total temporary storage exceeds `MAX_GLOBAL_TEMP_STORAGE_MB` (default 2GB).
-   - A background asyncio task executes periodically (every 5 minutes) to prune sessions whose `last_accessed_at` timestamp exceeds the configurable TTL (`MP3METAFIX_SESSION_TTL_MINUTES`, default 60 minutes).
-5. **CSRF & Origin Isolation**:
-   - `CSRFProtectionMiddleware` rejects mutating state requests (`POST`, `PUT`, `DELETE`, `PATCH`) with foreign `Sec-Fetch-Site` or non-whitelisted `Origin` headers.
-   - CORS is restricted to exact regex matchers (`localhost`, `127.0.0.1`, and explicit origins).
-6. **Exception Masking**:
-   - Internal Python exceptions and file paths are masked from HTTP responses to prevent server path leakage, while full diagnostics are recorded to internal server logs.
-7. **Header Protection**:
-   - `Content-Security-Policy`: Disallows untrusted script execution.
-   - `X-Content-Type-Options: nosniff`: Prevents MIME confusion attacks.
-   - `X-Frame-Options: SAMEORIGIN`: Protects against clickjacking.
+- Account identity and temporary file-session cookies are distinct HMAC-signed, expiring credentials. File cookies do not confer login/admin access. Account tokens currently survive password changes and logout.
+- Session storage uses `SHA-256("storage_dir:" + secret + ":" + session_id)[:32]`, requesting 0700 directory permissions. File-session IDs are not returned in JSON; account IDs are returned by authentication APIs.
+- A 10 MiB quota precheck and LRU/TTL cleanup manage session storage, but do not reserve the full upload or concurrent save copies. Runtime limits use environment configuration, not saved UI quota preferences.
+- Safe DOM text rendering, CSRF checks, proxy trust, Pydantic field bounds, and generic normal-editing errors exist. Updater output masking remains incomplete.
+- CSP allows inline scripts; nosniff cannot protect an endpoint explicitly serving untrusted HTML. Embedded artwork is currently such an endpoint. Uploaded images undergo Pillow normalization, but embedded artwork does not.
+- HSTS is not emitted by the backend. HTTPS termination, proxy request limits, and installed service containment require separate configuration/verification.
 
 ---
 
-## 3. Metadata Engine & Mutagen ID3 Frames
+## 3. Shared Metadata Engine & Mutagen ID3 Frames
 
 MP3MetaFix maps high-level user fields to standard ID3v2.4 and ID3v2.3 tags:
 
@@ -98,13 +50,15 @@ MP3MetaFix maps high-level user fields to standard ID3v2.4 and ID3v2.3 tags:
 
 ### Shared audio formats (v0.5.0)
 
-All interfaces use the same `audio_formats.py`, `metadata_engine.py`, storage manager, and API routes. `/manager` must reuse these capabilities when its single-track inspector is implemented, rather than maintaining a separate format engine.
+The shared backend uses `audio_formats.py`, `metadata_engine.py`, storage manager, and API routes. `/manager` must reuse these capabilities when its single-track inspector is implemented, rather than maintaining a separate format engine.
 
 | Container | Metadata and artwork | MIME | Stored file |
 |---|---|---|---|
 | MP3 | ID3v2 text, USLT, APIC | `audio/mpeg` | `audio.mp3` |
 | M4A (AAC/ALAC) | MP4 text atoms, trkn/disk tuples, tmpo, lyrics, covr JPEG/PNG | `audio/mp4` | `audio.m4a` |
 | WAV | RIFF-embedded ID3; existing INFO text fallback and synchronization | `audio/wav` | `audio.wav` |
+
+Owner-confirmed WAV editing and synthetic AAC M4A checks passed. An owner-reported real M4A fails parsing; cause and affected variants remain unknown. The table describes implemented handlers, not complete compatibility certification.
 
 `audio_info` includes `format`, `extension`, and `mime_type` in upload and session-restore responses. Filenames and native save dialogs retain that extension, even when a supplied pattern names another format. M4A numeric values are validated before saving; unsupported values return HTTP 422 without modifying the file. WAV INFO title/artist/album/genre/year/comment/track/composer values are synchronized only where those entries already exist; unknown INFO entries and other chunks remain intact. UTF-8 is written for changed INFO text; legacy text falls back to Windows-1252 when reading.
 
@@ -124,7 +78,7 @@ To allow instantaneous scrubbing and preview in web browsers, the `GET /api/stre
 - **File System Access API**:
   - In supported Chromium-based browsers, `window.showSaveFilePicker()` is utilized to prompt the user to choose an explicit save location on their local filesystem.
 - **Named Path Downloads**:
-  - `GET /api/download/{filename}` routes provide direct file path semantics for browsers and download managers.
+  - `GET /api/download/{filename}` routes supply a suggested download name; they do not select arbitrary filesystem paths. The signed session selects the file.
 - **Content-Disposition Encoding**:
   - Employs RFC 5987 parameter encoding (`filename*=UTF-8''...`) for full Unicode fidelity and an ASCII-sanitized `filename` fallback.
 
@@ -153,31 +107,11 @@ MP3MetaFix packages an intelligent, non-destructive maintenance engine for syste
 
 ## 7. Multi-Interface Architecture & Sub-Project Decoupling
 
-MP3MetaFix decouples user interaction into three specialized interfaces sharing a unified FastAPI backend, Mutagen ID3 engine, and cryptographic storage security model. Each interface is engineered and maintained as an independent sub-project with its own dedicated product roadmap:
+Four routes share one backend: `/` dispatches workspaces, `/admin` shows administrator diagnostics/updates, `/app` implements single-track editing, and `/manager` currently supplies a desktop shell with a coming-soon state.
 
-```
-                  ┌──────────────────────────────────────────────┐
-                  │          FastAPI Backend Core (/api)          │
-                  │  (HMAC Auth, Hashed Storage, Mutagen Engine) │
-                  └───────┬──────────────┬──────────────┬────────┘
-                          │              │              │
-         ┌────────────────┴───┐   ┌──────┴─────────┐   ┌┴─────────────────────────────┐
-         │  Gateway Hub (/)   │   │ MP3MetaFix     │   │ MP3MetaManager (/manager)    │
-         │                    │   │ (/app)         │   │ (Superset of /app)           │
-         │ - Health Check     │   │ - Mobile-First │   │ - Desktop Power-User         │
-         │ - Account Menu     │   │ - Single-Track │   │ - Integrated Single-Track UI │
-         │ - App Dispatcher   │   │ - Waveform     │   │ - Multi-Track Batch Table    │
-         │ - Admin Link       │   │ - Canned Tags  │   │ - Deep ID3/Hex Byte Engine   │
-         │                    │   │ - Suno Parser  │   │ - Synced Lyrics/LRC & Stems  │
-         └────────────────────┘   └────────────────┘   └──────────────────────────────┘
-```
+### Architectural principle: shared capabilities
 
-### Architectural Principle: Workflow & Device-Driven Selection (Superset Model)
-**MP3MetaManager (`/manager`) is engineered as a complete functional superset of MP3MetaFix (`/app`)**.
-- The choice of interface is dictated by the user's **current workflow** and **client device form factor**:
-  - **Mobile Phones & Focused Quick Edits (`/app`)**: Lightweight, distraction-free single-track editing optimized for touchscreens and quick mobile workflows.
-  - **Desktop Workstations & Power Curation (`/manager`)**: Full-screen workspace with deep batch tools, multi-track spreadsheet tables, stem trees, synced lyrics, and universal raw ID3 frame inspector.
-- **Zero Need for App Switching**: Desktop users never need to jump between interfaces just to edit single-track tags, scrub a waveform, or replace artwork. All `/app` features are embedded directly within `/manager` via an integrated single-track inspector drawer.
+Every `/app` capability must be available through the same engine/API for `/manager`. The planned integrated inspector, batch tools, raw frame inspector, stems, and synced lyrics are **not implemented**. See the [roadmap](../ROADMAP.md) for planned scope. Switching interfaces does not create a separate audio engine.
 
 ### 1. Gateway Hub (`/`) and Administrator Control Center (`/admin`)
 - **Gateway Hub**: Workspace selector with a one-time `GET /api/health` request for basic availability and version. No telemetry quickbar or recurring resource polling remains on this page.
@@ -195,12 +129,12 @@ The editor update inspector treats its header notification badge as optional; bo
   - Constrained album artwork preview dimensions (`max-width: 210px` on mobile phones) to prevent massive vertical scrolling.
   - Balanced 2-column workspace on tablets ($\ge 720\text{px}$) keeping artwork and metadata forms immediately accessible.
   - Responsive button label typography (`.btn-txt-full` / `.btn-txt-short`).
-- **Core Capabilities**: Complete ID3v2.3/ID3v2.4 frame editing, Web Audio dynamic waveform canvas rendering, APIC cover art processing, canned comment presets, dynamic filename formatting, Suno link parsing, and File System Access API save integration.
+- **Core Capabilities**: Editing the supported normalized fields in native MP3/M4A/WAV tags, Web Audio dynamic waveform canvas rendering, APIC cover art processing, canned comment presets, dynamic filename formatting, Suno link parsing, and File System Access API save integration.
 
 ### 3. MP3MetaManager Desktop Workspace (`/manager`)
 - **Target Persona**: Desktop Power Users, DJs, Album Curators, Batch Producers.
 - **Design Philosophy**: High-density desktop workspace built for widescreen 1080p–4K displays.
-- **Superset Core Capabilities**:
+- **Planned Superset Capabilities (not yet implemented)**:
   - **Integrated Single-Track Inspector**: Built-in drawer offering in-place access to all `/app` features (all ID3 fields, waveform scrubber, cover art studio, canned comment presets, dynamic filename generator, and Suno prompt parser).
   - **Multi-Track Batch Spreadsheet Editor**: High-density table with keyboard navigation (<kbd>Tab</kbd>, <kbd>Enter</kbd>), bulk tag propagation, regex find-and-replace, and auto-numbering.
   - **Universal ID3 Frame & Raw MPEG Byte Inspector**: Direct viewing, editing, and addition of any standard ID3 frame, custom `TXXX` key-values, multi-language `COMM`/`USLT` descriptors, multiple `APIC` pictures, and low-level hex inspection.
@@ -218,7 +152,7 @@ MP3MetaFix integrates automated server-side extraction and non-destructive clien
 
 ### Extraction Architecture (`backend/suno_extractor.py`)
 1. **UUID Identification**: Matches standard v4 UUIDs from direct strings, song URLs (`https://suno.com/song/{uuid}`), and embedded comment tags (`made with suno; ... id={uuid}`).
-2. **SSRF Defense & Strict Validation**: Requests are confined to `https://suno.com/song/{uuid}` with bounded timeouts (10s) and browser headers.
+2. **Initial URL Construction**: Requests begin at `https://suno.com/song/{uuid}` with a 10s timeout and browser headers; automatic redirects and whole-response reads remain audit findings.
 3. **Next.js SSR Stream Deserializer**: Parses Server Component stream payloads (`self.__next_f.push`) to extract:
    - Track Title (`TIT2`)
    - Creator Display Name & Handle (`TPE1`, `TPE2`, `@username`)
@@ -233,14 +167,14 @@ MP3MetaFix integrates automated server-side extraction and non-destructive clien
    - Stages normalized artwork directly into the cryptographic session directory.
 
 ### Non-Destructive Selective Merge Model (Zero Blind Overwrites)
-- **Automatic Detection**: When an uploaded MP3 contains a Suno UUID in comments, a non-disruptive micro-pill (`✨ Suno Detected`) appears in the file bar.
-- **Interactive Diff Table**: A side-by-side comparison displays Current MP3 values versus Suno Extracted values.
+- **Automatic Detection**: When uploaded audio contains a Suno UUID in comments, a non-disruptive micro-pill (`✨ Suno Detected`) appears in the file bar.
+- **Interactive Diff Table**: A side-by-side comparison displays Current Audio values versus Suno Extracted values.
 - **Granular User Control**: Checkboxes allow the user to select specific fields to apply, with presets for `Apply Selected`, `Fill Blank Only` (enriches empty tags without modifying user edits), and `Apply All`.
 
 ### Terms of Service & Acceptable Use Posture
-- The integration operates on the **Public Link Preview model** (identical to Discord/Twitter OpenGraph hydration).
+- The integration fetches public song pages on demand. No equivalence to another service’s permissions or legal compliance has been established.
 - Zero user account credentials, JWT tokens, or private generation endpoints are accessed.
-- For complete policy mapping and compliance specifications, see [`docs/SUNO_TOS_COMPLIANCE.md`](SUNO_TOS_COMPLIANCE.md).
+- For implementation scope and pending policy review, see [`docs/SUNO_TOS_COMPLIANCE.md`](SUNO_TOS_COMPLIANCE.md).
 
 ---
 
@@ -268,22 +202,28 @@ MP3MetaFix integrates a zero-external-dependency authentication subsystem built 
 ### Key Subsystem Characteristics:
 1. **Zero-Dependency Password Hashing**:
    - Standard library `hashlib.pbkdf2_hmac` (`sha256`, 600,000 iterations, unique 16-byte random salt).
-   - Format: `pbkdf2:sha256:600000${salt_hex}${hash_hex}`.
+   - Format: `pbkdf2_sha256$600000${salt_hex}${hash_hex}`.
    - Verification uses timing-attack-resistant `secrets.compare_digest`.
 2. **Distinct Cookie Trust Boundaries**:
    - `mp3metafix_auth`: Manages user account authentication (`{user_id}.{timestamp}.{sig}`).
    - `mp3metafix_session`: Manages isolated temporary file-editing storage (`{session_id}.{timestamp}.{sig}`).
-   - The two cookie layers are completely decoupled to prevent credential/session conflation.
+   - The two cookie names and backend dependency checks separate their roles; both currently use the configured signing secret.
 3. **Filesystem Security (POSIX 0700 / 0600)**:
    - Account and system settings metadata are stored in `data/auth/users.json` and `data/auth/settings.json`.
    - The `data/auth/` directory is created with POSIX `0700` (`rwx------`) permissions and files are created with POSIX `0600` (`rw-------`).
 4. **Brute-Force Rate Limiting (`LoginRateLimiter`)**:
    - Enforces a 5-attempt sliding window per client IP per 60 seconds with an automatic 5-minute cooldown period upon threshold violation.
 5. **Configurable Guest Mode Policy**:
-   - Administrator-toggled policy allowing anonymous visitors to access the Gateway Hub (`/`) and focused single-track editor (`/app`) while restricting Desktop MetaManager (`/manager`), System Telemetry (`/api/system/stats`), and Settings to authenticated administrators.
+   - Administrator-toggled policy allowing anonymous visitors to access the Gateway Hub (`/`) and focused single-track editor (`/app`) while the manager UI prompts for login. Static pages are public. Telemetry and settings writes require administrators; settings reads require authentication.
 
 ---
 
 ## 10. Sub-Project Roadmap Alignment
 
 For full feature backlogs, milestones, and strategic plans for each interface, see [ROADMAP.md](../ROADMAP.md).
+
+## 11. Update execution and persisted settings
+
+The update endpoint is enabled and administrator-protected, but uses a process-local asyncio lock. It does not serialize installers across the two observed workers or safely handle every disconnect; raw output/exception sanitization is incomplete. See audit finding 5 before modifying this privileged flow.
+
+AuthManager persists Guest Mode and quota/TTL preferences. Guest Mode is consulted by editing authorization; runtime upload, storage, and session limits still use environment-derived configuration. Password changes update the hash without invalidating existing tokens. Invalid account JSON is treated as an empty store and can reopen setup; this is a known high-impact failure mode, not intended recovery behavior.

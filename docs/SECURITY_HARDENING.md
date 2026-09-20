@@ -1,144 +1,68 @@
-# MP3MetaFix Security Hardening & Threat Defense Guide
+# MP3MetaFix security controls and open findings
 
-This document logs the threat model, attack surface analysis, vulnerability vectors, and defense implementations for MP3MetaFix.
+Last reviewed: 2026-09-20, application v0.5.0 / implementation commit `da83731`.
 
----
+The [security audit](SECURITY_AUDIT_2026-09-20.md) is the current assessment. **Its seven findings remain unresolved.** Earlier versions of this guide marked broad defenses complete; that overstated both implementation and deployed protection. This document distinguishes existing controls from missing guarantees.
 
-## 🛡️ Threat Model & Defense Checklist
+## Open findings
 
-- [x] **1. DOM XSS Sanitization in Frontend**: Prevent HTML/script injection via untrusted metadata/tags/filenames in UI notifications. *(Implemented in `frontend/js/app.js`)*
-- [x] **2. Image Decompression Bomb Defense**: Protect Python Pillow image processing against memory exhaustion and pixel flood attacks. *(Implemented in `backend/security.py`)*
-- [x] **3. Global Storage Quota & Temp Protection**: Prevent disk exhaustion DoS attacks by capping maximum temporary storage size and auto-pruning. *(Implemented in `backend/storage.py` and `backend/config.py`)*
-- [x] **4. Origin & Sec-Fetch-Site CSRF Defense**: Block cross-site request forgery and unauthorized external state-changing requests. *(Implemented in `backend/security.py` & `backend/main.py`)*
-- [x] **5. In-Memory Upload Rate Limiting**: Limit rapid-fire upload bursts per client IP. *(Implemented in `backend/security.py` & `backend/main.py`)*
-- [x] **6. Systemd Process Resource Sandboxing**: Bound memory, CPU, and process execution in system service units. *(Implemented in `deploy/mp3metafix.service` & `install.sh`)*
-- [x] **7. Pydantic Model Payload Length Bounds**: Prevent memory/CPU inflation DoS via oversized metadata strings. *(Implemented in `backend/metadata_engine.py`)*
-- [x] **8. Rate Limiter Anti-Spoofing & Memory Leak Defense**: Validate proxy trust subnets and auto-prune stale IP dictionaries. *(Implemented in `backend/security.py`)*
-- [x] **9. Internal Filesystem Path Exception Masking**: Prevent directory structure and OS user disclosure in HTTP error responses. *(Implemented in `backend/main.py`)*
-- [x] **10. MIME Confusion & CSP Content Protections**: Restrict execution contexts on media streams and downloads. *(Implemented in `backend/security.py` & `backend/main.py`)*
-- [x] **11. Time-Bounded HMAC Session Tokens**: Cryptographically embed and verify UNIX timestamps in session cookies to prevent perpetual replay. *(Implemented in `backend/security.py`)*
-- [x] **12. Multi-User POSIX File Isolation (0700 Permissions)**: Prevent unprivileged local Linux users on multi-tenant VPS from snooping session directories. *(Implemented in `backend/storage.py`)*
-- [x] **13. CORS Credential Isolation**: Restrict allowed CORS origins via regex to prohibit credential leakage to wildcard domains. *(Implemented in `backend/main.py`)*
-- [x] **14. Localhost Default Host Binding & TLS Secure Cookies**: Bind to `127.0.0.1` by default and dynamically set `Secure` cookie flag over TLS/HTTPS. *(Implemented in `backend/config.py` & `backend/main.py`)*
-- [x] **15. Single Audio Byte-Range Bounds & Underflow Defense**: Enforce strict single-range HTTP 206 validation. *(Implemented in `backend/main.py`)*
-- [x] **16. Artwork Processing Error Sanitization**: Sanitize client-facing image decode errors and server log formats. *(Implemented in `backend/security.py`)*
-- [x] **17. Update Installation Endpoint Access Control**: In-app updater endpoint re-enabled and gated behind `require_admin` (authenticated admin role check + signed cookie verification) with an `asyncio.Lock()` concurrency mutex preventing parallel update runs. *(Implemented in `backend/main.py` & `backend/updater.py`)*
-- [x] **18. Safe Systemd Unit Parser Hardening & Migration**: Atomic in-place unit updates with POSIX quoting and shell injection defense. *(Implemented in `scripts/migrate_service.py` & `install.sh`)*
-- [x] **19. Safe Service Access & LAN Configuration Hardening**: Validated IP/hostname binding parameters with atomic permission-preserving updates. *(Implemented in `scripts/configure_access.py` & `install.sh`)*
+| Priority | Finding | Required follow-up |
+|---|---|---|
+| High | MP3/WAV embedded APIC MIME and bytes can be served as same-origin HTML | Validate/re-encode allowlisted raster artwork before preview/serving; reject active content and enforce bounds |
+| High for exposed deployments | Multipart files spool before authentication and endpoint size/rate checks | Bound actual request bytes before parsing; test chunked bodies and dishonest/missing Content-Length |
+| High impact, conditional | Unreadable/malformed account store reopens administrator enrollment | Fail closed; distinguish first installation from corruption; serialize setup |
+| Medium | Password changes/logout do not revoke issued tokens | Add account/session revocation state and explicit recovery behavior |
+| Medium | Updater mutex is process-local; cancellation/log sanitization incomplete | Cross-process lifetime locking, interruption recovery, sanitized output; owner approval before modification |
+| Medium | Suno initial-host check does not constrain redirects; reads unbounded | Validate each destination/scheme/port and stream with byte limits |
+| Medium | Active workstation user service lacks documented containment | Reconcile duplicate units and test dedicated identity/resource restrictions with owner approval |
 
-- [x] **20. Cryptographic Password Hashing & Brute-Force Rate Limiting**: Zero-dependency standard library PBKDF2-HMAC-SHA256 password security, distinct auth cookie trust boundaries, and brute-force lockout. *(Implemented in `backend/auth.py` & `frontend/js/auth.js`)*
+See the audit for precise prerequisites, code references, bounded probes, and limits. No public exploit against Suno or remote corruption of the account database was demonstrated.
 
----
+## Existing controls and their limits
 
-## 🔍 Detailed Vector Analysis & Implementations
+### Identity and authorization
 
-### Vector 1: DOM XSS via Metadata / Toasts [COMPLETED]
-- **Threat**: Untrusted metadata strings containing script or image error payloads (`<img src=x onerror=...>`) rendered via `innerHTML`.
-- **Defense**: Replaced `innerHTML` with safe DOM node construction and `textContent` for dynamic text nodes in `frontend/js/app.js`.
+- Account cookies (`mp3metafix_auth`) and temporary file-session cookies (`mp3metafix_session`) serve distinct purposes. Both use timestamped HMAC signatures, HttpOnly, and SameSite=Lax; Secure is set when the application sees HTTPS.
+- File cookies do not grant administrator privilege. Editing routes use access-policy dependencies; telemetry and update routes require administrators. Guest Mode allows anonymous editing, not admin operations.
+- Static UI/assets, health/version, and authentication entry points are public. UI login prompts are not backend authorization. Settings reads require authentication; writes require admin privilege.
+- Passwords use PBKDF2-HMAC-SHA256 with 600,000 rounds and a random salt. Account tokens expire after seven days but currently survive password changes. Logout clears the cookie without server-side revocation.
+- Login and upload rate limits are in-memory and per worker. Upload checks happen after multipart parsing. They are not a complete denial-of-service defense.
 
-### Vector 2: Image Decompression Bomb & Memory Exhaustion [COMPLETED]
-- **Threat**: Highly compressed images (PNG/WebP) expanding to multi-gigabyte uncompressed bitmaps upon decompression, triggering OOM kernel kills (`SIGKILL`).
-- **Defense**: Configured `Image.MAX_IMAGE_PIXELS = 10_000_000` (max 10 MP) and enforced dimension boundary checks (max 4096x4096px) in `backend/security.py`.
+### Files and request processing
 
-### Vector 3: Storage & Inode Exhaustion (Disk DoS) [COMPLETED]
-- **Threat**: Rapid-fire uploads of 150MB audio files filling the entire host filesystem partition before TTL cleanup triggers.
-- **Defense**: Enforced `MAX_GLOBAL_TEMP_STORAGE_MB = 2048` (2GB default) with automatic LRU session pruning when storage approaches capacity limits in `backend/storage.py`.
+- File-session UUIDs are verified and converted to hashed storage directory names. Session directories request 0700 permissions; account JSON files request 0600 inside a 0700 directory.
+- Audio lookups use fixed allowlisted basenames; filename sanitization removes traversal/control characters and preserves the actual extension.
+- Endpoint audio limits default to 150 MiB; uploaded artwork defaults to 10 MiB. These do not cap pre-endpoint multipart spooling. Artwork and Suno response reads also need earlier bounds.
+- The 2 GiB session-storage setting drives a quota precheck and LRU cleanup, not a cross-worker disk reservation. The current upload check reserves only 10 MiB. Atomic saves need extra disk headroom. TTL cleanup runs periodically.
+- Quota/TTL values saved in the settings UI do not currently reconfigure runtime enforcement, which uses environment-derived values.
+- Pydantic field bounds limit accepted metadata values, not the total HTTP body before JSON parsing.
+- Atomic metadata writes protect the previous file on write failure; concurrent operations still need deliberate resource budgeting.
 
-### Vector 4: Cross-Site Request Forgery (CSRF) [COMPLETED]
-- **Threat**: Malicious third-party web pages issuing forged state-changing API requests (`POST /api/save`, `DELETE /api/session`) using browser session cookies.
-- **Defense**: Implemented `CSRFProtectionMiddleware` blocking `Sec-Fetch-Site: cross-site` and untrusted `Origin` headers on mutating HTTP methods (`POST`, `PUT`, `DELETE`, `PATCH`).
+### Audio and images
 
-### Vector 5: Upload Flood Rate Limiting [COMPLETED]
-- **Threat**: Automated bots exhausting network bandwidth and worker processing queues.
-- **Defense**: Implemented `InMemoryRateLimiter` sliding-window rate limiter (25 uploads / 60 seconds per client IP) on `POST /api/upload`.
+- MP3/M4A/WAV extensions are allowlisted and checked against the initial 8 KiB before writing to session storage (after framework multipart spooling).
+- M4A/WAV undergo bounded container traversal and Mutagen parsing. M4A handlers target AAC/ALAC audio-only files. WAV requires valid RIFF lengths and format/data chunks; INFO input/output is capped at 1 MiB.
+- Stream/download MIME is selected by audio format. Downloads use attachment filenames. Byte-range requests reject invalid/unsupported ranges.
+- Separately uploaded artwork passes magic checks, Pillow verification/re-encoding, and dimension checks (4096px per side). `Image.MAX_IMAGE_PIXELS=10_000_000` configures Pillow's warning/error thresholds; it is not an explicit hard rejection at exactly ten million pixels.
+- **Embedded artwork does not pass that normalization pipeline.** Untrusted APIC MIME and bytes are returned directly; this is the high-severity active-content finding. M4A cover extraction also needs consistent size/image validation.
 
-### Vector 6: Systemd Process Sandboxing [COMPLETED]
-- **Threat**: Memory leaks or CPU exhaustion affecting host system stability.
-- **Defense**: Added systemd cgroup limits: `MemoryMax=512M`, `TasksMax=64`, `CPUQuota=80%` in `deploy/mp3metafix.service` and `install.sh`.
+### Browser, proxy, and outbound boundaries
 
-### Vector 7: Metadata Payload Inflation & Buffer Exhaustion [COMPLETED]
-- **Threat**: An attacker with a valid session transmits multi-megabyte JSON payloads in `POST /api/save` (e.g. 50MB strings in `lyrics` or `title`), forcing Mutagen and Python memory allocators to construct bloated ID3 frames and burn CPU.
-- **Defense**: Configured strict `Field(max_length=...)` bounds in `backend/metadata_engine.py` (Title/Artist/Album: 500 chars, Lyrics: 64KB, Numbers: 50 chars, Comments: 10KB). Pydantic automatically rejects oversized payloads with HTTP 422 before processing.
+- Dynamic metadata/toast text uses safe DOM construction/textContent. Remaining inspected innerHTML assignments use static markup or empty strings.
+- CSRF middleware checks Fetch-Site and Origin on mutating methods. SameSite cookies provide additional protection. Localhost development exceptions remain in Origin handling.
+- CSP, nosniff, and SAMEORIGIN headers exist, but CSP permits inline scripts. These headers do not neutralize explicitly served HTML artwork. The backend does not emit HSTS; configure HTTPS/HSTS at the proxy as appropriate.
+- Forwarded headers are resolved only when proxy trust is enabled and the peer matches configured proxies. Default binding is loopback. Reverse-proxy reachability was not audited.
+- Suno fetches start from constructed song URLs or allowlisted artwork hosts, but default redirects and whole-response reads weaken confinement and bounds.
 
-### Vector 8: Rate Limiter Header Spoofing & Memory Growth [COMPLETED]
-- **Threat**: Attackers bypassing IP rate limits by sending randomized `X-Forwarded-For` headers, or exhausting server heap memory by connecting once from millions of spoofed IPs to inflate the rate limiter tracking dictionary.
-- **Defense**:
-  1. Strict proxy verification in `backend/security.py`: `X-Forwarded-For` is only honored if the connecting socket peer matches explicitly configured `MP3METAFIX_TRUSTED_PROXIES` (defaulting strictly to loopback `127.0.0.1, ::1`). Direct connections from untrusted LAN IPs have forwarding headers ignored.
-  2. Automatic periodic pruning (`_purge_stale`) in `InMemoryRateLimiter` to delete idle IPs and enforce `max_tracked_ips=5000` with LRU eviction.
+### Updates and deployment
 
-### Vector 9: Internal Filesystem Path & Traceback Disclosures [COMPLETED]
-- **Threat**: Triggering parsing or write exceptions to elicit raw Python tracebacks containing absolute server filesystem paths (`/run/media/...`, `/home/...`).
-- **Defense**: Masked raw error strings in HTTP responses across `backend/main.py`. Errors are logged internally to server logs via `logger.exception(...)` while users receive generic, non-disclosing error descriptions.
+- `/api/updates/apply` is enabled and admin/CSRF protected. Its asyncio lock is worker-local; the observed service runs two workers. Disconnect handling does not reliably retain ownership of the installer lifetime.
+- SSE output and exception strings are not fully sanitized. Normal editing/image error paths mask details, but that is not a universal endpoint guarantee.
+- Service templates contain restrictions; installed units may differ. The observed working user unit had NoNewPrivileges=no, ProtectSystem=no, PrivateTmp=no, and no memory/CPU quota. The duplicate system unit was failing 203/EXEC.
+- Service migration/access scripts use scoped parsing, validated inputs, and atomic unit writes. Preserving an existing unit does not add missing containment automatically.
 
-### Vector 10: MIME Confusion & Content Isolation [COMPLETED]
-- **Threat**: Crafting polyglot audio files containing HTML or script tags and tricking browsers into rendering them in an executable document context.
-- **Defense**: Enforced `X-Content-Type-Options: nosniff`, strict `Content-Type: audio/mpeg`, attachment download semantics, and restrictive `Content-Security-Policy` headers across all endpoints.
+## Verification
 
-### Vector 11: Timestamped Cryptographic Session Tokens [COMPLETED]
-- **Threat**: Captured session cookies being replayed indefinitely across long periods or offline token manipulation attempts.
-- **Defense**: Formatted tokens strictly as `{session_id}.{timestamp}.{HMAC_signature}` in `backend/security.py`. Server validates expiration against `SESSION_COOKIE_MAX_AGE` cryptographically before checking storage state. Non-expiring 2-part legacy tokens are completely rejected.
+The final isolated regression run passed **72 tests**, with three deprecation warnings. Four additional bounded probes confirmed HTML artwork serving, pre-auth multipart spooling, token survival after password change, and setup reopening on corrupted temporary account data. These probes used temporary data, not live accounts.
 
-### Vector 12: Multi-Tenant VPS POSIX Permissions Isolation [COMPLETED]
-- **Threat**: On a multi-user Linux VPS or shared host, unprivileged local system users viewing or tampering with temporary audio and image files in `data/temp/`.
-- **Defense**: Enforced strict `0700` (`rwx------`) POSIX permissions on `TEMP_DIR` and each hashed session directory in `backend/storage.py`.
-
-### Vector 13: CORS Credential Leakage Prevention [COMPLETED]
-- **Threat**: Loose wildcard CORS settings (`allow_origins=["*"]`) combined with credentials allowing malicious external domains to trigger credentialed cross-origin read operations.
-- **Defense**: Replaced wildcard origins with strict regex allowing only verified same-origin and localhost developers in `backend/main.py`.
-
-### Vector 14: Default Localhost Binding & Dynamic TLS Cookie Flags [COMPLETED]
-- **Threat**: Unintended exposure of unencrypted HTTP services on public network interfaces (`0.0.0.0`), and transmitting plain session cookies over unencrypted transport.
-- **Defense**: Defaulted `MP3METAFIX_HOST` to `127.0.0.1` (requiring explicit override or reverse proxy) and dynamically attached the `Secure` cookie flag when serving via TLS/HTTPS.
-
-### Vector 15: Single Audio Byte-Range Bounds & Underflow Defense [COMPLETED]
-- **Threat**: Malformed, inverted (`bytes=500-200`), out-of-bounds, or unsupported multi-range headers triggering negative content lengths or undefined chunk behavior during audio streaming.
-- **Defense**: Enforced single byte-range validation in `backend/main.py` supporting normal, open-ended, and suffix ranges, returning standard HTTP `416 Range Not Satisfiable` with `Content-Range: bytes */{size}` for unsatisfiable ranges or unsupported multi-range requests.
-
-### Vector 16: Artwork Processing Error Sanitization [COMPLETED]
-- **Threat**: Image processing errors exposing internal library state, raw byte sequences, or filesystem paths to clients or logs.
-- **Defense**: Configured fixed, sanitized client error messages in `backend/security.py` and restricted server logging to non-sensitive exception class names (`type(e).__name__`).
-
-### Vector 17: Update Installation Endpoint Access Control [COMPLETED]
-- **Threat**: Unauthenticated visitors or non-admin users triggering server update scripts and restarts.
-- **Defense**: In-app update execution endpoint (`POST /api/updates/apply`) is re-enabled and protected by `require_admin` (signed-cookie auth + role verification), an `asyncio.Lock()` concurrency mutex returning HTTP 409 on overlap, and the existing `CSRFProtectionMiddleware` `Sec-Fetch-Site`/`Origin` header checks. Output is streamed as sanitized SSE log lines; no raw exception details or stack traces are exposed to clients.
-
-### Vector 18: Safe Systemd Service Migration & Unit Parser Hardening [COMPLETED]
-- **Threat**: Automated update scripts clobbering administrator customizations, corrupting complex `ExecStart` commands with naive regex or whitespace string splitting, exposing temporary files to symlink race conditions, or altering unit file permission modes.
-- **Defense**:
-  1. Strict `[Service]` section parsing with POSIX `shlex` tokenization in `scripts/migrate_service.py`.
-  2. Explicit rejection of compound shell commands, pipelines (`|`), redirects (`>`), subshells, or invalid quoting, leaving unparseable units untouched.
-  3. Atomic file writes using unguessable directory-local temporary files (`mkstemp`) with explicit preservation of original POSIX file mode (`stat.S_IMODE`) and ownership (`os.chown`).
-  4. Tri-state CLI exit codes (`0`=changed, `2`=unchanged, `1`=failed) ensuring the installer propagates failures and prevents reporting false successes.
-  5. Process image replacement (`exec bash`) upon git updates guarded with commit hash checks and `_MP3METAFIX_REEXEC=1` environment variables to prevent infinite restart loops.
-
-### Vector 19: Safe Service Access, Proxy Trust & Network Binding Hardening [COMPLETED]
-- **Threat**: Attackers attempting command injection through malformed host, proxy IP, or domain parameters passed to service configuration scripts, unintentional exposure of unauthenticated services on public/untrusted interfaces during automated setup, or spoofed proxy header injection.
-- **Defense**:
-  1. Strict validation in `scripts/configure_access.py` using Python's `ipaddress` module and RFC 1123 hostname regex, explicitly validating IPv4/IPv6 addresses, CIDR subnets, and domain/URL strings while rejecting spaces, tabs, newlines, semicolons, shell metacharacters, and quote delimiters.
-  2. Secure default: Fresh installations retain the secure loopback default (`127.0.0.1`) and proxy trust disabled (`MP3METAFIX_TRUST_PROXIES=false`), requiring explicit administrative command execution (`./install.sh --lan`, `./install.sh --bind <IP>`, `./install.sh --proxy <IP>`, or `./install.sh --domain <DOMAIN>`) to allow external network reachability or upstream proxy trust.
-  3. Safe atomic writes: Modifies only target directives (`MP3METAFIX_HOST`, `MP3METAFIX_PORT`, `MP3METAFIX_TRUST_PROXIES`, `MP3METAFIX_TRUSTED_PROXIES`, `MP3METAFIX_PROXY_HOST`) within `[Service]`, preserving permissions, sandboxing limits, and other environment variables.
-
-### Vector 20: User Authentication, PBKDF2 Password Security & Brute-Force Rate Limiting [COMPLETED]
-- **Threat**: Unauthorized users accessing administrative telemetry or file editor on public/LAN networks, credential stuffing, brute-force password guessing, and session token conflation.
-- **Defense**:
-  1. **Default Protected Mode**: All mutating APIs, Desktop MetaManager, and telemetry require authentication unless Guest Mode is explicitly toggled by the administrator to allow public access to `/` and `/app`.
-  2. **Zero-Dependency Password Hashing**: Utilizes standard library `hashlib.pbkdf2_hmac` (`sha256`, 600,000 iterations, unique 16-byte random salt) and timing-attack-resistant `secrets.compare_digest`.
-  3. **Distinct Cookie Trust Boundaries**: Decoupled `mp3metafix_auth` signed token `{user_id}.{timestamp}.{sig}` from `mp3metafix_session` `{session_id}.{timestamp}.{sig}`.
-  4. **POSIX 0700 & 0600 Filesystem Security**: Persistent users (`users.json`) and system settings (`settings.json`) stored in `data/auth/` under POSIX `0700` directory and `0600` file modes.
-  5. **Brute-Force Rate Limiter**: `LoginRateLimiter` enforces 5 failed attempts per client IP per 60s with automatic 5-minute cooldown.
-
-
-
-
-
-## Telemetry UI Boundary
-
-Detailed telemetry is consolidated in `/admin`. The hub has no resource quickbar and makes no `/api/system/stats` requests; its one-time `/api/health` request returns only basic status and version. Backend administrator authorization on `/api/system/stats` remains unchanged. Hiding UI elements is not used as an authorization boundary.
-
-The editor’s optional update-badge guard changes only DOM rendering. Administrator authorization on update APIs and safe text rendering of release notes remain unchanged.
-
-## Additional Audio Container Validation (v0.5.0)
-
-MP3, M4A, and WAV upload extensions are allowlisted and checked against the first 8 KB before session persistence. M4A and WAV then undergo bounded box/chunk traversal and Mutagen parsing; malformed or truncated uploads are removed. M4A must contain an audio track, no video track, and AAC or ALAC audio. WAV requires valid RIFF length, format and data chunks; INFO text processing is capped at 1 MB. MIME types are selected by validated format, never by the browser's supplied content type.
-
-Storage lookups use only fixed allowlisted audio basenames. Download names cannot change the original container extension. Authentication, signed file sessions, CSRF, rate limits, size bounds, and artwork validation apply equally to every format. Atomic writes preserve the prior session file on failure; regression tests cover invalid numeric tags, malformed containers, unauthorized uploads, and unchanged encoded audio samples.
+No CVE/dependency advisory scan, destructive stress test, external penetration test, live updater execution, or complete browser exploit test was performed. See [the audit](SECURITY_AUDIT_2026-09-20.md) and [handoff](../SESSION_HANDOFF_2026-09-20.md). Fixes must add regression coverage and follow [development_workflow.md](development_workflow.md), including local-only commits until explicit remote approval.

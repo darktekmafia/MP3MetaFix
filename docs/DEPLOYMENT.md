@@ -4,6 +4,24 @@ This guide covers deployment options for MP3MetaFix across **Local Fedora 44 Dev
 
 ---
 
+## Current workstation status and deployment cautions
+
+As observed on 2026-09-20, the working backend is the **user** `mp3metafix.service`, serving loopback port 8844 with two Uvicorn workers. It was restarted and verified at v0.5.0 / `da83731`. A separate enabled **system** unit is failing with 203/EXEC permission denied. It was left unchanged; do not assume both units should run.
+
+For this workstation:
+
+```bash
+systemctl --user status mp3metafix.service
+systemctl --user restart mp3metafix.service
+journalctl --user -u mp3metafix.service -f
+curl --fail http://127.0.0.1:8844/api/health
+curl --fail http://127.0.0.1:8844/api/version
+```
+
+Inspect both scopes before changing deployment. The observed user unit lacks the documented system-service hardening/resource limits; template contents do not prove installed containment. See the [audit](SECURITY_AUDIT_2026-09-20.md), especially findings 2, 5, and 7. Service-user/permission changes require owner coordination.
+
+This workspace is **local Git only** until explicit owner approval. Do not run the update installer to pick up local edits: it pulls remote code. Restart the correct local service and reload the browser instead. Do not use the in-app updater while the documented concurrency/interruption gaps remain unresolved.
+
 ## 1. Local Linux / Workstation Installation (Fedora / Ubuntu / Arch)
 
 ### Systemd Background Service (Starts on Boot)
@@ -261,7 +279,7 @@ cd /opt/mp3metafix
 sudo ./install.sh --update
 ```
 This automatically:
-1. Fetches the newest release, seamlessly re-executes the updated installer in-place, and reloads `VERSION`.
+1. Pulls repository updates from the configured remote branch, seamlessly re-executes the updated installer in-place, and reloads `VERSION`.
 2. Updates Python virtual environment dependencies.
 3. Automatically and safely migrates existing systemd units (`/etc/systemd/system/mp3metafix.service` or `~/.config/systemd/user/mp3metafix.service`) using `scripts/migrate_service.py` to upgrade legacy launch commands to use `--no-proxy-headers` and `$MP3METAFIX_HOST` / `$MP3METAFIX_PORT` without overwriting administrator environment variables, workers, or cgroups.
 4. Executes `systemctl daemon-reload` and restarts the service.
@@ -286,7 +304,7 @@ sudo systemctl restart mp3metafix.service
 ```
 
 > [!NOTE]
-> In-app web updater execution (`POST /api/updates/apply`) is currently disabled pending administrative authorization and privilege separation review.
+> In-app web updater execution (`POST /api/updates/apply`) is enabled and requires administrator authorization plus CSRF checks. Its lock is worker-local and interruption/log sanitization safeguards are incomplete; see audit finding 5. Modification requires the project’s owner-approval checkpoint.
 
 ---
 
@@ -298,11 +316,13 @@ Open **Admin Dashboard** from the signed-in administrator account menu to view l
 
 MP3, M4A (AAC/ALAC), and standard RIFF/WAVE uploads use the existing Mutagen dependency; there is no new runtime package or transcoding service. RF64, raw AAC, video MP4, and other formats are not accepted. Reload the editor after updating to load the versioned frontend assets; restart the backend through your normal local workflow to load the new handlers. Existing MP3 sessions and secrets require no migration.
 
-The existing 150 MB upload limit applies to every format; WAV can reach it sooner because it is often uncompressed. Allow temporary disk headroom for atomic tag writes (up to two additional file copies for WAV with INFO metadata). Playback and waveform decoding depend on browser codec support; metadata editing does not require browser decoding. WAV ID3/cover-art compatibility differs between players.
+Owner testing confirmed WAV editing, but a real M4A file failed parsing. Synthetic AAC M4A tests passed; the specific compatibility failure is unresolved.
+
+The endpoint’s existing 150 MB upload limit applies to every format; WAV can reach it sooner because it is often uncompressed. Allow temporary disk headroom for atomic tag writes (up to two additional file copies for WAV with INFO metadata). Playback and waveform decoding depend on browser codec support; metadata editing does not require browser decoding. WAV ID3/cover-art compatibility differs between players.
 
 ## 6. Environment Variables & Security Configuration
 
-The server behavior and security thresholds can be customized via environment variables in systemd units or `.env` files:
+The server reads environment variables. Configure them in the service environment or export them before launch; the backend does not itself load a `.env` file. Persisted UI quota/TTL preferences currently do not reconfigure these runtime limits. Endpoint limits also do not cap multipart preprocessing; enforce early request limits at the proxy and in a future application fix.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -311,7 +331,7 @@ The server behavior and security thresholds can be customized via environment va
 | `MP3METAFIX_SESSION_TTL_MINUTES` | `60` | Inactivity TTL for uploaded sessions |
 | `MP3METAFIX_MAX_UPLOAD_SIZE_MB` | `150` | Maximum single audio upload size (MB) |
 | `MP3METAFIX_MAX_ARTWORK_SIZE_MB` | `10` | Maximum artwork upload size (MB) |
-| `MP3METAFIX_MAX_GLOBAL_STORAGE_MB` | `2048` | Disk quota cap before automatic LRU session pruning |
+| `MP3METAFIX_MAX_GLOBAL_STORAGE_MB` | `2048` | Session-storage quota precheck with LRU pruning; not a strict concurrent-write cap |
 | `MP3METAFIX_TRUST_PROXIES` | `false` | Enables reverse proxy header processing (`X-Forwarded-For`, `X-Forwarded-Proto`) |
 | `MP3METAFIX_TRUSTED_PROXIES` | `127.0.0.1,::1` | Comma-separated list of trusted proxy IPs or CIDRs |
 | `MP3METAFIX_SECRET_KEY` | *(auto-generated)* | Cryptographic HMAC secret key (persisted to `data/.secret_key`) |

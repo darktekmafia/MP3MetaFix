@@ -1,12 +1,18 @@
 # MP3MetaFix 🎵
 
 [![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](VERSION)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 
 **MP3MetaFix** is a high-performance, security-focused audio metadata suite featuring a **Gateway Hub (`/`)**, an **Administrator Control Center (`/admin`)**, a **Mobile-First Focused Tagger (`/app`)**, and a **Desktop Power-User Manager Workspace (`/manager`)**. Designed for seamless local desktop usage on Fedora / Ubuntu and headless server deployment inside **Proxmox LXC containers** behind reverse proxies.
 
 ---
+
+## Current status — v0.5.0
+
+WAV editing is owner-confirmed. Synthetic AAC M4A roundtrips pass, but an owner-provided M4A failed parsing; its cause is unresolved. See the [roadmap](ROADMAP.md) and [session handoff](SESSION_HANDOFF_2026-09-20.md).
+
+The [2026-09-20 security audit](docs/SECURITY_AUDIT_2026-09-20.md) found unresolved high-severity issues in embedded artwork serving, pre-authentication upload buffering, and account-store failure handling, plus gaps in token revocation, update locking, outbound fetches, and service containment. Existing controls are not a security certification.
 
 ## ✨ Features
 
@@ -16,7 +22,7 @@ The editor’s version dialog supports update checks without a header update bad
   - **Gateway Hub (`/`)**: Compact workspace selector with a one-time health/version check and no telemetry quickbar or resource polling.
   - **Administrator Control Center (`/admin`)**: CPU, memory, disk, and temporary-storage diagnostics, refreshed while signed in as an administrator. Open it through the account menu’s **Admin Dashboard** link.
   - **MP3MetaFix (`/app`)**: Lightweight, mobile-first, single-track MP3, M4A, and WAV editor optimized for touchscreens and quick edits.
-  - **MP3MetaManager (`/manager`)**: Desktop power-user workspace featuring complete functional superset parity with `/app` (integrated single-track inspector, waveform scrubber, cover art studio) alongside high-density multi-track batch spreadsheet editing, universal ID3 frame/byte inspection, and synced lyrics.
+  - **MP3MetaManager (`/manager`)**: Desktop workspace shell with navigation and a coming-soon state. The integrated editor, batch spreadsheet, raw metadata inspector, and synced lyrics are planned. It must inherit every `/app` capability through the shared engine/API.
   - **Persistent App Switcher**: Header navigation pill allowing instant workspace jumping without context loss.
 - 🎧 **MP3, M4A & WAV Tagging**:
   - MP3 ID3v2.3/v2.4, M4A AAC/ALAC native atoms, and WAV embedded ID3 tags with existing RIFF INFO text synchronization.
@@ -43,27 +49,27 @@ The editor’s version dialog supports update checks without a header update bad
   - Native browser save folder picker via the modern File System Access API (`showSaveFilePicker`).
   - Seamless fallback to direct named downloads with RFC 5987 UTF-8 Content-Disposition headers.
 - ⚡ **Dynamic Filename Formatter**:
-  - Automatically rename downloaded MP3s using patterns like `%artist% - %title%.mp3` or `%track% - %title%.mp3`.
+  - Automatically rename downloaded audio files using patterns like `%artist% - %title%.mp3` or `%track% - %title%.mp3`.
 - 🔐 **Full System Authentication & Access Control**:
-  - **Protected by Default**: All routes, Gateway Hub (`/`), Desktop MetaManager (`/manager`), and file editing APIs require authentication.
+  - **Protected Editing APIs by Default**: File-editing APIs require login unless Guest Mode is enabled. Static pages/assets and health/version endpoints are public; frontend login prompts are not backend authorization.
   - **First-Run Administrator Setup Wizard**: Automated setup prompt on first launch to create the primary administrator account with zero manual config file editing.
   - **Configurable Guest Mode**: Administrator can enable Guest Mode in Settings to allow public/guest access to the Gateway Hub (`/`) and Single-Track Editor (`/app`), while keeping MP3MetaManager (`/manager`), system telemetry diagnostics, and server settings locked.
   - **Zero-Dependency Security**: Standard-library PBKDF2-HMAC-SHA256 password hashing (600,000 rounds) + constant-time comparison.
   - **Distinct Trust Boundaries**: Independent signed cookie layers for account identity (`mp3metafix_auth`) and temporary file sessions (`mp3metafix_session`).
-  - **In-App Settings & Quota Manager**: In-app management modal for password changes, guest mode policy, and session/disk storage quota controls.
-- 🛡️ **14-Point Security Hardening & Threat Defense**:
+  - **In-App Settings**: Password changes and Guest Mode are implemented. Quota/TTL preferences are stored, but runtime limits currently come from environment configuration; do not assume saving settings changes those limits.
+- 🛡️ **Implemented Security Controls (with open audit findings)**:
   - **Cryptographic Session Cookies**: Timestamped HMAC-SHA256 signed `HttpOnly`, `SameSite=Lax` session cookies.
   - **Decoupled Hashed Storage**: Session directories isolated via one-way SHA-256 hashes (`SHA-256(secret:uuid)[:32]`).
   - **POSIX 0700 Isolation**: Multi-user permissions hardening on temporary storage.
-  - **Global Storage Quota**: Automatic LRU session eviction when storage reaches disk limits.
-  - **DDoS & Flood Protection**: Sliding-window rate limiter with proxy IP anti-spoofing.
-  - **CSRF & XSS Defense**: Strict `Sec-Fetch-Site` validation and dynamic DOM node sanitization.
-  - **Image Decompression Bomb Defense**: Pillow pixel limit bounds (10 MP max).
-  - **Exception Masking**: Clean client error responses preventing filesystem disclosures.
-  - **Process Sandboxing**: Systemd cgroup constraints (`MemoryMax=512M`, `TasksMax=64`, `CPUQuota=80%`).
+  - **Storage Quota Precheck**: LRU eviction for session storage; not a hard bound on multipart spooling or concurrent writes.
+  - **Upload Rate Limiting**: Per-worker sliding window with proxy IP anti-spoofing; runs after multipart parsing.
+  - **CSRF & Safe DOM Rendering**: Fetch-site/origin checks and safe metadata text rendering; embedded-artwork active content remains an open issue.
+  - **Uploaded Image Checks**: Pillow pixel warning/error thresholds and 4096px dimension checks; embedded artwork bypasses normalization.
+  - **Exception Masking**: Generic errors on normal editing paths; updater output/exception sanitization remains incomplete.
+  - **Service Templates**: Include resource restrictions; inspect the installed unit. The audited user service lacks the documented restrictions.
 - 🐧 **Smart Universal Linux Installer (`install.sh`)**:
   - Automatically detects your distro (`dnf`, `apt`, `pacman`).
-  - Installs and enables a hardened **systemd background service** (`mp3metafix.service`) to start automatically on system boot.
+  - Installs and enables a **systemd background service** (`mp3metafix.service`) to start automatically on system boot.
   - Automatically registers **Desktop application launcher** (`.desktop`) and high-res icon for GUI environments.
   - Supports `--update` with automated, non-destructive legacy service migration (`scripts/migrate_service.py`), `--status`, `--uninstall`, `--no-service`, and custom ports.
 
@@ -87,6 +93,8 @@ sudo ./install.sh
 Once installed, MP3MetaFix runs as a native systemd background service:
 - **Web Interface**: Open `http://127.0.0.1:8844` (or your server's IP)
 - **Desktop Launcher**: Available in your Application Menu (GNOME/KDE/XFCE)
+
+The current development workstation uses a **user service**: use `systemctl --user status/restart/stop mp3metafix.service` and `journalctl --user -u mp3metafix.service`. The commands below apply to system-wide installations. See [deployment notes](docs/DEPLOYMENT.md) for the duplicate-unit issue.
 
 #### Service Management Commands
 ```bash
@@ -188,8 +196,8 @@ graph TD
 
     subgraph AudioEngine["Audio Engine"]
         direction TB
-        Mutagen["Mutagen ID3v2.4 Engine"]
-        Pillow["Pillow APIC Decompression Defense"]
+        Mutagen["Mutagen MP3/M4A/WAV Engine"]
+        Pillow["Uploaded Image Normalization"]
     end
 
     Backend --> CSRF
@@ -205,7 +213,7 @@ For in-depth technical documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTU
 
 | Shortcut | Action |
 |----------|--------|
-| <kbd>Ctrl</kbd> + <kbd>S</kbd> / <kbd>Cmd</kbd> + <kbd>S</kbd> | Save changes and download modified MP3 |
+| <kbd>Ctrl</kbd> + <kbd>S</kbd> / <kbd>Cmd</kbd> + <kbd>S</kbd> | Save changes and download modified audio |
 
 ---
 
@@ -221,6 +229,6 @@ See [ROADMAP.md](ROADMAP.md) for full details.
 
 ---
 
-## 📄 License
+## License
 
-MIT License © 2026 MP3MetaFix Contributors
+Declared project license: MIT © 2026 MP3MetaFix Contributors. A standalone LICENSE file is currently missing from this checkout; maintainers should add the authorized license text before distribution.

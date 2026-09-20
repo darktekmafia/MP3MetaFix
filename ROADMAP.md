@@ -2,7 +2,7 @@
 
 This document details the multi-interface roadmap for **MP3MetaFix**. 
 
-Although MP3MetaFix runs as a unified high-performance Python FastAPI service with a single ID3 metadata engine and cryptographic storage model, **each frontend interface is treated as a distinct sub-project with its own dedicated roadmap, UX philosophy, and target user persona**.
+Although MP3MetaFix runs as a unified high-performance Python FastAPI service with a shared native-format metadata engine and cryptographic storage model, **each frontend interface is treated as a distinct sub-project with its own dedicated roadmap, UX philosophy, and target user persona**.
 
 ---
 
@@ -17,7 +17,7 @@ Although MP3MetaFix runs as a unified high-performance Python FastAPI service wi
 
 > [!NOTE]
 > **Architectural Principle: Workflow & Device-Driven Interface Selection (Superset Model)**  
-> **MP3MetaManager (`/manager`) is engineered as a complete functional superset of MP3MetaFix (`/app`)**. All single-track editing tools, waveform visualizers, cover art management, preset managers, and Suno link parsers present in `/app` are natively integrated into `/manager` via an embedded single-track inspector drawer. Users never need to switch between applications just to edit a single track's tags or cover art; interface selection is determined solely by the user's active workflow (focused quick edit vs comprehensive multi-track session) and client device form factor (mobile touch vs desktop workstation).
+> **Required future architecture:** `/manager` must include every `/app` capability through shared backend services and an integrated inspector. That inspector is not implemented yet; the current manager is a shell. Desktop batch workflows and mobile-focused editing are separate interface goals, not separate format engines.
 
 ---
 
@@ -60,15 +60,15 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 **MP3MetaFix** is the dedicated single-track audio metadata, cover art, and inspection workspace. Designed mobile-first for friction-free music tagging on smartphones, tablets, and desktops alike.
 
 ### Completed Features ✅
-- [x] **MP3, M4A, and WAV Audio Tagging (v0.5.0)**:
+- [x] **Native-format engine and UI implementation (v0.5.0; M4A compatibility follow-up open)**:
   - Shared engine supports M4A AAC/ALAC atoms and WAV ID3 artwork/tags plus existing RIFF INFO text; encoded audio is preserved.
-  - Upload, restore, waveform/playback, filename patterns, cover art, Suno selective merging, and export retain the original format.
+  - Synthetic MP3/AAC M4A/WAV tests verify upload, restore, playback, filename patterns, artwork, and export without changing format. Owner confirmed WAV; one real M4A fails parsing with no diagnosed cause.
   - `/manager` inherits these shared engine/API capabilities as part of its required `/app` feature parity; its current UI remains a placeholder.
 
 
 - [x] **Editor update-check compatibility**: Update results render correctly when the optional header badge is absent.
 - [x] **Fluid Mobile-First Responsive Layout (320px to 4K)**:
-  - Zero right-edge overflow on narrow screens (tested across iPhone SE, iPhone 16 Pro Max, iPad Mini, and desktop).
+  - Latest browser checks found no horizontal document overflow at 320px, 375px, and 1440px widths; this is viewport testing, not a certification of every device/browser.
   - Balanced 2-column layout on tablets ($\ge 720\text{px}$) keeping artwork and metadata forms immediately accessible.
   - Centered, constrained album art preview container (`max-width: 210px` on phones) to prevent massive vertical scrolling.
 - [x] **Complete ID3v2.3 / ID3v2.4 Metadata Tagging**:
@@ -76,7 +76,7 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 - [x] **Retina Canvas Audio Waveform Visualizer & Scrubber**:
   - Web Audio API dynamic peak rendering, played/unplayed gradient states, continuous drag scrubbing, and hovering time tooltips.
 - [x] **Album Artwork APIC Extraction & Replacement**:
-  - Inspect embedded cover art, upload new images (PNG/JPEG/WebP normalized to JPEG), and extract/remove artwork.
+  - Inspect embedded cover art, upload new images (PNG/JPEG retained in normalized form; WebP converted to JPEG), and extract/remove artwork.
   - Responsive 3-button action row (`[ Upload ] [ Extract ] [ Remove ]`).
 - [x] **Canned Comment Presets & Preset Manager**:
   - Quick dropdown prefilling for creator profiles (e.g. Suno links) and local storage management modal.
@@ -91,6 +91,7 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - Mobile-first, non-disruptive detection pill (`✨ Suno Detected`) and interactive per-field selective merge table with `Apply Selected`, `Fill Blank Only`, and `Apply All` presets (zero blind overwrites).
 
 ### Active Backlog & Future Vision 📋
+- [ ] **Diagnose owner-reported M4A parsing failure**: obtain a suitable sample, distinguish header rejection from parsing failure, and add a regression fixture without weakening container checks. Synthetic AAC success is not full Suno compatibility.
 - [ ] **Native Web Share API (`navigator.share`)**:
   - One-tap mobile export to send modified MP3s directly to mobile audio players (VLC, Files, Telegram, Discord, Apple Music).
 - [ ] **MediaSession API Integration**:
@@ -106,7 +107,7 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 
 ## 🗂️ Project C: MP3MetaManager (`/manager`) — Desktop Power-User Workspace Roadmap
 
-**MP3MetaManager** is the desktop-focused power-user interface engineered for heavy multi-track batch operations, album assembly, library management, and deep audio organization. **It incorporates all single-track editing features of `/app` directly into its workspace, eliminating any need to switch applications**.
+**MP3MetaManager** is the desktop-focused power-user interface engineered for heavy multi-track batch operations, album assembly, library management, and deep audio organization. **Its required future scope includes all `/app` features in the same workspace. Today only the shell/navigation exists; inspector and batch capabilities remain backlog items**.
 
 ### Completed Features ✅
 - [x] **Desktop Workspace Foundation**:
@@ -180,10 +181,10 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 The underlying Python backend, Mutagen audio engine, systemd service architecture, and deployment automation powering all frontends.
 
 ### Completed Features ✅
-- [x] **14-Point Security Perimeter**:
+- [x] **Baseline Security Controls (incomplete; see audit remediation backlog)**:
   - Timestamped HMAC-SHA256 session cookies, POSIX `0700` filesystem isolation, decoupled SHA-256 hashed storage directories.
-  - Chunk-level magic bytes validation, decompression bomb defenses (Pillow 10 MP limit), sliding-window rate limiting with proxy anti-spoofing.
-  - Origin/Sec-Fetch-Site CSRF protection and exception masking.
+  - Chunk-level magic bytes validation, uploaded-image checks (Pillow thresholds and dimension limits), sliding-window rate limiting with proxy anti-spoofing.
+  - Origin/Sec-Fetch-Site CSRF protection and generic errors on normal editing paths; updater sanitization remains open.
 - [x] **Non-Destructive Systemd Migration Engine (`scripts/migrate_service.py`)**:
   - Safe, atomic unit updates during upgrades while preserving administrator customizations, custom environment variables, and cgroup resource limits.
 - [x] **Service Network Access, Proxy Trust & LAN Maintenance CLI (`scripts/configure_access.py`)**:
@@ -192,12 +193,23 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
   - Automated upgrade handoff executing newly pulled code immediately without requiring secondary update runs.
 
 ### Active Backlog & Future Vision 📋
+
+- [ ] **Security audit remediation (2026-09-20)** — [full findings](docs/SECURITY_AUDIT_2026-09-20.md):
+  - Reject/normalize embedded active-content artwork before preview or serving (high).
+  - Enforce request-byte limits before multipart spooling/authentication and reserve storage across workers (high).
+  - Fail closed on damaged account stores; serialize first-admin creation (high, conditional).
+  - Revoke prior account tokens after password changes and define logout revocation (medium).
+  - Serialize updater processes across workers, handle disconnects, and sanitize logs (medium; owner approval required).
+  - Validate outbound redirect destinations and bound Suno response reads (medium).
+  - Reconcile duplicate services and apply tested service containment with owner approval (medium).
+- [ ] **Apply stored quota/TTL settings to runtime policy**: settings persist today, while runtime enforcement reads environment-derived configuration.
+
 - [ ] **Multi-Arch Docker & OCI Container Images**:
   - Official multi-architecture Dockerfile (`linux/amd64`, `linux/arm64`) published to GitHub Container Registry (GHCR) for unRAID, TrueNAS, and Docker Compose.
 - [ ] **Native Windows Desktop Experience**:
   - Standalone bundled Windows `.exe` using PyInstaller / PyWebView (Edge WebView2 backend) with system tray integration and zero Python prerequisite.
 - [ ] **Multi-Format Audio Engine Expansion**:
-  - MP3, M4A (AAC/ALAC), and WAV are implemented in the shared engine. Remaining formats: **FLAC** (Vorbis comments & picture blocks), **OGG / Opus**, and **AIFF** (ID3 chunks).
+  - MP3, M4A (AAC/ALAC), and WAV handlers are implemented; real-file M4A compatibility remains unresolved. Remaining formats: **FLAC** (Vorbis comments & picture blocks), **OGG / Opus**, and **AIFF** (ID3 chunks).
 - [ ] **Pluggable Storage Backend Drivers (`StorageProvider`)**:
   - Abstract storage interface supporting Local Filesystem, SMB/NFS shared network mounts, and S3 / MinIO Object Storage.
 - [ ] **Asynchronous Background Task Queue**:
