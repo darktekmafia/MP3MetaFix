@@ -2292,11 +2292,52 @@ button {
   border: 1px solid rgba(56, 189, 248, 0.3);
 }
 
+.pill-coming-soon {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent-amber);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
 .pill-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background-color: currentColor;
+}
+
+.pill-dot-amber {
+  background-color: var(--accent-amber);
+  box-shadow: 0 0 8px var(--accent-amber);
+}
+
+.btn-disabled {
+  opacity: 0.6;
+  cursor: not-allowed !important;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: var(--text-muted) !important;
+  box-shadow: none !important;
+}
+
+.switcher-link-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.switcher-badge-soon {
+  font-size: 0.58rem;
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--accent-amber);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  padding: 0.05rem 0.3rem;
+  border-radius: 9999px;
+  margin-left: 0.25rem;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
 }
 
 .app-icon-wrapper {

@@ -42,10 +42,10 @@
             <span class="switcher-icon">⚡</span>
             <span class="switcher-label">MP3MetaFix</span>
           </a>
-          <a href="/manager" class="switcher-link active" title="MP3MetaManager (Desktop Library & Batch Manager)">
+          <span class="switcher-link active switcher-link-disabled" title="MP3MetaManager (Coming Soon &bull; In Active Development)" aria-disabled="true">
             <span class="switcher-icon">🗂️</span>
-            <span class="switcher-label">MetaManager</span>
-          </a>
+            <span class="switcher-label">MetaManager <span class="switcher-badge-soon">Soon</span></span>
+          </span>
           <a href="/" class="switcher-link" title="Gateway Hub & System Overview">
             <span class="switcher-icon">🏠</span>
             <span class="switcher-label">Hub</span>
@@ -54,6 +54,7 @@
       </nav>
 
       <div class="header-badges">
+        <span class="badge pill-coming-soon"><span class="pill-dot pill-dot-amber"></span> In Development</span>
         <button class="badge badge-version badge-btn" id="versionBadge" title="Click to view Version Details">...</button>
         <span class="badge badge-status" id="serverStatus"><span class="status-dot"></span> Online</span>
       </div>
@@ -64,29 +65,29 @@
       <!-- Left Sidebar: Library & Batch Categories -->
       <aside class="manager-sidebar">
         <div class="sidebar-section">
-          <div class="sidebar-heading">Library Workspace</div>
+          <div class="sidebar-heading">Library Workspace <span class="switcher-badge-soon">Soon</span></div>
           <ul class="sidebar-nav-list">
             <li class="sidebar-nav-item active">
-              <button class="sidebar-nav-btn">
+              <button class="sidebar-nav-btn btn-disabled" disabled aria-disabled="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
                 <span>Batch Queue</span>
                 <span class="nav-count-badge">0</span>
               </button>
             </li>
             <li class="sidebar-nav-item">
-              <button class="sidebar-nav-btn">
+              <button class="sidebar-nav-btn btn-disabled" disabled aria-disabled="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
                 <span>Suno AI Stems</span>
               </button>
             </li>
             <li class="sidebar-nav-item">
-              <button class="sidebar-nav-btn">
+              <button class="sidebar-nav-btn btn-disabled" disabled aria-disabled="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
                 <span>Synced Lyrics / SYLT</span>
               </button>
             </li>
             <li class="sidebar-nav-item">
-              <button class="sidebar-nav-btn">
+              <button class="sidebar-nav-btn btn-disabled" disabled aria-disabled="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                 <span>Tap-to-Sync Karaoke</span>
               </button>
@@ -95,16 +96,16 @@
         </div>
 
         <div class="sidebar-section">
-          <div class="sidebar-heading">Tools & Automation</div>
+          <div class="sidebar-heading">Tools & Automation <span class="switcher-badge-soon">Soon</span></div>
           <ul class="sidebar-nav-list">
             <li class="sidebar-nav-item">
-              <button class="sidebar-nav-btn">
+              <button class="sidebar-nav-btn btn-disabled" disabled aria-disabled="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
                 <span>Pattern Renamer</span>
               </button>
             </li>
             <li class="sidebar-nav-item">
-              <button class="sidebar-nav-btn">
+              <button class="sidebar-nav-btn btn-disabled" disabled aria-disabled="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
                 <span>Batch Cover Art</span>
               </button>
@@ -119,14 +120,14 @@
         <div class="manager-toolbar">
           <div class="toolbar-search-group">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" class="search-icon"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-            <input type="text" class="form-input search-input" placeholder="Search track, artist, album, prompt tag...">
+            <input type="text" class="form-input search-input" placeholder="Search track, artist, album, prompt tag..." disabled aria-disabled="true">
           </div>
           <div class="manager-toolbar-actions">
             <a href="/app" class="btn btn-secondary btn-sm" title="Open Quick Single-Track Fixer">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
               <span>Quick Fix Mode</span>
             </a>
-            <button class="btn btn-primary btn-sm" id="btnBatchUpload">
+            <button class="btn btn-primary btn-sm btn-disabled" id="btnBatchUpload" disabled aria-disabled="true" title="Batch uploading is coming soon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
               <span>Add Audio Files</span>
             </button>
@@ -140,9 +141,9 @@
               <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"></path>
             </svg>
           </div>
-          <h3 class="empty-state-title">MP3MetaManager Desktop Workspace</h3>
+          <h3 class="empty-state-title">🛠️ MP3MetaManager Desktop Workspace &bull; Coming Soon</h3>
           <p class="empty-state-desc">
-            The power-user multi-track management interface is in active development. Use this workspace for multi-track batch processing, library explorer, and synced lyrics (SYLT) stamping.
+            The power-user multi-track management workspace is currently in active engineering. For current audio metadata and cover art editing, please use the mobile-first <strong>MP3MetaFix</strong> single-track editor.
           </p>
           <div class="manager-feature-badges">
             <span class="tag-pill">🚀 Batch Tag Editing</span>
@@ -153,11 +154,11 @@
           <div class="empty-state-actions">
             <a href="/app" class="btn btn-primary">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-              <span>Open MP3MetaFix Quick Editor</span>
+              <span>Launch MP3MetaFix (Active Editor)</span>
             </a>
             <a href="/" class="btn btn-secondary">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-              <span>Return to Hub</span>
+              <span>Return to Gateway Hub</span>
             </a>
           </div>
         </div>
