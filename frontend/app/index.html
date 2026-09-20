@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
   
   <link rel="icon" type="image/svg+xml" href="/assets/mp3metafix.svg">
-  <link rel="stylesheet" href="/css/styles.css?v=0.4.0">
+  <link rel="stylesheet" href="/css/styles.css?v=0.4.1">
 </head>
 <body class="app-body">
   <!-- Dynamic Background Glow Elements -->
@@ -50,18 +50,15 @@
             <span class="switcher-icon">🏠</span>
             <span class="switcher-label">Hub</span>
           </a>
+          <a href="/admin" class="switcher-link admin-only hidden" title="Administrator Control Center">
+            <span class="switcher-icon">🛡️</span>
+            <span class="switcher-label">Admin</span>
+          </a>
         </div>
       </nav>
 
       <div class="header-badges">
-        <button class="badge badge-version badge-btn" id="versionBadge" title="Click to view Version Details & Updates">...</button>
-        <button class="badge badge-update hidden" id="updateBadge" title="New version available! Click to inspect"><span class="update-pulse-dot"></span> Update Available</button>
-        <button class="btn btn-icon btn-header" id="btnVersionModal" title="Version & Update Manager" aria-label="Version and Update Settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
-        </button>
+        <span class="badge badge-version" id="versionBadge">v0.4.1</span>
         <span class="badge badge-status" id="serverStatus"><span class="status-dot"></span> Online</span>
         <div class="header-auth-container" id="headerAuthContainer"></div>
       </div>
@@ -955,7 +952,7 @@
   <!-- Toast Notification Container -->
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
-  <script src="/js/auth.js?v=0.4.0"></script>
-  <script src="/js/app.js?v=0.4.0"></script>
+  <script src="/js/auth.js?v=0.4.1"></script>
+  <script src="/js/app.js?v=0.4.1"></script>
 </body>
 </html>

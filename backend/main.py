@@ -35,6 +35,7 @@ from backend.config import (
     STATIC_DIR,
     APP_DIR,
     MANAGER_DIR,
+    ADMIN_DIR,
     ASSETS_DIR,
     DATA_DIR,
     VERSION,
@@ -100,6 +101,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("mp3metafix")
+
+# Concurrency mutex: prevent overlapping in-app update runs
+_update_lock = asyncio.Lock()
 
 
 @asynccontextmanager
@@ -460,10 +464,25 @@ async def check_updates(force: bool = False, user: Dict[str, Any] = Depends(requ
 
 @app.post("/api/updates/apply")
 async def apply_update(request: Request, user: Dict[str, Any] = Depends(require_admin)):
-    """In-app update installation is disabled pending administrative authorization and privilege review."""
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="In-app update installation is currently disabled pending administrative authorization review.",
+    """Stream in-app update installation output as Server-Sent Events (SSE). Admin only."""
+    if _update_lock.locked():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An update is already in progress. Please wait for it to complete.",
+        )
+
+    async def _locked_stream():
+        async with _update_lock:
+            async for chunk in stream_install_update():
+                yield chunk
+
+    return StreamingResponse(
+        _locked_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -1077,6 +1096,9 @@ if APP_DIR.is_dir():
 
 if MANAGER_DIR.is_dir():
     app.mount("/manager", StaticFiles(directory=MANAGER_DIR, html=True), name="manager")
+
+if ADMIN_DIR.is_dir():
+    app.mount("/admin", StaticFiles(directory=ADMIN_DIR, html=True), name="admin")
 
 if STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")

@@ -22,7 +22,7 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 - [x] **14. Localhost Default Host Binding & TLS Secure Cookies**: Bind to `127.0.0.1` by default and dynamically set `Secure` cookie flag over TLS/HTTPS. *(Implemented in `backend/config.py` & `backend/main.py`)*
 - [x] **15. Single Audio Byte-Range Bounds & Underflow Defense**: Enforce strict single-range HTTP 206 validation. *(Implemented in `backend/main.py`)*
 - [x] **16. Artwork Processing Error Sanitization**: Sanitize client-facing image decode errors and server log formats. *(Implemented in `backend/security.py`)*
-- [ ] **17. Update Installation Endpoint Access Control**: In-app updater endpoint disabled pending admin design. *(Implemented in `backend/main.py`)*
+- [x] **17. Update Installation Endpoint Access Control**: In-app updater endpoint re-enabled and gated behind `require_admin` (authenticated admin role check + signed cookie verification) with an `asyncio.Lock()` concurrency mutex preventing parallel update runs. *(Implemented in `backend/main.py` & `backend/updater.py`)*
 - [x] **18. Safe Systemd Unit Parser Hardening & Migration**: Atomic in-place unit updates with POSIX quoting and shell injection defense. *(Implemented in `scripts/migrate_service.py` & `install.sh`)*
 - [x] **19. Safe Service Access & LAN Configuration Hardening**: Validated IP/hostname binding parameters with atomic permission-preserving updates. *(Implemented in `scripts/configure_access.py` & `install.sh`)*
 
@@ -98,9 +98,9 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 - **Threat**: Image processing errors exposing internal library state, raw byte sequences, or filesystem paths to clients or logs.
 - **Defense**: Configured fixed, sanitized client error messages in `backend/security.py` and restricted server logging to non-sensitive exception class names (`type(e).__name__`).
 
-### Vector 17: Update Installation Endpoint Access Control [PENDING ADMIN DESIGN]
+### Vector 17: Update Installation Endpoint Access Control [COMPLETED]
 - **Threat**: Unauthenticated visitors or non-admin users triggering server update scripts and restarts.
-- **Defense**: In-app update execution endpoint (`POST /api/updates/apply`) is disabled (HTTP 403 Forbidden) pending dedicated administrative authentication, concurrency lock design, and service privilege review.
+- **Defense**: In-app update execution endpoint (`POST /api/updates/apply`) is re-enabled and protected by `require_admin` (signed-cookie auth + role verification), an `asyncio.Lock()` concurrency mutex returning HTTP 409 on overlap, and the existing `CSRFProtectionMiddleware` `Sec-Fetch-Site`/`Origin` header checks. Output is streamed as sanitized SSE log lines; no raw exception details or stack traces are exposed to clients.
 
 ### Vector 18: Safe Systemd Service Migration & Unit Parser Hardening [COMPLETED]
 - **Threat**: Automated update scripts clobbering administrator customizations, corrupting complex `ExecStart` commands with naive regex or whitespace string splitting, exposing temporary files to symlink race conditions, or altering unit file permission modes.

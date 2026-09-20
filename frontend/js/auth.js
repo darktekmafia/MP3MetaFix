@@ -156,6 +156,15 @@
     userInfo.appendChild(dRole);
     dropdown.appendChild(userInfo);
 
+    // If admin, add Admin Dashboard link
+    if (AuthState.role === 'admin') {
+      const adminLink = document.createElement('a');
+      adminLink.href = '/admin';
+      adminLink.className = 'dropdown-item';
+      adminLink.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg><span>Admin Dashboard</span>';
+      dropdown.appendChild(adminLink);
+    }
+
     // Settings Item
     const settingsItem = document.createElement('button');
     settingsItem.className = 'dropdown-item';
@@ -200,6 +209,15 @@
 
     container.appendChild(userPill);
     container.appendChild(dropdown);
+
+    // Dynamic Admin-only DOM elements visibility
+    document.querySelectorAll('.admin-only').forEach((el) => {
+      if (AuthState.role === 'admin') {
+        el.classList.remove('hidden');
+      } else {
+        el.classList.add('hidden');
+      }
+    });
   }
 
   // Check if current route is permitted for unauthenticated guests when guestMode is enabled
@@ -233,6 +251,9 @@
         return;
       }
 
+      const path = window.location.pathname;
+      const isAdminPage = path === '/admin' || path.startsWith('/admin/');
+
       if (!AuthState.authenticated) {
         if (AuthState.guestMode && isGuestAllowedPath()) {
           // Allowed as Guest on / and /app
@@ -240,10 +261,16 @@
           closeModal('setupModal');
           window.dispatchEvent(new CustomEvent('mp3metafix:auth-ready', { detail: { ...AuthState } }));
         } else {
-          // Protected page (/manager) or Guest mode disabled -> show login modal
+          // Protected page (/manager, /admin) or Guest mode disabled -> show login modal
           openModal('loginModal');
         }
       } else {
+        // Authenticated user
+        if (isAdminPage && AuthState.role !== 'admin') {
+          notify('Administrator privileges required to access the Admin Control Center', 'error');
+          setTimeout(() => { window.location.href = '/'; }, 1500);
+          return;
+        }
         closeModal('loginModal');
         closeModal('setupModal');
         window.dispatchEvent(new CustomEvent('mp3metafix:auth-ready', { detail: { ...AuthState } }));

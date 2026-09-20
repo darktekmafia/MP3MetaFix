@@ -11,6 +11,7 @@ TEMP_DIR = DATA_DIR / "temp"
 STATIC_DIR = BASE_DIR / "frontend"
 APP_DIR = STATIC_DIR / "app"
 MANAGER_DIR = STATIC_DIR / "manager"
+ADMIN_DIR = STATIC_DIR / "admin"
 ASSETS_DIR = BASE_DIR / "assets"
 
 # Ensure directories exist
@@ -18,6 +19,7 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 APP_DIR.mkdir(parents=True, exist_ok=True)
 MANAGER_DIR.mkdir(parents=True, exist_ok=True)
+ADMIN_DIR.mkdir(parents=True, exist_ok=True)
 
 # Server Config
 HOST = os.getenv("MP3METAFIX_HOST", "127.0.0.1")

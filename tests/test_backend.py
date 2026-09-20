@@ -765,11 +765,30 @@ def test_audio_stream_ranges(client, sample_mp3_bytes):
     assert len(res_other_unit.content) == file_size
 
 
-def test_api_updates_apply_endpoint_disabled(client):
-    """Verify that in-app update installation is disabled and returns 403 Forbidden."""
-    res = client.post("/api/updates/apply")
-    assert res.status_code == 403
-    assert "currently disabled" in res.json()["detail"]
+def test_api_updates_apply_endpoint_active(client, unauth_client, monkeypatch):
+    """Verify POST /api/updates/apply is active: requires admin auth and streams SSE (not the old 403 disabled)."""
+    import asyncio
+
+    async def _mock_stream():
+        yield 'data: {"type": "step", "step": "init", "message": "Starting mock update..."}\n\n'
+        yield 'data: {"type": "log", "message": "Pulling changes..."}\n\n'
+        yield 'data: {"type": "complete", "success": true, "message": "Update complete."}\n\n'
+
+    monkeypatch.setattr("backend.main.stream_install_update", _mock_stream)
+
+    # Unauthenticated request must be rejected
+    res_unauth = unauth_client.post("/api/updates/apply")
+    assert res_unauth.status_code in (401, 403), (
+        f"Expected auth rejection, got {res_unauth.status_code}"
+    )
+
+    # Admin request must return streaming SSE (200)
+    res_admin = client.post("/api/updates/apply")
+    assert res_admin.status_code == 200, f"Expected 200, got {res_admin.status_code}: {res_admin.text}"
+    content_type = res_admin.headers.get("content-type", "")
+    assert "text/event-stream" in content_type, f"Expected SSE content-type, got: {content_type}"
+    assert "Starting mock update" in res_admin.text
+    assert '"type": "complete"' in res_admin.text
 
 
 def test_api_version_endpoint(client):

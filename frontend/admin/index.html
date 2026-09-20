@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MP3MetaFix Admin Control Center - System Resource Diagnostics, Access Policies, Quotas & Release Management">
+  <title>MP3MetaFix | Administrator Control Center</title>
+  
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  
+  <link rel="icon" type="image/svg+xml" href="/assets/mp3metafix.svg">
+  <link rel="stylesheet" href="/css/styles.css?v=0.4.1">
+</head>
+<body class="app-body hub-body admin-body">
+  <!-- Dynamic Background Glow Elements -->
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div class="bg-glow bg-glow-3"></div>
+
+  <div class="app-container admin-container">
+    <!-- Header -->
+    <header class="app-header hub-header">
+      <div class="brand-group">
+        <a href="/" class="brand-link" title="Return to Gateway Hub">
+          <div class="brand-logo-container">
+            <img src="/assets/mp3metafix.svg" alt="MP3MetaFix Logo" class="brand-logo" width="48" height="48">
+          </div>
+          <div class="brand-text">
+            <h1 class="brand-title">MP3<span>MetaFix</span></h1>
+            <p class="brand-subtitle"><span class="sub-full">Admin Control Center</span><span class="sub-short">Admin Console</span></p>
+          </div>
+        </a>
+      </div>
+
+      <!-- App Switcher Nav -->
+      <nav class="app-switcher-nav" aria-label="Application Switcher">
+        <div class="app-switcher-pill">
+          <a href="/app" class="switcher-link" title="MP3MetaFix (Single-Track Editor)">
+            <span class="switcher-icon">⚡</span>
+            <span class="switcher-label">MP3MetaFix</span>
+          </a>
+          <span class="switcher-link switcher-link-disabled" title="MP3MetaManager (Coming Soon &bull; In Active Development)" aria-disabled="true">
+            <span class="switcher-icon">🗂️</span>
+            <span class="switcher-label">MetaManager <span class="switcher-badge-soon">Soon</span></span>
+          </span>
+          <a href="/" class="switcher-link" title="Gateway Hub">
+            <span class="switcher-icon">🏠</span>
+            <span class="switcher-label">Hub</span>
+          </a>
+          <a href="/admin" class="switcher-link active" title="Administrator Control Center">
+            <span class="switcher-icon">🛡️</span>
+            <span class="switcher-label">Admin</span>
+          </a>
+        </div>
+      </nav>
+
+      <div class="header-badges">
+        <span class="badge badge-version" id="adminVersionBadge">v0.4.1</span>
+        <span class="badge badge-status" id="adminStatusBadge"><span class="status-dot"></span> Online</span>
+        <div class="header-auth-container" id="headerAuthContainer"></div>
+      </div>
+    </header>
+
+    <!-- Main Admin Content -->
+    <main class="admin-main-content">
+      <!-- Hero Intro Banner -->
+      <section class="hub-hero admin-hero">
+        <div class="admin-hero-content">
+          <div class="app-badge-pill pill-primary" style="margin-bottom: 0.75rem; display: inline-flex;">
+            <span class="pill-dot"></span> Administrator Privilege Active
+          </div>
+          <h2 class="hub-hero-title">System Control Center</h2>
+          <p class="hub-hero-subtitle">
+            Configure system access policies, monitor real-time resource utilization, manage disk quotas, and inspect software updates.
+          </p>
+        </div>
+
+        <!-- Quick Navigation Jump Bar -->
+        <div class="admin-jumpbar">
+          <a href="#sectionTelemetry" class="jump-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+            <span>Live Telemetry</span>
+          </a>
+          <a href="#sectionAccess" class="jump-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+            <span>Access & Guest Mode</span>
+          </a>
+          <a href="#sectionStorage" class="jump-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+            <span>Storage & Quotas</span>
+          </a>
+          <a href="#sectionUpdates" class="jump-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            <span>Software Updates</span>
+          </a>
+          <a href="#sectionSecurity" class="jump-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            <span>Credentials</span>
+          </a>
+        </div>
+      </section>
+
+      <!-- Section 1: Live System Diagnostics & Resource Telemetry -->
+      <section class="hub-telemetry-section" id="sectionTelemetry" aria-label="System Diagnostics">
+        <div class="telemetry-section-header">
+          <div>
+            <h3 class="telemetry-section-title">Live Server Diagnostics & Resource Telemetry</h3>
+            <p class="telemetry-section-sub">Real-time CPU, memory, storage utilization, and session quotas</p>
+          </div>
+          <div class="telemetry-refresh-indicator">
+            <span class="refresh-pulse"></span>
+            <span id="telemetryStatusText">Auto-refreshing</span>
+          </div>
+        </div>
+
+        <!-- Telemetry Cards Grid -->
+        <div class="telemetry-grid">
+          <!-- Card 1: CPU -->
+          <div class="card telemetry-card">
+            <div class="t-card-header">
+              <div class="t-icon t-icon-cpu">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                  <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
+                  <rect x="9" y="9" width="6" height="6"></rect>
+                  <line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line>
+                  <line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line>
+                  <line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line>
+                  <line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line>
+                </svg>
+              </div>
+              <div>
+                <h4 class="t-title">CPU Load</h4>
+                <span class="t-sub" id="statCpuCores">-- Cores</span>
+              </div>
+            </div>
+            <div class="t-val-main" id="statCpuPercent">--%</div>
+            <div class="t-meter-track">
+              <div class="t-meter-fill meter-cpu" id="statCpuMeter" style="width: 0%"></div>
+            </div>
+            <div class="t-details-row">
+              <span>Load 1m / 5m / 15m:</span>
+              <span class="t-val-code" id="statCpuLoadAvg">-- / -- / --</span>
+            </div>
+          </div>
+
+          <!-- Card 2: Memory / RAM -->
+          <div class="card telemetry-card">
+            <div class="t-card-header">
+              <div class="t-icon t-icon-ram">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                  <path d="M22 12H2M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path>
+                  <line x1="6" y1="16" x2="6.01" y2="16"></line><line x1="10" y1="16" x2="10.01" y2="16"></line>
+                </svg>
+              </div>
+              <div>
+                <h4 class="t-title">System Memory</h4>
+                <span class="t-sub" id="statRamTotal">-- MB Total</span>
+              </div>
+            </div>
+            <div class="t-val-main" id="statRamPercent">--%</div>
+            <div class="t-meter-track">
+              <div class="t-meter-fill meter-ram" id="statRamMeter" style="width: 0%"></div>
+            </div>
+            <div class="t-details-row">
+              <span>Used / Available:</span>
+              <span class="t-val-code" id="statRamDetails">-- / --</span>
+            </div>
+          </div>
+
+          <!-- Card 3: Host Disk Storage -->
+          <div class="card telemetry-card">
+            <div class="t-card-header">
+              <div class="t-icon t-icon-disk">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                  <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                  <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                  <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                </svg>
+              </div>
+              <div>
+                <h4 class="t-title">Host Disk Space</h4>
+                <span class="t-sub" id="statDiskTotal">-- GB Total</span>
+              </div>
+            </div>
+            <div class="t-val-main" id="statDiskPercent">--%</div>
+            <div class="t-meter-track">
+              <div class="t-meter-fill meter-disk" id="statDiskMeter" style="width: 0%"></div>
+            </div>
+            <div class="t-details-row">
+              <span>Available Free:</span>
+              <span class="t-val-code" id="statDiskFree">-- GB</span>
+            </div>
+          </div>
+
+          <!-- Card 4: App Audio Temp Storage -->
+          <div class="card telemetry-card">
+            <div class="t-card-header">
+              <div class="t-icon t-icon-storage">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                  <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                  <polyline points="2 17 12 22 22 17"></polyline>
+                  <polyline points="2 12 12 17 22 12"></polyline>
+                </svg>
+              </div>
+              <div>
+                <h4 class="t-title">Audio Temp Storage</h4>
+                <span class="t-sub" id="statActiveSessions">0 Active Sessions</span>
+              </div>
+            </div>
+            <div class="t-val-main" id="statStorageSize">0 MB</div>
+            <div class="t-meter-track">
+              <div class="t-meter-fill meter-storage" id="statStorageMeter" style="width: 0%"></div>
+            </div>
+            <div class="t-details-row">
+              <span>Quota Used:</span>
+              <span class="t-val-code" id="statStorageQuota">0% of 2048MB</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- System & Network Meta Bar -->
+        <div class="card telemetry-meta-card" style="margin-top: 1.5rem;">
+          <div class="meta-item">
+            <span class="meta-label">Socket Bind:</span>
+            <span class="meta-value" id="statEnvBind">127.0.0.1:8844</span>
+          </div>
+          <div class="meta-sep">&bull;</div>
+          <div class="meta-item">
+            <span class="meta-label">Reverse Proxy Trust:</span>
+            <span class="meta-value" id="statEnvProxy">Disabled</span>
+          </div>
+          <div class="meta-sep">&bull;</div>
+          <div class="meta-item">
+            <span class="meta-label">Proxy Domain:</span>
+            <span class="meta-value" id="statEnvDomain">Not Configured</span>
+          </div>
+          <div class="meta-sep">&bull;</div>
+          <div class="meta-item">
+            <span class="meta-label">Server Uptime:</span>
+            <span class="meta-value" id="statEnvUptime">--</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2: Access Control & Guest Mode Policy -->
+      <section class="admin-section" id="sectionAccess">
+        <div class="section-title-group">
+          <div class="section-icon-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+          </div>
+          <div>
+            <h3 class="admin-section-heading">Access Control & Public Policies</h3>
+            <p class="admin-section-sub">Manage Guest Mode reachability and session concurrency policies</p>
+          </div>
+        </div>
+
+        <div class="card admin-card">
+          <form id="formAdminSettings" class="admin-form">
+            <!-- Guest Mode Switch -->
+            <div class="settings-row" style="padding-bottom: 1.25rem; border-bottom: 1px solid var(--border-subtle);">
+              <div class="settings-label-group">
+                <span class="settings-label" style="font-size: 1.05rem; font-weight: 600;">Enable Guest Mode for Public Access (/ and /app)</span>
+                <span class="settings-subtext">When enabled, visitors can explore the Gateway Hub (/) and use MP3MetaFix (/app) without logging in. MP3MetaManager (/manager), Live Telemetry, and Admin settings remain protected.</span>
+              </div>
+              <label class="toggle-switch" aria-label="Toggle Guest Mode">
+                <input type="checkbox" id="adminGuestMode">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+
+            <!-- Concurrency & Quota Grid -->
+            <div class="settings-inputs-grid" style="margin-top: 1.25rem;">
+              <div class="form-group">
+                <label for="adminMaxSessions" class="form-label">Max Active File Sessions</label>
+                <input type="number" id="adminMaxSessions" class="form-input" min="1" max="100" value="10">
+                <span class="settings-subtext">Concurrency limit for simultaneous audio editing sessions</span>
+              </div>
+              <div class="form-group">
+                <label for="adminMaxStorage" class="form-label">Global Temp Storage Quota (MB)</label>
+                <input type="number" id="adminMaxStorage" class="form-input" min="100" max="20480" value="2048">
+                <span class="settings-subtext">Maximum disk allocation for cached audio before LRU pruning</span>
+              </div>
+            </div>
+
+            <div class="admin-actions-bar" style="margin-top: 1.5rem; display: flex; justify-content: flex-end;">
+              <button type="submit" class="btn btn-primary" id="btnSaveAdminSettings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                <span>Save System Policies</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Section 3: Software Updates & Release Management -->
+      <section class="admin-section" id="sectionUpdates">
+        <div class="section-title-group">
+          <div class="section-icon-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+          </div>
+          <div>
+            <h3 class="admin-section-heading">Software Updates & Release Inspector</h3>
+            <p class="admin-section-sub">Check for latest releases, view changelogs, and manage deployment status</p>
+          </div>
+        </div>
+
+        <div class="card admin-card">
+          <div class="update-check-header" style="margin-bottom: 1.5rem;">
+            <div>
+              <div style="display: flex; align-items: center; gap: 0.6rem;">
+                <span class="badge badge-version" id="updateCardVerBadge">v0.4.1</span>
+                <a href="https://github.com/darktekmafia/MP3MetaFix" target="_blank" rel="noopener noreferrer" class="v-link">
+                  darktekmafia/MP3MetaFix
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                </a>
+              </div>
+              <p class="section-subheading" id="adminUpdateCheckedAt" style="margin-top: 0.35rem;">Last checked: Idle</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="btnAdminCheckUpdates">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" class="spin-on-load">
+                <path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+              <span>Check for Updates</span>
+            </button>
+          </div>
+
+          <!-- Update Result Cards -->
+          <div id="adminUpdateUpToDateCard" class="update-result-card update-ok">
+            <div class="update-card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+              </svg>
+            </div>
+            <div class="update-card-content">
+              <h4>MP3MetaFix is up to date</h4>
+              <p id="adminUpToDateMsg">You are running the latest version available.</p>
+            </div>
+          </div>
+
+          <div id="adminUpdateAvailCard" class="update-result-card update-warn hidden">
+            <div class="update-card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+              </svg>
+            </div>
+            <div class="update-card-content">
+              <h4 id="adminAvailHeading">New Update Available</h4>
+              <p id="adminAvailDesc">A newer version is ready for installation.</p>
+              <div id="adminChangelogBox" class="changelog-preview-box" style="margin-top: 0.75rem;"></div>
+              <div style="margin-top: 1rem; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                <a id="adminReleaseNotesLink" href="https://github.com/darktekmafia/MP3MetaFix/releases" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">
+                  <span>View GitHub Release</span>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                </a>
+                <button id="btnAdminInstallUpdate" class="btn btn-primary btn-sm" type="button">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" class="spin-on-load" id="iconInstallUpdate">
+                    <polyline points="8 17 12 21 16 17"></polyline><line x1="12" y1="3" x2="12" y2="21"></line>
+                  </svg>
+                  <span id="btnAdminInstallUpdateLabel">Install Update</span>
+                </button>
+              </div>
+              <!-- In-app update log stream panel -->
+              <div id="adminUpdateLogPanel" class="hidden" style="margin-top: 1.25rem;">
+                <p class="section-subheading" style="margin-bottom: 0.4rem;">Installation Log</p>
+                <pre id="adminUpdateLog" style="background:var(--bg-surface,#18191d);color:var(--clr-text-soft,#b0b3c0);border:1px solid var(--border,#2e2f38);border-radius:8px;padding:0.85rem 1rem;font-size:0.72rem;line-height:1.55;max-height:260px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></pre>
+                <p id="adminUpdateStatus" style="margin-top:0.6rem;font-size:0.8rem;font-weight:600;" class="hidden"></p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 4: Administrator Credentials & Password Management -->
+      <section class="admin-section" id="sectionSecurity">
+        <div class="section-title-group">
+          <div class="section-icon-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+          </div>
+          <div>
+            <h3 class="admin-section-heading">Administrator Credentials</h3>
+            <p class="admin-section-sub">Update administrator password with PBKDF2-HMAC-SHA256 (600,000 rounds) hashing</p>
+          </div>
+        </div>
+
+        <div class="card admin-card">
+          <form id="formAdminPassword" class="admin-form">
+            <!-- Hidden username field for accessibility / password manager compliance -->
+            <input type="text" name="username" value="admin" autocomplete="username" class="sr-only" aria-hidden="true" tabindex="-1" style="display:none;">
+
+            <div class="settings-inputs-grid">
+              <div class="form-group">
+                <label for="adminPwdCurrent" class="form-label">Current Password</label>
+                <input type="password" id="adminPwdCurrent" name="adminPwdCurrent" class="form-input" required autocomplete="current-password" placeholder="Enter current password">
+              </div>
+              <div class="form-group">
+                <label for="adminPwdNew" class="form-label">New Password (Min 8 chars)</label>
+                <input type="password" id="adminPwdNew" name="adminPwdNew" class="form-input" minlength="8" required autocomplete="new-password" placeholder="Enter strong password">
+              </div>
+              <div class="form-group">
+                <label for="adminPwdConfirm" class="form-label">Confirm New Password</label>
+                <input type="password" id="adminPwdConfirm" name="adminPwdConfirm" class="form-input" minlength="8" required autocomplete="new-password" placeholder="Repeat new password">
+              </div>
+            </div>
+
+            <div class="admin-actions-bar" style="margin-top: 1.5rem; display: flex; justify-content: flex-end;">
+              <button type="submit" class="btn btn-primary" id="btnAdminChangePassword">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                <span>Update Password</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Section 5: Modular Platform Extensions (Future Milestone Containers) -->
+      <section class="admin-section" id="sectionFuture">
+        <div class="section-title-group">
+          <div class="section-icon-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+          </div>
+          <div>
+            <h3 class="admin-section-heading">Platform Extensions & Modular Components</h3>
+            <p class="admin-section-sub">Upcoming administrative subsystems and integrations</p>
+          </div>
+        </div>
+
+        <div class="admin-future-grid">
+          <div class="card admin-card future-card">
+            <div class="future-card-header">
+              <span class="app-badge-pill pill-coming-soon"><span class="pill-dot pill-dot-amber"></span> In Development</span>
+              <h4>Multi-User Accounts & RBAC</h4>
+            </div>
+            <p class="future-card-desc">
+              Granular tenant management, per-user audio storage quotas, and role-based access control (Operator, Reviewer, Administrator).
+            </p>
+          </div>
+
+          <div class="card admin-card future-card">
+            <div class="future-card-header">
+              <span class="app-badge-pill pill-coming-soon"><span class="pill-dot pill-dot-amber"></span> In Development</span>
+              <h4>Reverse Proxy & Domain Automation</h4>
+            </div>
+            <p class="future-card-desc">
+              Automated Nginx Proxy Manager integration, upstream proxy header inspection, and automated SSL certificate validation probes.
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer hub-footer" style="margin-top: 3rem;">
+      <div class="footer-content">
+        <p>MP3MetaFix &copy; 2026 &bull; Secure Server-Side Audio Metadata Suite</p>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Shared Toast Container -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <!-- Shared Auth & Settings Modals -->
+  <div id="setupModal" class="modal-overlay hidden" role="dialog" aria-labelledby="setupModalTitle" aria-modal="true">
+    <div class="modal-card auth-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+          </div>
+          <div>
+            <h2 id="setupModalTitle" class="modal-title">First-Run Administrator Setup</h2>
+            <p class="modal-subtitle">Configure primary administrator credentials for MP3MetaFix</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div id="setupErrorBanner" class="auth-error-banner hidden" role="alert">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+          <span id="setupErrorText">An error occurred during setup.</span>
+        </div>
+        <form id="formAuthSetup" class="auth-form">
+          <div class="form-group">
+            <label for="setupUsername" class="form-label">Administrator Username</label>
+            <input type="text" id="setupUsername" name="setupUsername" class="form-input" required minlength="3" maxlength="50" autocomplete="username" placeholder="e.g. admin">
+          </div>
+          <div class="form-group">
+            <label for="setupPassword" class="form-label">Admin Password (min 8 characters)</label>
+            <input type="password" id="setupPassword" name="setupPassword" class="form-input" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="Create strong password">
+          </div>
+          <div class="form-group">
+            <label for="setupConfirm" class="form-label">Confirm Password</label>
+            <input type="password" id="setupConfirm" name="setupConfirm" class="form-input" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="Repeat password">
+          </div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg" id="btnSubmitSetup" style="margin-top: 0.5rem;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            <span>Create Admin &amp; Complete Setup</span>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="loginModal" class="modal-overlay hidden" role="dialog" aria-labelledby="loginModalTitle" aria-modal="true">
+    <div class="modal-card auth-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg>
+          </div>
+          <div>
+            <h2 id="loginModalTitle" class="modal-title">Sign In to MP3MetaFix</h2>
+            <p class="modal-subtitle">Administrator access required for this workspace</p>
+          </div>
+        </div>
+        <button class="btn-close" id="btnCloseLoginModal" aria-label="Close modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="loginErrorBanner" class="auth-error-banner hidden" role="alert">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+          <span id="loginErrorText">Invalid username or password.</span>
+        </div>
+        <form id="formAuthLogin" class="auth-form">
+          <div class="form-group">
+            <label for="loginUsername" class="form-label">Username</label>
+            <input type="text" id="loginUsername" name="loginUsername" class="form-input" required autocomplete="username" placeholder="Username">
+          </div>
+          <div class="form-group">
+            <label for="loginPassword" class="form-label">Password</label>
+            <input type="password" id="loginPassword" name="loginPassword" class="form-input" required autocomplete="current-password" placeholder="Password">
+          </div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg" id="btnSubmitLogin" style="margin-top: 0.5rem;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            <span>Sign In</span>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal (redirects to Admin sections on this page) -->
+  <div id="settingsModal" class="modal-overlay hidden" role="dialog" aria-labelledby="settingsModalTitle" aria-modal="true">
+    <div class="modal-card auth-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          </div>
+          <div>
+            <h2 id="settingsModalTitle" class="modal-title">Settings &amp; Security</h2>
+            <p class="modal-subtitle">Manage system settings directly in the Admin Control Center</p>
+          </div>
+        </div>
+        <button class="btn-close" id="btnCloseSettingsModal" aria-label="Close modal">&times;</button>
+      </div>
+      <div class="modal-body" style="text-align: center; padding: 2rem 1.5rem;">
+        <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">You are already on the Admin Control Center. All system policies, access controls, and credentials are managed directly on this page.</p>
+        <div style="display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap;">
+          <a href="#sectionAccess" class="btn btn-primary btn-sm" id="btnSettingsGoAccess" onclick="document.getElementById('settingsModal').classList.add('hidden')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+            <span>Access &amp; Guest Mode</span>
+          </a>
+          <a href="#sectionSecurity" class="btn btn-secondary btn-sm" id="btnSettingsGoSecurity" onclick="document.getElementById('settingsModal').classList.add('hidden')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            <span>Change Password</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/auth.js?v=0.4.1"></script>
+  <script src="/admin/admin.js?v=0.4.1"></script>
+</body>
+</html>

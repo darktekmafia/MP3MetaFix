@@ -5,6 +5,24 @@ All notable changes to **MP3MetaFix** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-09-20
+
+### Added
+- **In-App Web Updater Re-Enabled (`POST /api/updates/apply`)**:
+  - Re-enabled the in-app software update installation endpoint now that it is fully gated behind `require_admin` (authenticated administrator role check, HMAC-signed cookie verification).
+  - Added an `asyncio.Lock()` concurrency mutex so only one update process can run at a time; concurrent requests receive HTTP 409 Conflict.
+  - Existing `CSRFProtectionMiddleware` `Sec-Fetch-Site`/`Origin` enforcement applies automatically to this mutating POST endpoint.
+  - Update progress is streamed in real-time as Server-Sent Events (SSE) from `install.sh --update --headless`, with sanitized log lines (no raw exception details or stack traces exposed to clients).
+- **Admin Panel: Install Update UI (`frontend/admin/`)**:
+  - Added **Install Update** button in the "Update Available" card of the Admin Control Center.
+  - Live installation log panel (`<pre>`) streams SSE output in real-time using the Fetch `ReadableStream` API; all dynamic content appended via safe `textContent` / `createElement` (no `innerHTML` with untrusted data).
+  - Status indicator shows success/failure outcome with colour-coded messaging after the stream closes.
+
+### Security
+- Completes **Vector 17: Update Installation Endpoint Access Control** in `docs/SECURITY_HARDENING.md`; item was previously marked `[PENDING ADMIN DESIGN]` and is now `[COMPLETED]`.
+
+---
+
 ## [0.4.0] - 2026-09-19
 
 ### Added
