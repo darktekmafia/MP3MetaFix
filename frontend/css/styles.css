@@ -2680,9 +2680,10 @@ button {
 }
 
 /* ==========================================================================
-   Responsive Rules for Gateway Hub (Mobile & Tablet)
+   Responsive Rules for Gateway Hub, Mobile Editor (/app), and Manager
    ========================================================================== */
-.sub-short {
+.sub-short,
+.btn-txt-short {
   display: none;
 }
 
@@ -2702,14 +2703,14 @@ button {
 }
 
 @media (max-width: 768px) {
-  .hub-apps-grid {
-    grid-template-columns: 1fr;
-    gap: 1rem;
-    margin-bottom: 2rem;
+  .app-container {
+    padding: 1rem 1rem 2.5rem;
   }
   .app-header {
     flex-wrap: wrap;
-    gap: 0.75rem;
+    gap: 0.65rem;
+    padding: 0.75rem 0.9rem;
+    margin-bottom: 1.25rem;
   }
   .app-switcher-nav {
     order: 3;
@@ -2726,9 +2727,47 @@ button {
     padding: 0.35rem 0.5rem;
     font-size: 0.78rem;
   }
+  .hub-apps-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  /* Editor Toolbar in /app */
+  .editor-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+    padding: 0.85rem;
+  }
+  .file-loaded-info {
+    width: 100%;
+  }
+  .loaded-filename {
+    max-width: 100%;
+  }
+  .toolbar-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.45rem;
+  }
+  .toolbar-actions .btn {
+    padding: 0.55rem 0.45rem;
+    font-size: 0.8rem;
+    justify-content: center;
+  }
 }
 
 @media (max-width: 640px) {
+  .btn-txt-full {
+    display: none;
+  }
+  .btn-txt-short {
+    display: inline;
+  }
+  .app-container {
+    padding: 0.75rem 0.75rem 2rem;
+  }
   .hub-container {
     padding: 0.85rem 0.85rem 2rem;
   }
@@ -2800,7 +2839,7 @@ button {
     margin-left: 0;
   }
 
-  /* Compact Cards for mobile so both fit with minimal scrolling */
+  /* Compact Cards for Hub */
   .hub-apps-grid {
     gap: 0.85rem;
     margin-bottom: 1.75rem;
@@ -2861,6 +2900,103 @@ button {
     padding: 0.65rem 1rem;
     font-size: 0.88rem;
     min-height: 42px;
+  }
+
+  /* Dropzone & Editor in /app */
+  .dropzone-card {
+    min-height: 260px;
+    padding: 2rem 1rem;
+    border-radius: var(--radius-lg);
+  }
+  .dropzone-icon-wrapper {
+    width: 60px;
+    height: 60px;
+    margin-bottom: 1rem;
+  }
+  .dropzone-icon {
+    width: 28px;
+    height: 28px;
+  }
+  .dropzone-title {
+    font-size: 1.25rem;
+    margin-bottom: 0.35rem;
+  }
+  .dropzone-desc {
+    font-size: 0.82rem;
+    margin-bottom: 1rem;
+  }
+  .card {
+    padding: 1.05rem;
+    border-radius: var(--radius-md);
+  }
+  .card-header {
+    margin-bottom: 0.85rem;
+  }
+  .artwork-preview-container {
+    max-height: 300px;
+  }
+  .artwork-btn-group {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.35rem;
+    margin-top: 0.75rem;
+  }
+  .artwork-btn-group .btn {
+    padding: 0.45rem 0.35rem;
+    font-size: 0.76rem;
+  }
+  .waveform-container {
+    height: 52px;
+  }
+  .player-btn-play {
+    width: 38px;
+    height: 38px;
+  }
+  .player-btn-play svg {
+    width: 17px;
+    height: 17px;
+  }
+  .tabs-header {
+    gap: 0.3rem;
+    padding-bottom: 0.5rem;
+    margin-bottom: 1rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tab-btn {
+    padding: 0.4rem 0.65rem;
+    font-size: 0.78rem;
+  }
+  .form-grid {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+  .canned-comment-toolbar {
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+  .canned-select-wrapper {
+    flex: 1;
+    min-width: 130px;
+  }
+  .select-canned-comment {
+    font-size: 0.76rem;
+    height: 32px;
+  }
+  #btnSaveCannedComment {
+    font-size: 0.7rem;
+    padding: 0.2rem 0.45rem;
+    height: 32px;
+  }
+  #btnManageCannedComments {
+    width: 32px;
+    height: 32px;
+  }
+  .naming-presets {
+    gap: 0.35rem;
+  }
+  .preset-btn {
+    font-size: 0.72rem;
+    padding: 0.25rem 0.45rem;
   }
 
   /* Telemetry section */
@@ -2931,7 +3067,7 @@ button {
     font-size: 0.76rem;
     word-break: break-all;
   }
-  .hub-footer {
+  .app-footer {
     flex-direction: column;
     text-align: center;
     gap: 0.4rem;
@@ -2953,11 +3089,14 @@ button {
 }
 
 @media (max-width: 480px) {
+  .app-container {
+    padding: 0.5rem 0.5rem 1.75rem;
+  }
   .hub-container {
     padding: 0.65rem 0.65rem 1.75rem;
   }
   .app-header {
-    padding: 0.6rem 0.75rem;
+    padding: 0.55rem 0.65rem;
   }
   .brand-group {
     gap: 0.5rem;
@@ -3059,6 +3198,55 @@ button {
     font-size: 0.72rem;
     padding: 0.28rem 0.35rem;
     gap: 0.2rem;
+  }
+  /* Mobile editor toolbar buttons in /app */
+  .toolbar-actions .btn {
+    padding: 0.5rem 0.25rem;
+    font-size: 0.74rem;
+    gap: 0.25rem;
+  }
+  .toolbar-actions .btn svg {
+    width: 14px;
+    height: 14px;
+  }
+  .dropzone-card {
+    min-height: 220px;
+    padding: 1.5rem 0.75rem;
+  }
+  .dropzone-icon-wrapper {
+    width: 50px;
+    height: 50px;
+    margin-bottom: 0.75rem;
+  }
+  .dropzone-icon {
+    width: 24px;
+    height: 24px;
+  }
+  .dropzone-title {
+    font-size: 1.15rem;
+  }
+  .dropzone-tags {
+    gap: 0.25rem;
+  }
+  .tag-pill {
+    font-size: 0.65rem;
+    padding: 0.15rem 0.45rem;
+  }
+  .artwork-preview-container {
+    max-height: 240px;
+  }
+  .artwork-btn-group .btn {
+    padding: 0.4rem 0.25rem;
+    font-size: 0.7rem;
+    gap: 0.2rem;
+  }
+  .artwork-btn-group .btn svg {
+    width: 13px;
+    height: 13px;
+  }
+  .tab-btn {
+    padding: 0.35rem 0.5rem;
+    font-size: 0.74rem;
   }
 }
 
