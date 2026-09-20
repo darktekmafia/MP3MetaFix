@@ -153,24 +153,29 @@ Detailed deployment instructions are documented in [docs/DEPLOYMENT.md](docs/DEP
 
 ```mermaid
 graph TD
-    Client([Browser / Desktop Launcher]) <-->|HTTPS| RP[Reverse Proxy Nginx / Caddy]
-    RP <-->|HTTP Stream| Backend[FastAPI Backend]
-    subgraph Security Defense Stack
-        CSRF[CSRF & Origin Inspector]
-        RateLimit[Anti-Spoofing Rate Limiter]
-        Val[Magic Byte & MIME Validator]
-        San[Filename & Metadata Sanitizer]
-        HMAC[Timestamped HMAC Authenticator]
-        Quota[Storage Quota & LRU Eviction]
-        TTL[Background TTL Worker]
+    Client(["Browser / Desktop Launcher"]) <-->|HTTPS| RP["Reverse Proxy (Nginx / Caddy)"]
+    RP <-->|HTTP Stream| Backend["FastAPI Backend"]
+
+    subgraph SecurityDefense["Security Defense Stack"]
+        direction TB
+        CSRF["CSRF & Origin Inspector"]
+        RateLimit["Anti-Spoofing Rate Limiter"]
+        Val["Magic Byte & MIME Validator"]
+        San["Filename & Metadata Sanitizer"]
+        HMAC["Timestamped HMAC Authenticator"]
+        Quota["Storage Quota & LRU Eviction"]
+        TTL["Background TTL Worker"]
     end
-    subgraph Audio Engine
-        Mutagen[Mutagen ID3v2.4 Engine]
-        Pillow[Pillow APIC Decompression Defense]
+
+    subgraph AudioEngine["Audio Engine"]
+        direction TB
+        Mutagen["Mutagen ID3v2.4 Engine"]
+        Pillow["Pillow APIC Decompression Defense"]
     end
-    Backend --> Security Defense Stack
-    Backend --> Audio Engine
-    Security Defense Stack --> Storage[(Decoupled Hashed Storage 0700)]
+
+    Backend --> CSRF
+    Backend --> Mutagen
+    Quota --> Storage[("Decoupled Hashed Storage (POSIX 0700)")]
 ```
 
 For in-depth technical documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md).
