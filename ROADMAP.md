@@ -59,6 +59,26 @@ Provide a complete in-app lifecycle updater directly from the web interface, lev
   - Safe, non-destructive migration helper in `install.sh --update` to upgrade legacy service units to use `--no-proxy-headers` and dynamic host/port bindings while preserving administrator customizations.
 - [x] **Service Network Access, Proxy Trust & LAN Configuration Helper (`scripts/configure_access.py`) [COMPLETED]**:
   - Maintenance CLI workflow (`install.sh --access`, `--lan`, `--local`, `--bind`, `--proxy`, `--domain`, `--no-domain`, `--no-proxy`, `--trusted-proxies`) to inspect and update host/port bindings, proxy domains, and reverse proxy trust rules safely with automatic daemon reloading and healthcheck verification.
+- [x] **Multi-Interface Architecture & System Telemetry Portal [COMPLETED]**:
+  - Central Gateway Hub (`/`) featuring live system telemetry (CPU, RAM, Disk, MP3 temporary storage footprint) and interface selector cards.
+  - Dedicated sub-applications: MP3MetaFix mobile-first editor (`/app`) and MP3MetaManager desktop workspace foundation (`/manager`).
+  - Persistent Top Navigation App Switcher pill across headers.
+  - Real-time diagnostic telemetry endpoint (`GET /api/system/stats`).
+
+---
+
+## 🗂️ 3. MP3MetaManager Desktop Interface & Batch Power Tools
+
+Dedicated desktop workspace (`/manager`) for deep multi-track workflows:
+
+- [ ] **High-Density Multi-Track Data Table**:
+  - Multi-column spreadsheet-like grid with keyboard navigation (<kbd>Tab</kbd>, <kbd>Enter</kbd>, arrow keys).
+  - Bulk tag applicator (apply common Artist, Album, Genre, Artwork to all selected rows).
+  - Sequential auto-numbering and track reordering.
+- [ ] **Suno AI Stem & Generation Tree Organizer**:
+  - Parent/child visual hierarchy for variations, extensions, and vocal/instrumental stems.
+- [ ] **Tap-to-Sync Karaoke Lyric Stamping**:
+  - Real-time timestamp stamping during audio playback for ID3 `SYLT` binary frames and `.lrc` companion export.
 
 ---
 

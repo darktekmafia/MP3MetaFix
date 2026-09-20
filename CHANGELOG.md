@@ -5,6 +5,21 @@ All notable changes to **MP3MetaFix** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-19
+
+### Added
+- **Multi-Interface Architecture & Gateway Hub (`/`)**:
+  - Implemented a unified Gateway Hub and system dashboard served at `/` allowing users to choose between the focused mobile-first editor (**MP3MetaFix**) and the desktop power-user workspace (**MP3MetaManager**).
+  - Dedicated sub-application static routing: `/app` for MP3MetaFix and `/manager` for MP3MetaManager.
+  - Interactive **Top Navigation App Switcher** pill embedded across application headers for instant switching between workspaces and the hub without losing context.
+- **Live System Telemetry & Diagnostic Endpoint (`GET /api/system/stats`)**:
+  - Added real-time non-sensitive telemetry endpoint returning CPU load averages (`1m`, `5m`, `15m`, cores count), RAM memory capacity & utilization, host disk storage, and MP3 temporary cache quota usage.
+  - Interactive live-updating telemetry cards on the Gateway Hub with auto-refresh intervals and smooth animated meters.
+- **MP3MetaManager Desktop Workspace Foundation (`/manager`)**:
+  - Built desktop workspace shell with responsive sidebar categories (Batch Queue, Suno AI Stems, Synced Lyrics SYLT, Karaoke Tap-to-Sync) and top-level search and batch action toolbars.
+
+---
+
 ## [0.3.4] - 2026-09-19
 
 ### Added

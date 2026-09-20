@@ -1,15 +1,20 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.3.4-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 
-**MP3MetaFix** is a high-performance, security-focused web application and server-side MP3 metadata editor. Designed for seamless local desktop usage on Fedora / Ubuntu and headless server deployment inside **Proxmox LXC containers** behind reverse proxies.
+**MP3MetaFix** is a high-performance, security-focused audio metadata suite featuring a **System Telemetry & Gateway Hub (`/`)**, a **Mobile-First Focused Tagger (`/app`)**, and a **Desktop Power-User Manager Workspace (`/manager`)**. Designed for seamless local desktop usage on Fedora / Ubuntu and headless server deployment inside **Proxmox LXC containers** behind reverse proxies.
 
 ---
 
 ## ✨ Features
 
+- 🌐 **Multi-Interface Architecture & Gateway Hub**:
+  - **Gateway Hub (`/`)**: Real-time system telemetry dashboard displaying CPU load, memory utilization, disk space, and MP3 temporary cache quotas with one-click app launching.
+  - **MP3MetaFix (`/app`)**: Lightweight, mobile-first, single-track ID3v2.4 editor.
+  - **MP3MetaManager (`/manager`)**: Desktop power-user multi-track management and batch workspace.
+  - **Persistent App Switcher**: Header navigation pill allowing instant workspace jumping without context loss.
 - 🎧 **Complete ID3v2.4 & ID3v2.3 Tagging**:
   - Track Title, Artist, Album, Album Artist, Genre, Year / Date
   - Track Number / Total Tracks, Disc Number / Total Discs, BPM, Composer

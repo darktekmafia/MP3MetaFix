@@ -1955,4 +1955,620 @@ button {
   min-width: 140px;
 }
 
+/* ==========================================================================
+   App Switcher Navigation Pill
+   ========================================================================== */
+.brand-link {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.app-switcher-nav {
+  display: flex;
+  align-items: center;
+}
+
+.app-switcher-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  background: rgba(10, 15, 29, 0.85);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9999px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+}
+
+.switcher-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-radius: 9999px;
+  transition: all var(--transition-fast);
+}
+
+.switcher-link:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.switcher-link.active {
+  color: #fff;
+  background: linear-gradient(135deg, var(--primary-glow), #4f46e5);
+  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.4);
+}
+
+.switcher-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+/* ==========================================================================
+   Gateway Hub & Interface Selector Portal
+   ========================================================================== */
+.hub-body {
+  background-color: var(--bg-dark);
+}
+
+.hub-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem 2rem 4rem;
+}
+
+.hub-header {
+  margin-bottom: 2.5rem;
+}
+
+.hub-hero {
+  text-align: center;
+  margin-bottom: 3rem;
+}
+
+.hub-hero-title {
+  font-family: var(--font-display);
+  font-size: 2.3rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 50%, #94a3b8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 0.6rem;
+}
+
+.hub-hero-subtitle {
+  font-size: 1.05rem;
+  color: var(--text-muted);
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+/* Application Cards Grid */
+.hub-apps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 2rem;
+  margin-bottom: 4rem;
+}
+
+.app-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 2rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--glass-card-shadow);
+  backdrop-filter: var(--glass-blur);
+  overflow: hidden;
+  transition: transform var(--transition-smooth), border-color var(--transition-smooth), box-shadow var(--transition-smooth);
+}
+
+.app-card:hover {
+  transform: translateY(-5px);
+  border-color: rgba(99, 102, 241, 0.4);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 25px rgba(99, 102, 241, 0.2);
+}
+
+.app-card-manager:hover {
+  border-color: rgba(56, 189, 248, 0.4);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 25px rgba(56, 189, 248, 0.2);
+}
+
+.app-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.app-badge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border-radius: 9999px;
+}
+
+.pill-primary {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.pill-accent {
+  background: rgba(56, 189, 248, 0.15);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+}
+
+.app-icon-wrapper {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.icon-fix {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(79, 70, 229, 0.35));
+  color: #818cf8;
+  border: 1px solid rgba(129, 140, 248, 0.3);
+}
+
+.icon-mgr {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(14, 165, 233, 0.3));
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.app-title {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 0.25rem;
+}
+
+.app-tagline {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent-cyan);
+  margin-bottom: 0.85rem;
+}
+
+.app-desc {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 1.5rem;
+}
+
+.app-features-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 2rem;
+}
+
+.app-features-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.84rem;
+  color: var(--text-main);
+}
+
+.app-features-list li svg {
+  color: var(--accent-emerald);
+  flex-shrink: 0;
+}
+
+.btn-block {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+}
+
+.btn-lg {
+  padding: 0.85rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+}
+
+/* ==========================================================================
+   Live System Telemetry Dashboard
+   ========================================================================== */
+.hub-telemetry-section {
+  padding-top: 2rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.telemetry-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.telemetry-section-title {
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 0.2rem;
+}
+
+.telemetry-section-sub {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.telemetry-refresh-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.refresh-pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--accent-emerald);
+  box-shadow: 0 0 8px var(--accent-emerald);
+  animation: pulse-dot 2s infinite ease-in-out;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.telemetry-card {
+  padding: 1.35rem;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--glass-card-shadow);
+}
+
+.t-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.t-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.t-icon-cpu { background: rgba(99, 102, 241, 0.18); color: #818cf8; }
+.t-icon-ram { background: rgba(236, 72, 153, 0.18); color: #f472b6; }
+.t-icon-disk { background: rgba(56, 189, 248, 0.18); color: #38bdf8; }
+.t-icon-storage { background: rgba(16, 185, 129, 0.18); color: #34d399; }
+
+.t-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.t-sub {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.t-val-main {
+  font-family: var(--font-display);
+  font-size: 1.65rem;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: 0.6rem;
+}
+
+.t-meter-track {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  overflow: hidden;
+  margin-bottom: 0.85rem;
+}
+
+.t-meter-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.meter-cpu { background: linear-gradient(90deg, #6366f1, #818cf8); }
+.meter-ram { background: linear-gradient(90deg, #ec4899, #f472b6); }
+.meter-disk { background: linear-gradient(90deg, #0284c7, #38bdf8); }
+.meter-storage { background: linear-gradient(90deg, #059669, #10b981); }
+
+.t-details-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.t-val-code {
+  font-family: var(--font-mono, monospace);
+  color: #cbd5e1;
+  font-weight: 500;
+}
+
+/* Environment Info Bar */
+.telemetry-env-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.env-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.env-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.env-value {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.env-link {
+  color: var(--accent-cyan);
+  text-decoration: none;
+}
+
+.env-link:hover {
+  text-decoration: underline;
+}
+
+.env-divider {
+  width: 1px;
+  height: 30px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ==========================================================================
+   Manager Workspace Shell Styles
+   ========================================================================== */
+.manager-container {
+  max-width: 1400px;
+}
+
+.manager-workspace {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.manager-sidebar {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.sidebar-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin-bottom: 0.6rem;
+  padding-left: 0.5rem;
+}
+
+.sidebar-nav-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sidebar-nav-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  text-align: left;
+}
+
+.sidebar-nav-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-nav-item.active .sidebar-nav-btn {
+  color: #fff;
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.nav-count-badge {
+  margin-left: auto;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+  color: var(--text-dim);
+}
+
+.manager-main-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.manager-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  gap: 1rem;
+}
+
+.toolbar-search-group {
+  position: relative;
+  flex: 1;
+  max-width: 400px;
+}
+
+.toolbar-search-group .search-icon {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.toolbar-search-group .search-input {
+  padding-left: 2.25rem;
+  font-size: 0.85rem;
+  height: 36px;
+}
+
+.manager-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.manager-empty-state {
+  text-align: center;
+  padding: 4rem 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.empty-state-icon {
+  width: 80px;
+  height: 80px;
+  border-radius: var(--radius-lg);
+  background: rgba(56, 189, 248, 0.1);
+  color: var(--accent-cyan);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+.empty-state-title {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 0.6rem;
+}
+
+.empty-state-desc {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  max-width: 540px;
+  line-height: 1.6;
+  margin-bottom: 1.75rem;
+}
+
+.manager-feature-badges {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 2rem;
+}
+
+.empty-state-actions {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+@media (max-width: 860px) {
+  .manager-workspace {
+    grid-template-columns: 1fr;
+  }
+  .env-divider {
+    display: none;
+  }
+  .telemetry-env-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+
 

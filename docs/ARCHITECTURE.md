@@ -134,3 +134,25 @@ MP3MetaFix packages an intelligent, non-destructive maintenance engine for syste
 - **Atomic Replacement**: Employs permissions-preserving atomic file replacement matching `scripts/migrate_service.py`.
 - **Informational Proxy Probing**: The configured `MP3METAFIX_PROXY_HOST` domain/URL is strictly informational for verifying upstream reachability and presenting client access links; it does not alter server socket listening boundaries (which remain strictly governed by `MP3METAFIX_HOST`).
 - **Automated Lifecycle & Health Probing**: Integrated with `install.sh` (`--access`, `--lan`, `--local`, `--bind`, `--proxy`, `--domain`, `--no-domain`, `--no-proxy`, `--trusted-proxies`) to automate daemon reloading, service restarts, and dual-probe health verification across both local interfaces and external proxy domains.
+
+---
+
+## 7. Multi-Interface Architecture & System Telemetry Portal
+
+MP3MetaFix decouples user interaction into two specialized frontends sharing a unified FastAPI backend, ID3 engine, and storage security model:
+
+1. **Gateway Hub & Telemetry Dashboard (`/`)**:
+   - Acts as the central portal for selecting the desired workspace.
+   - Provides real-time server telemetry via `GET /api/system/stats` (CPU load, memory capacity/usage, disk space, and MP3 temporary cache quota).
+   - Zero sensitive information exposure (no raw host paths or secrets).
+
+2. **MP3MetaFix Focused Editor (`/app`)**:
+   - Mobile-first, touch-friendly single-track ID3v2.4 editor.
+   - Tailored for fast metadata fixing, Suno AI prompt extraction, APIC cover art cropping, unsynchronized lyrics (`USLT`), and canned comment presets.
+
+3. **MP3MetaManager Desktop Workspace (`/manager`)**:
+   - Desktop-optimized interface for power-user multi-track management.
+   - Foundation for batch tagging, directory library exploration, Suno AI stem organization, and tap-to-sync karaoke timestamping (`SYLT`).
+
+4. **Global App Switcher**:
+   - Embedded header pill navigation allowing instant switching between `/app`, `/manager`, and `/` without navigating away from the application.

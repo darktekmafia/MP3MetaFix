@@ -1,12 +1,12 @@
-"""FastAPI Application entrypoint for MP3MetaFix."""
-
 import os
 import io
+import time
+import shutil
 import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 import re
 import urllib.parse
 from fastapi import (
@@ -32,12 +32,16 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from backend.config import (
     STATIC_DIR,
+    APP_DIR,
+    MANAGER_DIR,
     ASSETS_DIR,
+    DATA_DIR,
     VERSION,
     MAX_UPLOAD_SIZE_BYTES,
     MAX_ARTWORK_SIZE_BYTES,
     TRUST_PROXIES,
     TRUSTED_PROXIES,
+    PROXY_HOST,
     HOST,
     PORT,
     SESSION_COOKIE_NAME,
@@ -141,6 +145,102 @@ def get_current_session_id(request: Request) -> str:
 async def health_check():
     """Health check endpoint supporting both GET and HEAD requests."""
     return {"status": "ok", "version": VERSION}
+
+
+SERVER_START_TIME = time.time()
+
+
+def get_system_telemetry() -> Dict[str, Any]:
+    """Gather non-sensitive system resources and application metrics."""
+    # 1. CPU
+    cpu_count = os.cpu_count() or 1
+    try:
+        load_1, load_5, load_15 = os.getloadavg()
+    except Exception:
+        load_1, load_5, load_15 = (0.0, 0.0, 0.0)
+    cpu_percent = round(min(100.0, (load_1 / cpu_count) * 100), 1)
+
+    # 2. RAM (Linux /proc/meminfo or sysconf)
+    ram_total_bytes = 0
+    ram_available_bytes = 0
+    meminfo_path = Path("/proc/meminfo")
+    if meminfo_path.exists():
+        try:
+            with open(meminfo_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        ram_total_bytes = int(line.split()[1]) * 1024
+                    elif line.startswith("MemAvailable:"):
+                        ram_available_bytes = int(line.split()[1]) * 1024
+        except Exception:
+            pass
+    if ram_total_bytes == 0:
+        try:
+            pages = os.sysconf("SC_PHYS_PAGES")
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            ram_total_bytes = pages * page_size
+            ram_available_bytes = ram_total_bytes // 2
+        except Exception:
+            ram_total_bytes = 1024 * 1024 * 1024
+            ram_available_bytes = ram_total_bytes // 2
+
+    ram_used_bytes = max(0, ram_total_bytes - ram_available_bytes)
+    ram_used_percent = round((ram_used_bytes / ram_total_bytes) * 100, 1) if ram_total_bytes > 0 else 0.0
+
+    # 3. Disk
+    try:
+        disk_usage = shutil.disk_usage(DATA_DIR)
+        disk_total_bytes = disk_usage.total
+        disk_used_bytes = disk_usage.used
+        disk_free_bytes = disk_usage.free
+        disk_used_percent = round((disk_used_bytes / disk_total_bytes) * 100, 1) if disk_total_bytes > 0 else 0.0
+    except Exception:
+        disk_total_bytes = disk_used_bytes = disk_free_bytes = 0
+        disk_used_percent = 0.0
+
+    # 4. Storage & sessions
+    storage_stats = storage_manager.get_session_stats()
+
+    # 5. Uptime & Server info
+    uptime_seconds = int(time.time() - SERVER_START_TIME)
+
+    return {
+        "status": "ok",
+        "version": VERSION,
+        "uptime_seconds": uptime_seconds,
+        "cpu": {
+            "cores": cpu_count,
+            "load_1m": round(load_1, 2),
+            "load_5m": round(load_5, 2),
+            "load_15m": round(load_15, 2),
+            "estimated_percent": cpu_percent,
+        },
+        "memory": {
+            "total_mb": round(ram_total_bytes / (1024 * 1024), 1),
+            "used_mb": round(ram_used_bytes / (1024 * 1024), 1),
+            "available_mb": round(ram_available_bytes / (1024 * 1024), 1),
+            "used_percent": ram_used_percent,
+        },
+        "disk": {
+            "total_gb": round(disk_total_bytes / (1024 ** 3), 2),
+            "used_gb": round(disk_used_bytes / (1024 ** 3), 2),
+            "free_gb": round(disk_free_bytes / (1024 ** 3), 2),
+            "used_percent": disk_used_percent,
+        },
+        "app_storage": storage_stats,
+        "network": {
+            "host": HOST,
+            "port": PORT,
+            "trust_proxies": TRUST_PROXIES,
+            "proxy_host": PROXY_HOST,
+        },
+    }
+
+
+@app.api_route("/api/system/stats", methods=["GET", "HEAD"])
+async def get_system_stats():
+    """System telemetry and resource diagnostics endpoint."""
+    return get_system_telemetry()
 
 
 @app.api_route("/api/version", methods=["GET", "HEAD"])
@@ -589,9 +689,15 @@ async def delete_session(
 
 
 
-# Serve static assets and web frontend
+# Serve static assets and sub-applications
 if ASSETS_DIR.is_dir():
     app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+
+if APP_DIR.is_dir():
+    app.mount("/app", StaticFiles(directory=APP_DIR, html=True), name="app")
+
+if MANAGER_DIR.is_dir():
+    app.mount("/manager", StaticFiles(directory=MANAGER_DIR, html=True), name="manager")
 
 if STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")

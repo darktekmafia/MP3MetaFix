@@ -2,6 +2,7 @@
 
 import io
 import time
+import json
 import pytest
 from pathlib import Path
 from PIL import Image
@@ -202,6 +203,92 @@ def test_api_health_and_version(client):
 
     res_ver_head = client.head("/api/version")
     assert res_ver_head.status_code == 200
+
+
+def test_api_system_stats_telemetry(client):
+    """Verify system telemetry stats endpoint and security boundaries."""
+    res = client.get("/api/system/stats")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "ok"
+    assert data["version"] == VERSION
+    assert isinstance(data["uptime_seconds"], int)
+
+    # CPU metrics
+    assert "cpu" in data
+    assert "cores" in data["cpu"]
+    assert "load_1m" in data["cpu"]
+    assert "estimated_percent" in data["cpu"]
+
+    # Memory metrics
+    assert "memory" in data
+    assert "total_mb" in data["memory"]
+    assert "used_percent" in data["memory"]
+
+    # Disk metrics
+    assert "disk" in data
+    assert "total_gb" in data["disk"]
+    assert "free_gb" in data["disk"]
+
+    # App temporary storage metrics
+    assert "app_storage" in data
+    assert "temp_storage_mb" in data["app_storage"]
+    assert "active_sessions_count" in data["app_storage"]
+    assert "max_temp_storage_mb" in data["app_storage"]
+
+    # Network runtime metrics
+    assert "network" in data
+    assert "host" in data["network"]
+    assert "port" in data["network"]
+
+    # Security check: Ensure raw secret keys or sensitive root paths are not leaked
+    dumped = json.dumps(data)
+    assert "/proc" not in dumped
+    assert "secret_key" not in dumped
+
+    # HEAD request support
+    res_head = client.head("/api/system/stats")
+    assert res_head.status_code == 200
+
+
+def test_multi_interface_static_mounts(client):
+    """Verify routing across Gateway Hub (/), Quick Fix (/app), and Manager (/manager)."""
+    # 1. Gateway Hub (/)
+    res_hub = client.get("/")
+    assert res_hub.status_code == 200
+    assert "Select Workspace Interface" in res_hub.text
+    assert "MP3MetaFix" in res_hub.text
+    assert "MP3MetaManager" in res_hub.text
+
+    # 2. MP3MetaFix Quick Editor (/app)
+    res_app = client.get("/app/")
+    assert res_app.status_code == 200
+    assert "Drop your MP3 file here" in res_app.text
+    assert "app-switcher-nav" in res_app.text
+
+    # 3. MP3MetaManager Desktop Workspace (/manager)
+    res_mgr = client.get("/manager/")
+    assert res_mgr.status_code == 200
+    assert "MP3MetaManager Desktop Workspace" in res_mgr.text
+    assert "app-switcher-nav" in res_mgr.text
+
+
+def test_security_static_mounts_and_telemetry_isolation(client):
+    """Verify security isolation, method rejection, and directory traversal defense."""
+    # 1. Mutating HTTP methods on telemetry must be rejected
+    assert client.post("/api/system/stats").status_code == 405
+    assert client.delete("/api/system/stats").status_code == 405
+    assert client.put("/api/system/stats").status_code == 405
+
+    # 2. Directory traversal attempts against static endpoints must fail
+    res_trav1 = client.get("/app/../../etc/passwd")
+    assert res_trav1.status_code in (404, 400)
+
+    res_trav2 = client.get("/manager/....//....//etc/shadow")
+    assert res_trav2.status_code in (404, 400)
+
+    res_trav3 = client.get("/assets/../../backend/config.py")
+    assert res_trav3.status_code in (404, 400)
 
 
 def test_api_upload_invalid_file(client):

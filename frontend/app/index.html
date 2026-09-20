@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MP3MetaFix - Server-side MP3 metadata editor with ID3v2 tag and cover art management">
+  <title>MP3MetaFix | MP3 Metadata & Cover Art Editor</title>
+  
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  
+  <link rel="icon" type="image/svg+xml" href="/assets/mp3metafix.svg">
+  <link rel="stylesheet" href="/css/styles.css?v=0.4.0">
+</head>
+<body class="app-body">
+  <!-- Dynamic Background Glow Elements -->
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div class="bg-glow bg-glow-3"></div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand-group">
+        <a href="/" class="brand-link" title="Return to Portal Hub">
+          <div class="brand-logo-container">
+            <img src="/assets/mp3metafix.svg" alt="MP3MetaFix Logo" class="brand-logo" width="44" height="44">
+          </div>
+          <div class="brand-text">
+            <h1 class="brand-title">MP3<span>MetaFix</span></h1>
+            <p class="brand-subtitle">Server-Side Audio Metadata & Cover Art Editor</p>
+          </div>
+        </a>
+      </div>
+
+      <!-- App Switcher Nav -->
+      <nav class="app-switcher-nav" aria-label="Application Switcher">
+        <div class="app-switcher-pill">
+          <a href="/app" class="switcher-link active" title="MP3MetaFix (Quick Single-Track Editor)">
+            <span class="switcher-icon">⚡</span>
+            <span class="switcher-label">MP3MetaFix</span>
+          </a>
+          <a href="/manager" class="switcher-link" title="MP3MetaManager (Desktop Library & Batch Manager)">
+            <span class="switcher-icon">🗂️</span>
+            <span class="switcher-label">MetaManager</span>
+          </a>
+          <a href="/" class="switcher-link" title="Gateway Hub & System Overview">
+            <span class="switcher-icon">🏠</span>
+            <span class="switcher-label">Hub</span>
+          </a>
+        </div>
+      </nav>
+
+      <div class="header-badges">
+        <button class="badge badge-version badge-btn" id="versionBadge" title="Click to view Version Details & Updates">...</button>
+        <button class="badge badge-update hidden" id="updateBadge" title="New version available! Click to inspect"><span class="update-pulse-dot"></span> Update Available</button>
+        <button class="btn btn-icon btn-header" id="btnVersionModal" title="Version & Update Manager" aria-label="Version and Update Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
+        <span class="badge badge-status" id="serverStatus"><span class="status-dot"></span> Online</span>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- State 1: Upload Dropzone -->
+      <section id="uploadSection" class="upload-section">
+        <div id="dropzone" class="dropzone-card" tabindex="0" role="button" aria-label="Upload MP3 file dropzone">
+          <input type="file" id="fileInput" accept=".mp3,audio/mpeg" class="visually-hidden">
+          <div class="dropzone-glow"></div>
+          <div class="dropzone-content">
+            <div class="dropzone-icon-wrapper">
+              <svg class="dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+            </div>
+            <h2 class="dropzone-title">Drop your MP3 file here</h2>
+            <p class="dropzone-desc">Drag and drop an audio file, or click anywhere to browse</p>
+            <div class="dropzone-tags">
+              <span class="tag-pill">MP3 Audio</span>
+              <span class="tag-pill">ID3v2.3 / ID3v2.4</span>
+              <span class="tag-pill">Embedded Album Art</span>
+              <span class="tag-pill">Up to 150 MB</span>
+            </div>
+          </div>
+          <!-- Upload Progress Bar (hidden by default) -->
+          <div id="uploadProgressContainer" class="upload-progress-container hidden">
+            <div class="progress-info">
+              <span id="uploadStatusText">Uploading and parsing audio stream...</span>
+              <span id="uploadPercent">0%</span>
+            </div>
+            <div class="progress-bar-track">
+              <div id="uploadProgressBar" class="progress-bar-fill" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- State 2: Metadata Editor Workspace (hidden by default) -->
+      <section id="editorSection" class="editor-section hidden">
+        <!-- Top Toolbar -->
+        <div class="editor-toolbar">
+          <div class="file-loaded-info">
+            <div class="file-icon-badge">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18V5l12-2v13"></path>
+                <circle cx="6" cy="18" r="3"></circle>
+                <circle cx="18" cy="16" r="3"></circle>
+              </svg>
+            </div>
+            <div>
+              <div id="loadedFilename" class="loaded-filename" title="track.mp3">track.mp3</div>
+              <div id="loadedAudioSpecs" class="loaded-specs">320 kbps • 44.1 kHz • Stereo • 03:45</div>
+            </div>
+          </div>
+          <div class="toolbar-actions">
+            <button id="btnNewFile" class="btn btn-secondary" title="Upload a different MP3">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
+                <polyline points="16 6 12 2 8 6"></polyline>
+                <line x1="12" y1="2" x2="12" y2="15"></line>
+              </svg>
+              <span>New File</span>
+            </button>
+            <button id="btnSave" class="btn btn-primary" title="Save metadata (Ctrl+S)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+              </svg>
+              <span>Save Changes</span>
+            </button>
+            <button id="btnSaveDownload" class="btn btn-accent" title="Save changes & download updated MP3">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <span>Save & Download</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Grid Workspace -->
+        <div class="workspace-grid">
+          <!-- Left Column: Artwork & Audio Player -->
+          <div class="left-panel">
+            <!-- Cover Art Card -->
+            <div class="card artwork-card">
+              <div class="card-header">
+                <h3 class="card-title">Album Artwork</h3>
+                <span id="artworkStatusBadge" class="tag-pill tag-pill-sm">Embedded</span>
+              </div>
+              
+              <div class="artwork-preview-container" id="artworkDropzone">
+                <input type="file" id="artworkInput" accept="image/jpeg,image/png,image/webp" class="visually-hidden">
+                <img id="artworkImage" src="" alt="Album Artwork Preview" class="artwork-image hidden">
+                <div id="artworkPlaceholder" class="artwork-placeholder">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="artwork-placeholder-icon">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                  </svg>
+                  <p class="artwork-placeholder-text">No Artwork Found</p>
+                  <span class="artwork-placeholder-sub">Drag image here or click below</span>
+                </div>
+                <div class="artwork-overlay">
+                  <span>Drop New Image</span>
+                </div>
+              </div>
+
+              <div class="artwork-btn-group">
+                <button id="btnReplaceArt" class="btn btn-sm btn-secondary" title="Upload new cover image">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                  <span>Upload Art</span>
+                </button>
+                <button id="btnDownloadArt" class="btn btn-sm btn-secondary" title="Download current cover art image">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  <span>Extract</span>
+                </button>
+                <button id="btnRemoveArt" class="btn btn-sm btn-danger" title="Remove embedded artwork">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                  <span>Remove</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Audio Player Card -->
+            <div class="card player-card">
+              <div class="card-header">
+                <h3 class="card-title">Audio Preview</h3>
+                <span id="waveformStatusBadge" class="tag-pill tag-pill-sm">Ready</span>
+              </div>
+              <audio id="audioElement" preload="metadata"></audio>
+              
+              <div class="player-controls">
+                <div class="player-scrubber-group">
+                  <div class="waveform-container" id="waveformContainer" tabindex="0" role="slider" aria-label="Audio waveform scrubber" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                    <canvas id="waveformCanvas" class="waveform-canvas"></canvas>
+                    <div class="waveform-playhead" id="waveformPlayhead"></div>
+                    <div class="waveform-hover-line" id="waveformHoverLine"></div>
+                    <div class="waveform-tooltip" id="waveformTooltip">00:00</div>
+                    <div class="waveform-loader" id="waveformLoader">
+                      <div class="waveform-loader-bars">
+                        <span></span><span></span><span></span><span></span><span></span>
+                      </div>
+                      <span class="waveform-loader-text">Analyzing waveform...</span>
+                    </div>
+                  </div>
+                  <div class="player-time-display">
+                    <span id="playerCurrentTime">00:00</span>
+                    <span id="playerTotalTime">00:00</span>
+                  </div>
+                </div>
+
+                <div class="player-bottom-row">
+                  <button id="btnPlayPause" class="player-btn-play" aria-label="Play or Pause preview">
+                    <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor">
+                      <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>
+                    <svg id="pauseIcon" viewBox="0 0 24 24" fill="currentColor" class="hidden">
+                      <rect x="6" y="4" width="4" height="16"></rect>
+                      <rect x="14" y="4" width="4" height="16"></rect>
+                    </svg>
+                  </button>
+
+                  <div class="player-volume-group">
+                    <button id="btnMute" class="player-btn-icon" aria-label="Mute or Unmute">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                      </svg>
+                    </button>
+                    <input type="range" id="playerVolume" min="0" max="1" step="0.05" value="0.8" class="player-slider volume-slider" aria-label="Volume slider">
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: Metadata Form -->
+          <div class="right-panel">
+            <div class="card form-card">
+              <!-- Form Tabs -->
+              <div class="tabs-header" role="tablist">
+                <button class="tab-btn active" role="tab" data-tab="tab-main" aria-selected="true">General Info</button>
+                <button class="tab-btn" role="tab" data-tab="tab-details" aria-selected="false">Track Details</button>
+                <button class="tab-btn" role="tab" data-tab="tab-lyrics" aria-selected="false">Lyrics & Notes</button>
+                <button class="tab-btn" role="tab" data-tab="tab-filename" aria-selected="false">File Naming</button>
+              </div>
+
+              <form id="metadataForm" class="meta-form">
+                <!-- Tab 1: General Info -->
+                <div id="tab-main" class="tab-panel active" role="tabpanel">
+                  <div class="form-grid">
+                    <div class="form-group span-2">
+                      <label for="inputTitle" class="form-label">Track Title</label>
+                      <input type="text" id="inputTitle" name="title" class="form-input" placeholder="e.g. Bohemian Rhapsody" autocomplete="off">
+                    </div>
+
+                    <div class="form-group span-2">
+                      <label for="inputArtist" class="form-label">Artist</label>
+                      <input type="text" id="inputArtist" name="artist" class="form-input" placeholder="e.g. Queen" autocomplete="off">
+                    </div>
+
+                    <div class="form-group span-2">
+                      <label for="inputAlbum" class="form-label">Album</label>
+                      <input type="text" id="inputAlbum" name="album" class="form-input" placeholder="e.g. A Night at the Opera" autocomplete="off">
+                    </div>
+
+                    <div class="form-group span-2">
+                      <label for="inputAlbumArtist" class="form-label">Album Artist</label>
+                      <input type="text" id="inputAlbumArtist" name="album_artist" class="form-input" placeholder="e.g. Queen" autocomplete="off">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputGenre" class="form-label">Genre</label>
+                      <input type="text" id="inputGenre" name="genre" class="form-input" placeholder="e.g. Rock, Synthwave" list="genreList" autocomplete="off">
+                      <datalist id="genreList">
+                        <option value="Rock"><option value="Pop"><option value="Electronic"><option value="Synthwave">
+                        <option value="Hip-Hop"><option value="Jazz"><option value="Classical"><option value="Metal">
+                        <option value="Ambient"><option value="Soundtrack"><option value="R&B"><option value="Folk">
+                      </datalist>
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputYear" class="form-label">Year / Date</label>
+                      <input type="text" id="inputYear" name="year" class="form-input" placeholder="e.g. 1975" autocomplete="off">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tab 2: Track Details -->
+                <div id="tab-details" class="tab-panel" role="tabpanel">
+                  <div class="form-grid">
+                    <div class="form-group">
+                      <label for="inputTrackNumber" class="form-label">Track Number</label>
+                      <input type="text" id="inputTrackNumber" name="track_number" class="form-input" placeholder="e.g. 1">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputTotalTracks" class="form-label">Total Tracks</label>
+                      <input type="text" id="inputTotalTracks" name="total_tracks" class="form-input" placeholder="e.g. 12">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputDiscNumber" class="form-label">Disc Number</label>
+                      <input type="text" id="inputDiscNumber" name="disc_number" class="form-input" placeholder="e.g. 1">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputTotalDiscs" class="form-label">Total Discs</label>
+                      <input type="text" id="inputTotalDiscs" name="total_discs" class="form-input" placeholder="e.g. 1">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputComposer" class="form-label">Composer</label>
+                      <input type="text" id="inputComposer" name="composer" class="form-input" placeholder="e.g. Freddie Mercury">
+                    </div>
+
+                    <div class="form-group">
+                      <label for="inputBpm" class="form-label">BPM</label>
+                      <input type="text" id="inputBpm" name="bpm" class="form-input" placeholder="e.g. 120">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tab 3: Lyrics & Comments -->
+                <div id="tab-lyrics" class="tab-panel" role="tabpanel">
+                  <div class="form-grid">
+                    <div class="form-group span-2">
+                      <div class="form-label-row">
+                        <label for="inputComment" class="form-label">Comment</label>
+                        <div class="canned-comment-toolbar">
+                          <div class="canned-select-wrapper">
+                            <select id="selectCannedComment" class="form-select select-canned-comment" title="Choose a canned comment preset">
+                              <option value="" disabled selected>⚡ Canned Presets...</option>
+                            </select>
+                          </div>
+                          <button type="button" class="btn btn-secondary btn-xs" id="btnSaveCannedComment" title="Save current text in Comment field as a new preset">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                            <span>Save Current</span>
+                          </button>
+                          <button type="button" class="btn btn-icon btn-xs" id="btnManageCannedComments" title="Manage Presets" aria-label="Manage Canned Comments">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                          </button>
+                        </div>
+                      </div>
+                      <input type="text" id="inputComment" name="comment" class="form-input" placeholder="Additional notes, Suno profile URL, or tags">
+                    </div>
+
+                    <div class="form-group span-2">
+                      <label for="inputLyrics" class="form-label">Unsynchronized Lyrics</label>
+                      <textarea id="inputLyrics" name="lyrics" rows="9" class="form-textarea" placeholder="Paste track lyrics here..."></textarea>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tab 4: File Naming Pattern -->
+                <div id="tab-filename" class="tab-panel" role="tabpanel">
+                  <div class="naming-container">
+                    <p class="naming-help">
+                       Customize how the downloaded MP3 file will be named. Use dynamic tags like <code>%artist%</code>, <code>%title%</code>, <code>%album%</code>, <code>%track%</code>, <code>%year%</code>.
+                    </p>
+                    
+                    <div class="form-group">
+                      <label for="inputCustomFilename" class="form-label">Output Filename Pattern</label>
+                      <div class="filename-input-wrapper">
+                        <input type="text" id="inputCustomFilename" name="custom_filename" class="form-input" placeholder="%artist% - %title%.mp3">
+                        <span class="file-ext-badge">.mp3</span>
+                      </div>
+                    </div>
+
+                    <div class="naming-presets">
+                      <span class="presets-label">Quick Presets:</span>
+                      <button type="button" class="preset-btn" data-preset="%artist% - %title%">Artist - Title</button>
+                      <button type="button" class="preset-btn" data-preset="%track% - %artist% - %title%">01 - Artist - Title</button>
+                      <button type="button" class="preset-btn" data-preset="%artist% - %album% - %track% - %title%">Artist - Album - Track - Title</button>
+                      <button type="button" class="preset-btn" data-preset="%title%">Title Only</button>
+                    </div>
+
+                    <div class="naming-preview">
+                      <span class="preview-label">Live Preview:</span>
+                      <span id="filenamePreview" class="preview-result">Queen - Bohemian Rhapsody.mp3</span>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <div>MP3MetaFix &copy; 2026 &bull; Secure Server-side Metadata Engine</div>
+      <div class="footer-links">
+        <span>Shortcut: <kbd>Ctrl+S</kbd> to save</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Version & Update Inspector Modal -->
+  <div id="versionModal" class="modal-overlay hidden" role="dialog" aria-labelledby="versionModalTitle" aria-modal="true">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+          </div>
+          <div>
+            <h2 id="versionModalTitle" class="modal-title">System & Version Details</h2>
+            <p class="modal-subtitle">MP3MetaFix Environment & Lifecycle Manager</p>
+          </div>
+        </div>
+        <button class="btn-close" id="btnCloseVersionModal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Current Version Grid -->
+        <div class="version-details-grid">
+          <div class="v-card">
+            <span class="v-label">Installed Version</span>
+            <div class="v-val-group">
+              <span class="v-val-highlight" id="sysVersion">--</span>
+              <span class="v-tag" id="sysStatusTag">Production</span>
+            </div>
+          </div>
+          <div class="v-card">
+            <span class="v-label">Git Commit</span>
+            <div class="v-val-group">
+              <code class="v-commit-hash" id="sysGitCommit">--</code>
+              <span class="v-subtext" id="sysGitBranch">main</span>
+            </div>
+          </div>
+          <div class="v-card">
+            <span class="v-label">Runtime Mode</span>
+            <div class="v-val-group">
+              <span class="v-val" id="sysRuntimeMode">Systemd Service</span>
+            </div>
+          </div>
+          <div class="v-card">
+            <span class="v-label">GitHub Repository</span>
+            <div class="v-val-group">
+              <a href="https://github.com/darktekmafia/MP3MetaFix" target="_blank" rel="noopener noreferrer" class="v-link" id="sysRepoLink">
+                darktekmafia/MP3MetaFix
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Updates Status Section -->
+        <div class="update-check-section">
+          <div class="update-check-header">
+            <div>
+              <h3 class="section-heading">Software Updates</h3>
+              <p class="section-subheading" id="updateCheckedAt">Last checked: Just now</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="btnCheckUpdatesNow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" class="spin-on-load">
+                <path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+              <span>Check for Updates</span>
+            </button>
+          </div>
+
+          <!-- State A: Up to date -->
+          <div id="updateUpToDateCard" class="update-result-card update-ok">
+            <div class="update-card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+              </svg>
+            </div>
+            <div class="update-card-content">
+              <h4>MP3MetaFix is up to date</h4>
+              <p id="upToDateMsg">You are running the latest version available.</p>
+            </div>
+          </div>
+
+          <!-- State B: Update Available Card -->
+          <div id="updateAvailableCard" class="update-result-card update-found hidden">
+            <div class="update-found-header">
+              <div class="update-badge-row">
+                <span class="badge badge-pulse">Update Available</span>
+                <span class="v-new-tag" id="availableVersionTag">v0.3.0</span>
+                <span class="v-date" id="availableReleaseDate">--</span>
+              </div>
+              <h4 class="update-release-title" id="availableReleaseTitle">New Release</h4>
+            </div>
+
+            <!-- Scrollable Release Notes -->
+            <div class="release-notes-wrapper">
+              <div class="release-notes-label">Release Notes & Changelog:</div>
+              <div class="release-notes-content" id="availableReleaseNotes">
+                <!-- Injected formatted release notes -->
+              </div>
+            </div>
+
+            <div class="update-action-footer">
+              <p class="update-warning-note">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                In-app web updater is disabled. To upgrade, run <code>./install.sh --update</code> in the server terminal.
+              </p>
+              <button class="btn btn-secondary" id="btnLaunchUpdater" disabled style="opacity:0.75;cursor:not-allowed;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+                <span>Run install.sh --update on Server</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Canned Comments & Presets Modal -->
+  <div id="cannedCommentsModal" class="modal-overlay hidden" role="dialog" aria-labelledby="cannedCommentsModalTitle" aria-modal="true">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </div>
+          <div>
+            <h2 id="cannedCommentsModalTitle" class="modal-title">Canned Comments & Presets</h2>
+            <p class="modal-subtitle">Manage reusable comments, Suno creator URLs, and metadata tags</p>
+          </div>
+        </div>
+        <button class="btn-close" id="btnCloseCannedModal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Add New Preset Form Card -->
+        <div class="preset-create-card">
+          <h4 class="preset-section-title">Add New Preset</h4>
+          <form id="formAddPreset" class="preset-create-form">
+            <div class="preset-form-inputs">
+              <input type="text" id="inputPresetLabel" class="form-input" placeholder="Preset Label (e.g. Suno Profile URL)" required maxlength="60">
+              <input type="text" id="inputPresetText" class="form-input" placeholder="Comment Text (e.g. https://suno.com/@username)" required maxlength="255">
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm" id="btnAddPreset">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              <span>Add Preset</span>
+            </button>
+          </form>
+        </div>
+
+        <!-- Preset Items List -->
+        <div class="presets-list-section">
+          <div class="presets-list-header">
+            <h4 class="preset-section-title">Saved Presets (<span id="cannedPresetCount">0</span>)</h4>
+            <button type="button" class="btn btn-ghost btn-xs text-danger" id="btnResetPresets" title="Restore default presets">
+              Restore Defaults
+            </button>
+          </div>
+          <div class="presets-items-list" id="cannedPresetsList">
+            <!-- Injected dynamically -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-App Live Terminal Console Modal -->
+  <div id="updaterModal" class="modal-overlay hidden" role="dialog" aria-labelledby="updaterModalTitle" aria-modal="true" data-backdrop="static">
+    <div class="modal-card modal-terminal">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <span class="t-dot t-red"></span>
+          <span class="t-dot t-yellow"></span>
+          <span class="t-dot t-green"></span>
+        </div>
+        <div class="terminal-title-center">
+          <span id="updaterModalTitle">MP3MetaFix Live Updater</span>
+        </div>
+        <div class="terminal-status-badge" id="terminalStatusBadge">
+          <span class="status-pulse-dot"></span> In Progress
+        </div>
+      </div>
+
+      <!-- Terminal Output Screen -->
+      <div class="terminal-body" id="terminalLogContainer">
+        <pre id="terminalLogs" class="terminal-logs"></pre>
+      </div>
+
+      <!-- Terminal Footer / Reconnect State -->
+      <div class="terminal-footer">
+        <div class="terminal-progress-info" id="terminalProgressInfo">
+          <span class="spinner-small" id="terminalSpinner"></span>
+          <span id="terminalProgressText">Executing update script...</span>
+        </div>
+        <div class="terminal-actions hidden" id="terminalActions">
+          <button class="btn btn-primary" id="btnReloadAfterUpdate">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            <span>Reload Application</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <script src="/js/app.js?v=0.4.0"></script>
+</body>
+</html>

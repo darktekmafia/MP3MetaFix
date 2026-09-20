@@ -53,6 +53,23 @@ class SessionManager:
             logger.warning(f"Could not calculate temp storage size: {e}")
         return total
 
+    def get_session_stats(self) -> Dict[str, Any]:
+        """Return aggregated session storage metrics for system diagnostics."""
+        total_bytes = self.get_total_temp_size_bytes()
+        count = 0
+        if self.temp_dir.exists():
+            for item in self.temp_dir.iterdir():
+                if item.is_dir() and (item / "session.json").is_file():
+                    count += 1
+        return {
+            "temp_storage_bytes": total_bytes,
+            "temp_storage_mb": round(total_bytes / (1024 * 1024), 2),
+            "max_temp_storage_bytes": self.max_storage_bytes,
+            "max_temp_storage_mb": round(self.max_storage_bytes / (1024 * 1024), 2),
+            "temp_storage_used_percent": round((total_bytes / self.max_storage_bytes * 100), 1) if self.max_storage_bytes > 0 else 0.0,
+            "active_sessions_count": count,
+        }
+
     def ensure_storage_available(self, required_bytes: int = 0) -> bool:
         """Verify storage quota and trigger LRU eviction of oldest sessions if nearing limits."""
         current_size = self.get_total_temp_size_bytes()
