@@ -77,6 +77,9 @@ The **Gateway Hub** serves as the front door and system dashboard for the MP3Met
   - Mobile-first, non-disruptive detection pill (`✨ Suno Detected`) and interactive per-field selective merge table with `Apply Selected`, `Fill Blank Only`, and `Apply All` presets (zero blind overwrites).
 
 ### Active Backlog & Future Vision 📋
+- [ ] **Multi-Format Audio Tagging (`.mp3`, `.m4a`, `.wav`)**:
+  - Support single-track uploading, tag inspection, artwork replacement, and native writeback for **M4A / AAC** (MPEG-4 atoms) and **WAV** (RIFF INFO + embedded ID3 chunk) alongside MP3.
+  - Native browser audio playback and dynamic retina waveform peak generation for all three formats.
 - [ ] **Native Web Share API (`navigator.share`)**:
   - One-tap mobile export to send modified MP3s directly to mobile audio players (VLC, Files, Telegram, Discord, Apple Music).
 - [ ] **MediaSession API Integration**:
@@ -132,6 +135,21 @@ The **Gateway Hub** serves as the front door and system dashboard for the MP3Met
   - Sequential auto-numbering (`1/12`, `2/12`, ...) and drag-and-drop track reordering.
 - [ ] **Batch File & Folder Ingestion**:
   - Drag and drop dozens of audio files or whole folder trees using the File System Access Directory Picker.
+- [ ] **Custom Lyric Video Studio & MP4 Generator (`.mp4`)**:
+  - Direct creation of clean, customizable 9:16 (vertical mobile / Reels / TikTok / Shorts) and 16:9 (horizontal widescreen YouTube) MP4 lyric videos directly from audio + synchronized lyrics (`SYLT` / `.lrc`).
+  - **Visual & Layout Customization**:
+    - *Background Styling*: Dynamic ambient blurred album art glow, animated gradient canvas, custom background video/image loop, or minimalist studio dark mode.
+    - *Center Artwork Card*: High-res album cover preview with configurable corner rounding, shadow depth, and scale.
+    - *Typography & Text Controls*: Configurable song title, artist `@handle`, font family, font size, line spacing, and text alignment.
+    - *Synced Karaoke Text Engine*: Smooth vertical scrolling and active line-by-line highlighting synchronized with playback timecodes.
+    - *Branding & Watermark Control*: Replace the default "MADE WITH SUNO" footer watermark with the artist's own logo, social handle text, or export completely unbranded.
+  - **Fast Encoding**: Real-time client-side Canvas preview with high-performance server-side FFmpeg H.264/AAC video composition.
+- [ ] **Suno AI Stem Pack Bundler & Multi-Track Manager (WAV/MP3)**:
+  - Ingest separated Suno stems (*Vocals*, *Instrumental*, *Bass*, *Drums*).
+  - Automatically apply shared song metadata (Artist, Title, Year, Cover Art) across all stem files while stamping specific role identifiers (e.g. `[Title] (Vocals)`).
+  - One-click packaging into structured multi-track `.zip` archives or DAW-ready directories.
+- [ ] **Suno MP4 Video Ingestion & Asset Extractor**:
+  - Drag and drop Suno `.mp4` video files to extract clean audio (lossless WAV or MP3 320kbps), extract timestamped lyrics, and recover high-resolution poster artwork.
 - [ ] **Tap-to-Sync Karaoke Lyric Stamping (`.lrc` & ID3 `SYLT`)**:
   - Interactive "Tap-to-Sync" tool allowing creators to tap <kbd>Space</kbd> during playback to stamp exact timestamps onto lyric lines.
   - Export standard `.lrc` sidecar companion files or embed directly into the ID3 `SYLT` binary frame.
