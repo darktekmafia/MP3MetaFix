@@ -1186,6 +1186,10 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const url = force ? '/api/updates/check?force=true' : '/api/updates/check';
       const res = await fetch(url);
+      if (res.status === 401) {
+        // Unauthenticated - skip silently without logging errors
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       activeUpdateData = data;
@@ -2032,21 +2036,25 @@ document.addEventListener('DOMContentLoaded', () => {
   async function restoreSessionIfExists() {
     try {
       const res = await fetch('/api/session');
-      if (!res.ok) return;
+      if (res.status === 401 || !res.ok) return;
       const data = await res.json();
       if (data && data.active) {
         loadSession(data, true);
       }
-    } catch (err) {
-      console.debug('Session restoration handshake error:', err);
+    } catch (_) {
+      // Ignore network errors on initial handshake
     }
   }
 
-  // Initial setup & silent background update check
+  // Initial setup
   renderCannedCommentDropdown();
   loadSystemInfo();
-  restoreSessionIfExists();
-  setTimeout(() => {
-    checkForUpdates(false, true);
-  }, 1500);
+
+  // Restore session and check updates once auth is established
+  window.addEventListener('mp3metafix:auth-ready', () => {
+    restoreSessionIfExists();
+    setTimeout(() => {
+      checkForUpdates(false, true);
+    }, 1500);
+  });
 });

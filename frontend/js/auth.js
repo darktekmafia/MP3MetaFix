@@ -232,6 +232,7 @@
           // Allowed as Guest on /app
           closeModal('loginModal');
           closeModal('setupModal');
+          window.dispatchEvent(new CustomEvent('mp3metafix:auth-ready', { detail: { ...AuthState } }));
         } else {
           // Protected page or Guest mode disabled -> show login modal
           openModal('loginModal');
@@ -239,6 +240,7 @@
       } else {
         closeModal('loginModal');
         closeModal('setupModal');
+        window.dispatchEvent(new CustomEvent('mp3metafix:auth-ready', { detail: { ...AuthState } }));
       }
     } catch (err) {
       console.warn('Auth status check error:', err);
