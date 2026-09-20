@@ -138,6 +138,10 @@ sudo ./install.sh --trusted-proxies 127.0.0.1,192.168.0.55,10.0.0.0/8
 sudo ./install.sh --no-proxy
 ```
 
+> [!NOTE]
+> **Informational Reachability Probing**:
+> Setting `--domain <DOMAIN>` is strictly informational. It allows `./install.sh --access` and status checks to display your public access URL and verify that the reverse proxy route to the backend is reachable (`https://${domain}/api/health`). It does **not** bind the server socket or modify network listening addresses (which remain governed independently by `--bind`, `--lan`, or `--local`).
+
 ---
 
 ## 4. Reverse Proxy Configuration

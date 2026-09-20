@@ -111,7 +111,7 @@ The server will run in your active terminal session and stop when you press <kbd
 | `--local` | Switches service to listen on localhost only (`127.0.0.1`) |
 | `--bind <HOST>` | Sets custom bind host (e.g. `0.0.0.0`, `127.0.0.1`, or specific IP) |
 | `--proxy [IPS]` | Enables reverse proxy trust (optionally specifying trusted proxy IP/subnets) |
-| `--domain <DOMAIN>` | Sets reverse proxy domain/hostname or public URL for health probes and access links |
+| `--domain <DOMAIN>` | Sets reverse proxy domain/hostname or public URL (informational reachability probe & access links) |
 | `--no-domain` | Clears configured reverse proxy domain/hostname |
 | `--no-proxy` | Disables reverse proxy trust (ignores forwarded headers) |
 | `--trusted-proxies <IPS>` | Sets explicit comma-separated trusted proxy IPs/CIDRs |
