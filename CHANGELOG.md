@@ -5,6 +5,16 @@ All notable changes to **MP3MetaFix** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Consolidated CPU, memory, disk, and temporary-storage telemetry in the administrator Control Center (`/admin`). The Gateway Hub now focuses on workspace selection, with no telemetry quickbar or recurring resource polling.
+- Kept a one-time public health/version check on the hub and raised its header above workspace cards so the account dropdown remains visible on mobile.
+- Synchronized version fallbacks with the current `0.4.1` release.
+
+### Fixed
+- Isolated the updater stream test with a mock subprocess so running the suite cannot invoke the real installer from that test.
+
 ## [0.4.1] - 2026-09-20
 
 ### Added

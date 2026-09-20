@@ -830,17 +830,36 @@ def test_api_updates_check_endpoint(client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_stream_install_update_generator():
-    """Verify stream_install_update yields SSE events."""
+async def test_stream_install_update_generator(tmp_path, monkeypatch):
+    """Exercise the SSE lifecycle without running the real installer or services."""
+    import asyncio
+    from unittest.mock import AsyncMock
     from backend.updater import stream_install_update
 
-    events = []
-    async for event in stream_install_update():
-        events.append(event)
-        if len(events) >= 2:
-            break
-    assert len(events) > 0
-    assert events[0].startswith("data: ")
+    installer = tmp_path / "install.sh"
+    installer.write_text("# Test placeholder; must never execute\n")
+    monkeypatch.setattr("backend.updater.BASE_DIR", tmp_path)
+    output = asyncio.StreamReader()
+    output.feed_data(b"Mock update output\n")
+    output.feed_eof()
+    process = AsyncMock()
+    process.stdout = output
+    process.returncode = 0
+    spawn = AsyncMock(return_value=process)
+    monkeypatch.setattr("backend.updater.asyncio.create_subprocess_exec", spawn)
+
+    events = [event async for event in stream_install_update()]
+    payloads = [json.loads(event.removeprefix("data: ").strip()) for event in events]
+    assert [payload["type"] for payload in payloads] == ["step", "log", "complete"]
+    assert payloads[1]["message"] == "Mock update output"
+    assert payloads[2]["success"] is True
+    spawn.assert_awaited_once_with(
+        "bash", str(installer), "--update", "--headless",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=str(tmp_path),
+    )
+    process.wait.assert_awaited_once()
 
 
 def test_migrate_service_content_preserves_customizations():

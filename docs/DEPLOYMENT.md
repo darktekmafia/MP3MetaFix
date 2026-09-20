@@ -288,6 +288,10 @@ sudo systemctl restart mp3metafix.service
 
 ---
 
+### Diagnostics location
+
+Open **Admin Dashboard** from the signed-in administrator account menu to view live diagnostics at `/admin`. The Gateway Hub (`/`) now shows workspace choices and checks basic health/version once; it no longer displays or polls CPU, memory, disk, or cache metrics. This frontend relocation needs no service configuration, permission, or data migration changes.
+
 ## 6. Environment Variables & Security Configuration
 
 The server behavior and security thresholds can be customized via environment variables in systemd units or `.env` files:

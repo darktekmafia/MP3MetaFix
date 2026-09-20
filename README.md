@@ -1,17 +1,18 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 
-**MP3MetaFix** is a high-performance, security-focused audio metadata suite featuring a **System Telemetry & Gateway Hub (`/`)**, a **Mobile-First Focused Tagger (`/app`)**, and a **Desktop Power-User Manager Workspace (`/manager`)**. Designed for seamless local desktop usage on Fedora / Ubuntu and headless server deployment inside **Proxmox LXC containers** behind reverse proxies.
+**MP3MetaFix** is a high-performance, security-focused audio metadata suite featuring a **Gateway Hub (`/`)**, an **Administrator Control Center (`/admin`)**, a **Mobile-First Focused Tagger (`/app`)**, and a **Desktop Power-User Manager Workspace (`/manager`)**. Designed for seamless local desktop usage on Fedora / Ubuntu and headless server deployment inside **Proxmox LXC containers** behind reverse proxies.
 
 ---
 
 ## ✨ Features
 
 - 🌐 **Multi-Interface Architecture & Gateway Hub**:
-  - **Gateway Hub (`/`)**: Real-time system telemetry dashboard displaying CPU load, memory utilization, disk space, and MP3 temporary cache quotas with one-click app launching.
+  - **Gateway Hub (`/`)**: Compact workspace selector with a one-time health/version check and no telemetry quickbar or resource polling.
+  - **Administrator Control Center (`/admin`)**: CPU, memory, disk, and temporary-storage diagnostics, refreshed while signed in as an administrator. Open it through the account menu’s **Admin Dashboard** link.
   - **MP3MetaFix (`/app`)**: Lightweight, mobile-first, single-track ID3v2.4 editor optimized for touchscreens and quick edits.
   - **MP3MetaManager (`/manager`)**: Desktop power-user workspace featuring complete functional superset parity with `/app` (integrated single-track inspector, waveform scrubber, cover art studio) alongside high-density multi-track batch spreadsheet editing, universal ID3 frame/byte inspection, and synced lyrics.
   - **Persistent App Switcher**: Header navigation pill allowing instant workspace jumping without context loss.
@@ -205,7 +206,7 @@ For in-depth technical documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTU
 ## 🗺️ Master Product Roadmap & Sub-Projects
 
 MP3MetaFix features dedicated sub-project roadmaps tailored to each interface's target user persona and device context:
-- **[Gateway Hub (`/`) Roadmap](ROADMAP.md#-project-a-gateway-hub---system-portal--dispatcher-roadmap)**: Telemetry dashboard, guest mode, and service maintenance triggers.
+- **[Gateway Hub (`/`) Roadmap](ROADMAP.md#-project-a-gateway-hub---system-portal--dispatcher-roadmap)**: Workspace selection and guest access; live diagnostics are consolidated in `/admin`.
 - **[MP3MetaFix (`/app`) Roadmap](ROADMAP.md#-project-b-mp3metafix-app--mobile-first-single-track-editor-roadmap)**: Mobile-first single-track editor, Suno URL auto-parser, Web Share API, and PWA manifest.
 - **[MP3MetaManager (`/manager`) Roadmap](ROADMAP.md#-project-c-mp3metamanager-manager--desktop-power-user-workspace-roadmap)**: Desktop power-user batch spreadsheet, stem tree organizer, and tap-to-sync karaoke timestamping (`.lrc` / `SYLT`).
 - **[Core Platform (`/api`) Roadmap](ROADMAP.md#-project-d-core-platform-security--infrastructure-roadmap)**: Multi-arch Docker images, native Windows executable, and multi-format audio engine.

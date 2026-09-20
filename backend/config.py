@@ -82,7 +82,7 @@ def get_version() -> str:
     version_file = BASE_DIR / "VERSION"
     if version_file.exists():
         return version_file.read_text().strip()
-    return "0.3.4"
+    return "0.4.1"
 
 def get_git_commit() -> Optional[str]:
     """Retrieve current short Git commit hash if running in a git repository."""

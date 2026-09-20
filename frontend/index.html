@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="MP3MetaFix Hub - Unified Audio Metadata, Library Management & System Diagnostics">
-  <title>MP3MetaFix | Gateway Hub & System Telemetry</title>
+  <meta name="description" content="MP3MetaFix Hub - Choose your audio metadata workspace">
+  <title>MP3MetaFix | Gateway Hub</title>
   
   <!-- Google Fonts: Inter & Outfit -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -48,23 +48,6 @@
         <p class="hub-hero-subtitle">
           Choose between the mobile-optimized quick tagger or the desktop power-user management workspace.
         </p>
-
-        <!-- Live Telemetry Quick Status Bar (Instant visibility at top) -->
-        <a href="#systemTelemetry" class="telemetry-quickbar" title="Jump to Detailed System Diagnostics & Live Telemetry">
-          <div class="quickbar-metrics">
-            <span class="quick-pill"><span class="q-dot dot-cpu"></span> CPU: <strong id="quickCpu">--%</strong></span>
-            <span class="quick-sep">&bull;</span>
-            <span class="quick-pill"><span class="q-dot dot-ram"></span> RAM: <strong id="quickRam">--%</strong></span>
-            <span class="quick-sep">&bull;</span>
-            <span class="quick-pill"><span class="q-dot dot-disk"></span> Disk: <strong id="quickDisk">--%</strong></span>
-            <span class="quick-sep">&bull;</span>
-            <span class="quick-pill"><span class="q-dot dot-storage"></span> Cache: <strong id="quickStorage">0 MB</strong></span>
-          </div>
-          <span class="quick-cta">
-            <span>Diagnostics</span>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
-          </span>
-        </a>
       </section>
 
       <!-- Interface Chooser Cards Grid -->
@@ -166,146 +149,6 @@
             <button class="btn btn-secondary btn-block btn-lg btn-disabled" disabled aria-disabled="true" title="MP3MetaManager is currently in development and coming in a future release">
               <span>Coming Soon &bull; In Development</span>
             </button>
-          </div>
-        </div>
-      </section>
-
-      <!-- Live System Telemetry Section -->
-      <section class="hub-telemetry-section" id="systemTelemetry" aria-label="System Diagnostics">
-        <div class="telemetry-section-header">
-          <div>
-            <h3 class="telemetry-section-title">Live Server Diagnostics & Resource Telemetry</h3>
-            <p class="telemetry-section-sub">Real-time CPU, memory, storage utilization, and session quotas</p>
-          </div>
-          <div class="telemetry-refresh-indicator">
-            <span class="refresh-pulse"></span>
-            <span id="telemetryStatusText">Auto-refreshing</span>
-          </div>
-        </div>
-
-        <!-- Telemetry Cards Grid -->
-        <div class="telemetry-grid">
-          <!-- Card 1: CPU -->
-          <div class="card telemetry-card">
-            <div class="t-card-header">
-              <div class="t-icon t-icon-cpu">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
-                  <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
-                  <rect x="9" y="9" width="6" height="6"></rect>
-                  <line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line>
-                  <line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line>
-                  <line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line>
-                  <line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line>
-                </svg>
-              </div>
-              <div>
-                <h4 class="t-title">CPU Load</h4>
-                <span class="t-sub" id="statCpuCores">-- Cores</span>
-              </div>
-            </div>
-            <div class="t-val-main" id="statCpuPercent">--%</div>
-            <div class="t-meter-track">
-              <div class="t-meter-fill meter-cpu" id="statCpuMeter" style="width: 0%"></div>
-            </div>
-            <div class="t-details-row">
-              <span>Load 1m / 5m / 15m:</span>
-              <span class="t-val-code" id="statCpuLoadAvg">-- / -- / --</span>
-            </div>
-          </div>
-
-          <!-- Card 2: Memory / RAM -->
-          <div class="card telemetry-card">
-            <div class="t-card-header">
-              <div class="t-icon t-icon-ram">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
-                  <path d="M22 12H2M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path>
-                  <line x1="6" y1="16" x2="6.01" y2="16"></line><line x1="10" y1="16" x2="10.01" y2="16"></line>
-                </svg>
-              </div>
-              <div>
-                <h4 class="t-title">System Memory</h4>
-                <span class="t-sub" id="statRamTotal">-- MB Total</span>
-              </div>
-            </div>
-            <div class="t-val-main" id="statRamPercent">--%</div>
-            <div class="t-meter-track">
-              <div class="t-meter-fill meter-ram" id="statRamMeter" style="width: 0%"></div>
-            </div>
-            <div class="t-details-row">
-              <span>Used / Available:</span>
-              <span class="t-val-code" id="statRamDetails">-- / --</span>
-            </div>
-          </div>
-
-          <!-- Card 3: Host Disk Storage -->
-          <div class="card telemetry-card">
-            <div class="t-card-header">
-              <div class="t-icon t-icon-disk">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
-                  <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
-                  <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
-                  <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
-                </svg>
-              </div>
-              <div>
-                <h4 class="t-title">Disk Storage</h4>
-                <span class="t-sub" id="statDiskTotal">-- GB Total</span>
-              </div>
-            </div>
-            <div class="t-val-main" id="statDiskPercent">--%</div>
-            <div class="t-meter-track">
-              <div class="t-meter-fill meter-disk" id="statDiskMeter" style="width: 0%"></div>
-            </div>
-            <div class="t-details-row">
-              <span>Free Space:</span>
-              <span class="t-val-code" id="statDiskFree">-- GB Free</span>
-            </div>
-          </div>
-
-          <!-- Card 4: MP3 App Storage & Sessions -->
-          <div class="card telemetry-card">
-            <div class="t-card-header">
-              <div class="t-icon t-icon-storage">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
-                  <path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle>
-                </svg>
-              </div>
-              <div>
-                <h4 class="t-title">MP3 Cache Quota</h4>
-                <span class="t-sub" id="statActiveSessions">0 Active Sessions</span>
-              </div>
-            </div>
-            <div class="t-val-main" id="statStorageSize">0.0 MB</div>
-            <div class="t-meter-track">
-              <div class="t-meter-fill meter-storage" id="statStorageMeter" style="width: 0%"></div>
-            </div>
-            <div class="t-details-row">
-              <span>Quota (2048 MB limit):</span>
-              <span class="t-val-code" id="statStorageQuota">0.0% used</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Network & Runtime Environment Bar -->
-        <div class="card telemetry-env-bar">
-          <div class="env-item">
-            <span class="env-label">Service Binding</span>
-            <span class="env-value" id="statEnvBind">127.0.0.1:8844</span>
-          </div>
-          <div class="env-divider"></div>
-          <div class="env-item">
-            <span class="env-label">Proxy Header Trust</span>
-            <span class="env-value" id="statEnvProxy">Disabled</span>
-          </div>
-          <div class="env-divider"></div>
-          <div class="env-item">
-            <span class="env-label">Public / Proxy Domain</span>
-            <span class="env-value" id="statEnvDomain">Not Configured</span>
-          </div>
-          <div class="env-divider"></div>
-          <div class="env-item">
-            <span class="env-label">Server Uptime</span>
-            <span class="env-value" id="statEnvUptime">0h 0m</span>
           </div>
         </div>
       </section>
@@ -542,155 +385,24 @@
 
   <script src="/js/auth.js?v=0.4.1"></script>
   <script>
-    // Format seconds into human readable uptime string
-    function formatUptime(seconds) {
-      if (!seconds || seconds < 0) return "Just started";
-      const d = Math.floor(seconds / (3600 * 24));
-      const h = Math.floor((seconds % (3600 * 24)) / 3600);
-      const m = Math.floor((seconds % 3600) / 60);
-      const s = seconds % 60;
-      if (d > 0) return `${d}d ${h}h ${m}m`;
-      if (h > 0) return `${h}h ${m}m ${s}s`;
-      if (m > 0) return `${m}m ${s}s`;
-      return `${s}s`;
-    }
-
-    // Live Telemetry Poller
-    async function fetchTelemetry() {
-      try {
-        const res = await fetch('/api/system/stats');
-        if (res.status === 401) {
-          // Expected when unauthenticated
-          return;
+    // Check basic availability once; resource diagnostics live in /admin.
+    fetch('/api/health')
+      .then(response => {
+        if (!response.ok) throw new Error('Health check failed');
+        return response.json();
+      })
+      .then(data => {
+        if (data.version) {
+          document.getElementById('hubVersionBadge').textContent = `v${data.version}`;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-
-        // Update version & status
-        const verBadge = document.getElementById('hubVersionBadge');
-        if (verBadge && data.version) verBadge.textContent = `v${data.version}`;
-
-        // 1. CPU
-        if (data.cpu) {
-          document.getElementById('statCpuCores').textContent = `${data.cpu.cores} CPU Core${data.cpu.cores > 1 ? 's' : ''}`;
-          document.getElementById('statCpuPercent').textContent = `${data.cpu.estimated_percent}%`;
-          document.getElementById('statCpuMeter').style.width = `${Math.min(100, data.cpu.estimated_percent)}%`;
-          document.getElementById('statCpuLoadAvg').textContent = `${data.cpu.load_1m} / ${data.cpu.load_5m} / ${data.cpu.load_15m}`;
-          const quickCpu = document.getElementById('quickCpu');
-          if (quickCpu) quickCpu.textContent = `${data.cpu.estimated_percent}%`;
-        }
-
-        // 2. RAM
-        if (data.memory) {
-          document.getElementById('statRamTotal').textContent = `${data.memory.total_mb} MB Total`;
-          document.getElementById('statRamPercent').textContent = `${data.memory.used_percent}%`;
-          document.getElementById('statRamMeter').style.width = `${Math.min(100, data.memory.used_percent)}%`;
-          document.getElementById('statRamDetails').textContent = `${data.memory.used_mb}MB / ${data.memory.available_mb}MB free`;
-          const quickRam = document.getElementById('quickRam');
-          if (quickRam) quickRam.textContent = `${data.memory.used_percent}%`;
-        }
-
-        // 3. Disk
-        if (data.disk) {
-          document.getElementById('statDiskTotal').textContent = `${data.disk.total_gb} GB Total`;
-          document.getElementById('statDiskPercent').textContent = `${data.disk.used_percent}%`;
-          document.getElementById('statDiskMeter').style.width = `${Math.min(100, data.disk.used_percent)}%`;
-          document.getElementById('statDiskFree').textContent = `${data.disk.free_gb} GB Free`;
-          const quickDisk = document.getElementById('quickDisk');
-          if (quickDisk) quickDisk.textContent = `${data.disk.used_percent}%`;
-        }
-
-        // 4. App Storage
-        if (data.app_storage) {
-          document.getElementById('statActiveSessions').textContent = `${data.app_storage.active_sessions_count} Active Track Session${data.app_storage.active_sessions_count === 1 ? '' : 's'}`;
-          document.getElementById('statStorageSize').textContent = `${data.app_storage.temp_storage_mb} MB`;
-          document.getElementById('statStorageMeter').style.width = `${Math.min(100, data.app_storage.temp_storage_used_percent)}%`;
-          document.getElementById('statStorageQuota').textContent = `${data.app_storage.temp_storage_used_percent}% of ${data.app_storage.max_temp_storage_mb}MB`;
-          const quickStorage = document.getElementById('quickStorage');
-          if (quickStorage) quickStorage.textContent = `${data.app_storage.temp_storage_mb} MB`;
-        }
-
-        // 5. Environment & Runtime
-        if (data.network) {
-          document.getElementById('statEnvBind').textContent = `${data.network.host}:${data.network.port}`;
-          document.getElementById('statEnvProxy').textContent = data.network.trust_proxies ? 'Enabled' : 'Disabled';
-          if (data.network.proxy_host) {
-            const proto = data.network.proxy_host.startsWith('http') ? '' : 'https://';
-            const domainUrl = `${proto}${data.network.proxy_host}`;
-            const domainEl = document.getElementById('statEnvDomain');
-            domainEl.textContent = '';
-            const link = document.createElement('a');
-            link.href = domainUrl;
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.className = 'env-link';
-            link.textContent = data.network.proxy_host;
-            domainEl.appendChild(link);
-          } else {
-            document.getElementById('statEnvDomain').textContent = 'Not Configured';
-          }
-        }
-
-        if (typeof data.uptime_seconds === 'number') {
-          document.getElementById('statEnvUptime').textContent = formatUptime(data.uptime_seconds);
-        }
-
-        const hubStatusBadge = document.getElementById('hubStatusBadge');
-        if (hubStatusBadge) {
-          hubStatusBadge.innerHTML = '<span class="status-dot"></span> Online';
-          hubStatusBadge.classList.remove('status-offline');
-        }
-      } catch (err) {
-        console.warn('Telemetry polling error:', err);
-        const hubStatusBadge = document.getElementById('hubStatusBadge');
-        if (hubStatusBadge) {
-          hubStatusBadge.innerHTML = '<span class="status-dot dot-offline"></span> Disconnected';
-          hubStatusBadge.classList.add('status-offline');
-        }
-      }
-    }
-
-    let telemetryTimer = null;
-
-    function startTelemetryPolling() {
-      if (telemetryTimer) return;
-      fetchTelemetry();
-      telemetryTimer = setInterval(fetchTelemetry, 4000);
-    }
-
-    function stopTelemetryPolling() {
-      if (telemetryTimer) {
-        clearInterval(telemetryTimer);
-        telemetryTimer = null;
-      }
-    }
-
-    // Expose fetchTelemetry globally so login can trigger an immediate poll
-    window.fetchTelemetry = fetchTelemetry;
-    window.startTelemetryPolling = startTelemetryPolling;
-
-    // Start polling once authenticated
-    window.addEventListener('mp3metafix:auth-ready', (e) => {
-      const statusText = document.getElementById('telemetryStatusText');
-      const refreshPulse = document.querySelector('.refresh-pulse');
-      if (e.detail && e.detail.authenticated) {
-        if (statusText) statusText.textContent = 'Auto-refreshing';
-        if (refreshPulse) refreshPulse.style.display = 'inline-block';
-        startTelemetryPolling();
-      } else {
-        if (statusText) statusText.textContent = 'Admin sign-in required';
-        if (refreshPulse) refreshPulse.style.display = 'none';
-        stopTelemetryPolling();
-      }
-    });
-
-    window.addEventListener('mp3metafix:auth-logout', () => {
-      const statusText = document.getElementById('telemetryStatusText');
-      const refreshPulse = document.querySelector('.refresh-pulse');
-      if (statusText) statusText.textContent = 'Admin sign-in required';
-      if (refreshPulse) refreshPulse.style.display = 'none';
-      stopTelemetryPolling();
-    });
+      })
+      .catch(() => {
+        const badge = document.getElementById('hubStatusBadge');
+        const dot = document.createElement('span');
+        dot.className = 'status-dot dot-offline';
+        badge.replaceChildren(dot, document.createTextNode(' Unavailable'));
+        badge.classList.add('status-offline');
+      });
   </script>
 </body>
 </html>

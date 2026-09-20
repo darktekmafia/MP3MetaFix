@@ -150,10 +150,10 @@ MP3MetaFix decouples user interaction into three specialized interfaces sharing 
          ┌────────────────┴───┐   ┌──────┴─────────┐   ┌┴─────────────────────────────┐
          │  Gateway Hub (/)   │   │ MP3MetaFix     │   │ MP3MetaManager (/manager)    │
          │                    │   │ (/app)         │   │ (Superset of /app)           │
-         │ - Live Telemetry   │   │ - Mobile-First │   │ - Desktop Power-User         │
-         │ - Diagnostics Modal│   │ - Single-Track │   │ - Integrated Single-Track UI │
+         │ - Health Check     │   │ - Mobile-First │   │ - Desktop Power-User         │
+         │ - Account Menu     │   │ - Single-Track │   │ - Integrated Single-Track UI │
          │ - App Dispatcher   │   │ - Waveform     │   │ - Multi-Track Batch Table    │
-         │ - Subnet Stats     │   │ - Canned Tags  │   │ - Deep ID3/Hex Byte Engine   │
+         │ - Admin Link       │   │ - Canned Tags  │   │ - Deep ID3/Hex Byte Engine   │
          │                    │   │ - Suno Parser  │   │ - Synced Lyrics/LRC & Stems  │
          └────────────────────┘   └────────────────┘   └──────────────────────────────┘
 ```
@@ -165,11 +165,11 @@ MP3MetaFix decouples user interaction into three specialized interfaces sharing 
   - **Desktop Workstations & Power Curation (`/manager`)**: Full-screen workspace with deep batch tools, multi-track spreadsheet tables, stem trees, synced lyrics, and universal raw ID3 frame inspector.
 - **Zero Need for App Switching**: Desktop users never need to jump between interfaces just to edit single-track tags, scrub a waveform, or replace artwork. All `/app` features are embedded directly within `/manager` via an integrated single-track inspector drawer.
 
-### 1. Gateway Hub & Telemetry Dashboard (`/`)
-- **Target Persona**: System Administrators, Homelab Operators, Multi-Device Users.
-- **Design Philosophy**: High-contrast, WCAG AAA accessible system portal providing immediate visibility into host health and hardware resources.
-- **Core Endpoints**: `GET /api/system/stats` (CPU load averages, RAM capacity/usage, disk space, temporary storage quotas).
-- **Security & Privacy**: Zero sensitive information exposure (no host directory paths, internal IP leakage, or system secrets).
+### 1. Gateway Hub (`/`) and Administrator Control Center (`/admin`)
+- **Gateway Hub**: Workspace selector with a one-time `GET /api/health` request for basic availability and version. No telemetry quickbar or recurring resource polling remains on this page.
+- **Administrator Control Center**: Detailed CPU, memory, disk, temporary-storage, uptime, and network diagnostics use `GET /api/system/stats`. Polling starts after administrator authentication and stops on logout or an authorization failure.
+- **Navigation**: Administrators reach `/admin` through the account menu’s **Admin Dashboard** link. The hub header sits above workspace cards so its dropdown is not obscured.
+- **Authorization**: The backend telemetry endpoint retains `require_admin`; removing hub telemetry does not change API access policy.
 
 ### 2. MP3MetaFix Focused Editor (`/app`)
 - **Target Persona**: Mobile Creators, Smartphone/Tablet Users, Single-Track Producers.

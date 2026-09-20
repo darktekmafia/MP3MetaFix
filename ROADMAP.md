@@ -10,7 +10,7 @@ Although MP3MetaFix runs as a unified high-performance Python FastAPI service wi
 
 | Project / Interface | Route | Primary Target Persona | Screen & Form Factor | Key Design Focus & Scope |
 |---|---|---|---|---|
-| **Gateway Hub** | `/` | System Administrators, Homelab Users, Multi-Device Operators | All screens (320px–4K) | System telemetry, health diagnostics, app dispatching |
+| **Gateway Hub** | `/` | System Administrators, Homelab Users, Multi-Device Operators | All screens (320px–4K) | Compact app dispatching and basic availability; diagnostics in `/admin` |
 | **MP3MetaFix Editor** | `/app` | Mobile Creators, Smartphone/Tablet Users, Single-Track Producers | Mobile-first (phones, tablets, responsive desktop) | Speed, friction-free single-track tagging, touch waveforms, Suno prompt parsing, canned presets |
 | **MP3MetaManager** | `/manager` | Desktop Power Users, DJs, Album Curators, Batch Producers | Desktop-first (widescreen, 1080p–4K displays) | **Functional Superset of `/app`**: Full single-track inspector + high-density tables, multi-file batch tagging, deep ID3 frame inspector/editor, stem trees, synced lyrics (LRC/SYLT) |
 | **Core Platform** | `/api` | DevOps, Package Maintainers, Infrastructure Engineers | CLI, Systemd, Reverse Proxies, Docker | Security hardening, zero-downtime updates, cross-platform deployment |
@@ -23,7 +23,7 @@ Although MP3MetaFix runs as a unified high-performance Python FastAPI service wi
 
 ## 🏠 Project A: Gateway Hub (`/`) — System Portal & Dispatcher Roadmap
 
-The **Gateway Hub** serves as the front door and system dashboard for the MP3MetaFix instance. It provides instantaneous visibility into host health, temporary MP3 cache quotas, and clean one-click launching into specialized workspaces.
+The **Gateway Hub** is the compact front door for choosing a workspace. Detailed host diagnostics and temporary-storage quotas are consolidated in the **Administrator Control Center (`/admin`)**, accessible through the account menu.
 
 ### Completed Features ✅
 - [x] **Full System Authentication & Access Control Subsystem**:
@@ -32,13 +32,14 @@ The **Gateway Hub** serves as the front door and system dashboard for the MP3Met
   - Configurable Guest Mode toggle enabling public single-track tagging at `/app` without compromising server diagnostics or batch workspace.
   - PBKDF2-HMAC-SHA256 (600,000 rounds) password hashing + brute-force rate-limiting.
   - In-app Settings & Quota Management modal for session limits, disk quota, and password changes.
-- [x] **Live System Telemetry Quickbar (`GET /api/system/stats`)**:
-  - Real-time CPU load (`1m`, `5m`, `15m`), memory utilization, disk space, and MP3 temporary cache quota tracking.
-  - Responsive 2x2 micro-card mobile view with smooth-scrolling quick jump to full diagnostics.
+- [x] **Telemetry Consolidation in `/admin`**:
+  - CPU load, memory, disk, and temporary-storage diagnostics remain in the administrator Control Center.
+  - Removed the hub quickbar and recurring telemetry requests; retained a one-time health/version check.
+  - Raised the hub header above workspace cards to keep the account dropdown accessible on mobile.
 - [x] **Workspace Dispatcher Cards**:
   - Compact selector cards for **MP3MetaFix** and **MP3MetaManager** with feature breakdown grids and direct entry buttons.
-- [x] **Interactive Hardware Diagnostics Modal**:
-  - Full system breakdown showing process memory, cgroup limits, runtime mode, and storage TTL status.
+- [x] **Administrator Diagnostics Dashboard**:
+  - CPU, memory, host disk, cache quotas, uptime, and network configuration shown in `/admin`.
 - [x] **High-Contrast Responsive UI (WCAG AAA)**:
   - High-contrast footers, readable links, and glassmorphic telemetry cards across all screen resolutions (320px–4K).
 
