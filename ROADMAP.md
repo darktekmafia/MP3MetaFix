@@ -60,6 +60,8 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 **MP3MetaFix** is the dedicated single-track audio metadata, cover art, and inspection workspace. Designed mobile-first for friction-free music tagging on smartphones, tablets, and desktops alike.
 
 ### Completed Features ✅
+
+- [x] **Editor update-check compatibility**: Update results render correctly when the optional header badge is absent.
 - [x] **Fluid Mobile-First Responsive Layout (320px to 4K)**:
   - Zero right-edge overflow on narrow screens (tested across iPhone SE, iPhone 16 Pro Max, iPad Mini, and desktop).
   - Balanced 2-column layout on tablets ($\ge 720\text{px}$) keeping artwork and metadata forms immediately accessible.

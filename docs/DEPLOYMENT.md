@@ -253,6 +253,8 @@ When configuring a public domain or reverse proxy hostname using `./install.sh -
 
 ## 5. Updates and Upgrades
 
+Editor update-check badge compatibility is a frontend-only fix. Reload `/app/` to load the corrected JavaScript; no service configuration or data migration is required.
+
 To update MP3MetaFix in-place via CLI:
 ```bash
 cd /opt/mp3metafix

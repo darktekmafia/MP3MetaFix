@@ -10,6 +10,8 @@
 
 ## ✨ Features
 
+The editor’s version dialog supports update checks without a header update badge.
+
 - 🌐 **Multi-Interface Architecture & Gateway Hub**:
   - **Gateway Hub (`/`)**: Compact workspace selector with a one-time health/version check and no telemetry quickbar or resource polling.
   - **Administrator Control Center (`/admin`)**: CPU, memory, disk, and temporary-storage diagnostics, refreshed while signed in as an administrator. Open it through the account menu’s **Admin Dashboard** link.

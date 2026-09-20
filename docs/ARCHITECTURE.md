@@ -172,6 +172,8 @@ MP3MetaFix decouples user interaction into three specialized interfaces sharing 
 - **Authorization**: The backend telemetry endpoint retains `require_admin`; removing hub telemetry does not change API access policy.
 
 ### 2. MP3MetaFix Focused Editor (`/app`)
+
+The editor update inspector treats its header notification badge as optional; both update-result branches still render the version dialog when that badge is absent.
 - **Target Persona**: Mobile Creators, Smartphone/Tablet Users, Single-Track Producers.
 - **Design Philosophy**: Lightweight, touch-optimized, mobile-first design with zero horizontal overflow across 320px–4K displays.
 - **Responsive Architecture**:

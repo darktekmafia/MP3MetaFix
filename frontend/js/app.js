@@ -1200,7 +1200,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (data.update_available) {
         // Show notification badge in navbar
-        updateBadge.classList.remove('hidden');
+        if (updateBadge) updateBadge.classList.remove('hidden');
 
         // Populate update modal card
         availableVersionTag.textContent = `v${data.latest_version}`;
@@ -1226,7 +1226,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } else {
         // Up to date
-        updateBadge.classList.add('hidden');
+        if (updateBadge) updateBadge.classList.add('hidden');
         updateAvailableCard.classList.add('hidden');
         updateUpToDateCard.classList.remove('hidden');
         

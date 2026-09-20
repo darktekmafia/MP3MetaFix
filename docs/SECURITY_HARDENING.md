@@ -134,3 +134,5 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 ## Telemetry UI Boundary
 
 Detailed telemetry is consolidated in `/admin`. The hub has no resource quickbar and makes no `/api/system/stats` requests; its one-time `/api/health` request returns only basic status and version. Backend administrator authorization on `/api/system/stats` remains unchanged. Hiding UI elements is not used as an authorization boundary.
+
+The editor’s optional update-badge guard changes only DOM rendering. Administrator authorization on update APIs and safe text rendering of release notes remain unchanged.

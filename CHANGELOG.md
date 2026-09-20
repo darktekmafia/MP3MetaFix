@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Synchronized version fallbacks with the current `0.4.1` release.
 
 ### Fixed
+- Fixed editor update checks throwing when the optional header update badge is absent, for both available-update and up-to-date responses.
 - Isolated the updater stream test with a mock subprocess so running the suite cannot invoke the real installer from that test.
 
 ## [0.4.1] - 2026-09-20
