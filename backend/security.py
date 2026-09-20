@@ -85,10 +85,10 @@ def get_storage_dir_name(session_id: str) -> str:
     return hashlib.sha256(f"storage_dir:{SESSION_SECRET_KEY}:{session_id}".encode("utf-8")).hexdigest()[:32]
 
 
-def sanitize_filename(filename: str, default: str = "track.mp3") -> str:
+def sanitize_filename(filename: str, default: str = "track.mp3", extension: str = ".mp3") -> str:
     """Sanitize client-supplied filenames to prevent path traversal and shell injection."""
     if not filename:
-        return default
+        filename = default
     
     # Strip path separators
     name = Path(filename).name
@@ -104,13 +104,16 @@ def sanitize_filename(filename: str, default: str = "track.mp3") -> str:
     
     # Fallback if empty
     if not name:
-        return default
+        name = default
     
-    # Ensure .mp3 extension
-    if not name.lower().endswith(".mp3"):
-        name = f"{name}.mp3"
-        
-    return name[:255]
+    from backend.audio_formats import AUDIO_FORMATS
+    if extension not in AUDIO_FORMATS:
+        raise ValueError("Unsupported audio extension.")
+    suffix = Path(name).suffix.lower()
+    if suffix in AUDIO_FORMATS:
+        name = name[:-len(suffix)]
+    # Preserve the real format even if a custom filename names another format.
+    return name[:255 - len(extension)] + extension
 
 
 def validate_mp3_magic_bytes(header_bytes: bytes) -> bool:

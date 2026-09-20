@@ -34,7 +34,7 @@ MAX_GLOBAL_TEMP_STORAGE_MB = int(os.getenv("MP3METAFIX_MAX_GLOBAL_STORAGE_MB", "
 MAX_GLOBAL_TEMP_STORAGE_BYTES = MAX_GLOBAL_TEMP_STORAGE_MB * 1024 * 1024
 
 # Security / MIME Restrictions
-ALLOWED_AUDIO_EXTENSIONS = {".mp3"}
+ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav"}
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_ARTWORK_SIZE_MB = int(os.getenv("MP3METAFIX_MAX_ARTWORK_SIZE_MB", "10"))
 MAX_ARTWORK_SIZE_BYTES = MAX_ARTWORK_SIZE_MB * 1024 * 1024
@@ -82,7 +82,7 @@ def get_version() -> str:
     version_file = BASE_DIR / "VERSION"
     if version_file.exists():
         return version_file.read_text().strip()
-    return "0.4.1"
+    return "0.5.0"
 
 def get_git_commit() -> Optional[str]:
     """Retrieve current short Git commit hash if running in a git repository."""

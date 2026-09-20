@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="MP3MetaFix - Server-side MP3 metadata editor with ID3v2 tag and cover art management">
-  <title>MP3MetaFix | MP3 Metadata & Cover Art Editor</title>
+  <meta name="description" content="MP3MetaFix - MP3, M4A, and WAV metadata editor with tag and cover art management">
+  <title>MP3MetaFix | Audio Metadata & Cover Art Editor</title>
   
   <!-- Google Fonts: Inter & Outfit -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
   
   <link rel="icon" type="image/svg+xml" href="/assets/mp3metafix.svg">
-  <link rel="stylesheet" href="/css/styles.css?v=0.4.1">
+  <link rel="stylesheet" href="/css/styles.css?v=0.5.0">
 </head>
 <body class="app-body">
   <!-- Dynamic Background Glow Elements -->
@@ -58,7 +58,7 @@
       </nav>
 
       <div class="header-badges">
-        <span class="badge badge-version" id="versionBadge">v0.4.1</span>
+        <span class="badge badge-version" id="versionBadge">v0.5.0</span>
         <span class="badge badge-status" id="serverStatus"><span class="status-dot"></span> Online</span>
         <div class="header-auth-container" id="headerAuthContainer"></div>
       </div>
@@ -68,8 +68,8 @@
     <main class="main-content">
       <!-- State 1: Upload Dropzone -->
       <section id="uploadSection" class="upload-section">
-        <div id="dropzone" class="dropzone-card" tabindex="0" role="button" aria-label="Upload MP3 file dropzone">
-          <input type="file" id="fileInput" accept=".mp3,audio/mpeg" class="visually-hidden">
+        <div id="dropzone" class="dropzone-card" tabindex="0" role="button" aria-label="Upload MP3, M4A, or WAV audio file">
+          <input type="file" id="fileInput" accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/wav,audio/x-wav" class="visually-hidden">
           <div class="dropzone-glow"></div>
           <div class="dropzone-content">
             <div class="dropzone-icon-wrapper">
@@ -79,11 +79,11 @@
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
             </div>
-            <h2 class="dropzone-title">Drop your MP3 file here</h2>
+            <h2 class="dropzone-title">Drop your audio file here</h2>
             <p class="dropzone-desc">Drag and drop an audio file, or click anywhere to browse</p>
             <div class="dropzone-tags">
-              <span class="tag-pill">MP3 Audio</span>
-              <span class="tag-pill">ID3v2.3 / ID3v2.4</span>
+              <span class="tag-pill">MP3 · M4A · WAV</span>
+              <span class="tag-pill">Keep Original Format</span>
               <span class="tag-pill">Embedded Album Art</span>
               <span class="tag-pill">Up to 150 MB</span>
             </div>
@@ -130,7 +130,7 @@
               <span class="suno-btn-sparkle">✨</span>
               <span><span class="btn-txt-full">Suno Sync</span><span class="btn-txt-short">Suno</span></span>
             </button>
-            <button id="btnNewFile" class="btn btn-secondary" title="Upload a different MP3">
+            <button id="btnNewFile" class="btn btn-secondary" title="Upload a different audio file">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
                 <polyline points="16 6 12 2 8 6"></polyline>
@@ -146,7 +146,7 @@
               </svg>
               <span><span class="btn-txt-full">Save Changes</span><span class="btn-txt-short">Save</span></span>
             </button>
-            <button id="btnSaveDownload" class="btn btn-accent" title="Save changes & download updated MP3">
+            <button id="btnSaveDownload" class="btn btn-accent" title="Save changes & download updated audio">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                 <polyline points="7 10 12 15 17 10"></polyline>
@@ -387,14 +387,14 @@
                 <div id="tab-filename" class="tab-panel" role="tabpanel">
                   <div class="naming-container">
                     <p class="naming-help">
-                       Customize how the downloaded MP3 file will be named. Use dynamic tags like <code>%artist%</code>, <code>%title%</code>, <code>%album%</code>, <code>%track%</code>, <code>%year%</code>.
+                       Customize how the downloaded audio file will be named. Its format stays unchanged. Use dynamic tags like <code>%artist%</code>, <code>%title%</code>, <code>%album%</code>, <code>%track%</code>, <code>%year%</code>.
                     </p>
                     
                     <div class="form-group">
                       <label for="inputCustomFilename" class="form-label">Output Filename Pattern</label>
                       <div class="filename-input-wrapper">
                         <input type="text" id="inputCustomFilename" name="custom_filename" class="form-input" placeholder="%artist% - %title%.mp3">
-                        <span class="file-ext-badge">.mp3</span>
+                        <span class="file-ext-badge" id="fileExtensionBadge">.mp3</span>
                       </div>
                     </div>
 
@@ -613,7 +613,7 @@
                 <tr>
                   <th class="col-check">Apply</th>
                   <th class="col-field">Field</th>
-                  <th class="col-current">Current MP3</th>
+                  <th class="col-current">Current Audio</th>
                   <th class="col-suno">Suno Extracted Value</th>
                 </tr>
               </thead>
@@ -952,7 +952,7 @@
   <!-- Toast Notification Container -->
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
-  <script src="/js/auth.js?v=0.4.1"></script>
-  <script src="/js/app.js?v=0.4.1"></script>
+  <script src="/js/auth.js?v=0.5.0"></script>
+  <script src="/js/app.js?v=0.5.0"></script>
 </body>
 </html>

@@ -15,6 +15,7 @@ from backend.config import (
     MAX_GLOBAL_TEMP_STORAGE_BYTES,
 )
 from backend.security import sanitize_filename, get_storage_dir_name
+from backend.audio_formats import AUDIO_FORMATS
 
 logger = logging.getLogger("mp3metafix.storage")
 
@@ -107,8 +108,10 @@ class SessionManager:
 
         return (current_size + required_bytes <= self.max_storage_bytes)
 
-    def create_session(self, original_filename: str) -> Tuple[str, Path]:
+    def create_session(self, original_filename: str, extension: str = ".mp3") -> Tuple[str, Path]:
         """Create a new unique session directory for an uploaded file using a decoupled hash."""
+        if extension not in AUDIO_FORMATS:
+            raise ValueError("Unsupported audio format.")
         session_id = str(uuid.uuid4())
         dir_name = get_storage_dir_name(session_id)
         session_dir = self.temp_dir / dir_name
@@ -118,12 +121,13 @@ class SessionManager:
         except Exception:
             pass
 
-        clean_name = sanitize_filename(original_filename)
-        audio_path = session_dir / "audio.mp3"
+        clean_name = sanitize_filename(original_filename, extension=extension)
+        audio_path = session_dir / f"audio{extension}"
 
         # Write session metadata
         meta = {
             "session_id": session_id,
+            "extension": extension,
             "original_filename": clean_name,
             "created_at": time.time(),
             "last_accessed_at": time.time(),
@@ -152,12 +156,14 @@ class SessionManager:
         return None
 
     def get_audio_path(self, session_id: str) -> Optional[Path]:
-        """Return the path to the MP3 file for a session."""
+        """Return the fixed audio path for a session."""
         sdir = self.get_session_dir(session_id)
         if sdir:
-            audio_file = sdir / "audio.mp3"
-            if audio_file.is_file():
-                return audio_file
+            # Only fixed allowlisted paths; old sessions retain audio.mp3.
+            for extension in AUDIO_FORMATS:
+                audio_file = sdir / f"audio{extension}"
+                if audio_file.is_file() and not audio_file.is_symlink():
+                    return audio_file
         return None
 
     def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:

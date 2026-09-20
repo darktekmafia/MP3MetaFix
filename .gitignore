@@ -72,6 +72,7 @@ tmp/
 *.wav
 *.flac
 *.m4a
+!tests/fixtures/tone.m4a
 *.ogg
 *.opus
 *.aac

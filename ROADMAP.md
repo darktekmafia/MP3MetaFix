@@ -60,6 +60,11 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 **MP3MetaFix** is the dedicated single-track audio metadata, cover art, and inspection workspace. Designed mobile-first for friction-free music tagging on smartphones, tablets, and desktops alike.
 
 ### Completed Features ✅
+- [x] **MP3, M4A, and WAV Audio Tagging (v0.5.0)**:
+  - Shared engine supports M4A AAC/ALAC atoms and WAV ID3 artwork/tags plus existing RIFF INFO text; encoded audio is preserved.
+  - Upload, restore, waveform/playback, filename patterns, cover art, Suno selective merging, and export retain the original format.
+  - `/manager` inherits these shared engine/API capabilities as part of its required `/app` feature parity; its current UI remains a placeholder.
+
 
 - [x] **Editor update-check compatibility**: Update results render correctly when the optional header badge is absent.
 - [x] **Fluid Mobile-First Responsive Layout (320px to 4K)**:
@@ -86,9 +91,6 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - Mobile-first, non-disruptive detection pill (`✨ Suno Detected`) and interactive per-field selective merge table with `Apply Selected`, `Fill Blank Only`, and `Apply All` presets (zero blind overwrites).
 
 ### Active Backlog & Future Vision 📋
-- [ ] **Multi-Format Audio Tagging (`.mp3`, `.m4a`, `.wav`)**:
-  - Support single-track uploading, tag inspection, artwork replacement, and native writeback for **M4A / AAC** (MPEG-4 atoms) and **WAV** (RIFF INFO + embedded ID3 chunk) alongside MP3.
-  - Native browser audio playback and dynamic retina waveform peak generation for all three formats.
 - [ ] **Native Web Share API (`navigator.share`)**:
   - One-tap mobile export to send modified MP3s directly to mobile audio players (VLC, Files, Telegram, Discord, Apple Music).
 - [ ] **MediaSession API Integration**:
@@ -195,7 +197,7 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
 - [ ] **Native Windows Desktop Experience**:
   - Standalone bundled Windows `.exe` using PyInstaller / PyWebView (Edge WebView2 backend) with system tray integration and zero Python prerequisite.
 - [ ] **Multi-Format Audio Engine Expansion**:
-  - Extend Mutagen engine support to **FLAC** (Vorbis comments & picture blocks), **M4A / AAC / ALAC** (MP4 atoms), **OGG / Opus**, and **WAV / AIFF** (ID3 chunks).
+  - MP3, M4A (AAC/ALAC), and WAV are implemented in the shared engine. Remaining formats: **FLAC** (Vorbis comments & picture blocks), **OGG / Opus**, and **AIFF** (ID3 chunks).
 - [ ] **Pluggable Storage Backend Drivers (`StorageProvider`)**:
   - Abstract storage interface supporting Local Filesystem, SMB/NFS shared network mounts, and S3 / MinIO Object Storage.
 - [ ] **Asynchronous Background Task Queue**:

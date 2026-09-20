@@ -294,6 +294,12 @@ sudo systemctl restart mp3metafix.service
 
 Open **Admin Dashboard** from the signed-in administrator account menu to view live diagnostics at `/admin`. The Gateway Hub (`/`) now shows workspace choices and checks basic health/version once; it no longer displays or polls CPU, memory, disk, or cache metrics. This frontend relocation needs no service configuration, permission, or data migration changes.
 
+### Audio format support (v0.5.0)
+
+MP3, M4A (AAC/ALAC), and standard RIFF/WAVE uploads use the existing Mutagen dependency; there is no new runtime package or transcoding service. RF64, raw AAC, video MP4, and other formats are not accepted. Reload the editor after updating to load the versioned frontend assets; restart the backend through your normal local workflow to load the new handlers. Existing MP3 sessions and secrets require no migration.
+
+The existing 150 MB upload limit applies to every format; WAV can reach it sooner because it is often uncompressed. Allow temporary disk headroom for atomic tag writes (up to two additional file copies for WAV with INFO metadata). Playback and waveform decoding depend on browser codec support; metadata editing does not require browser decoding. WAV ID3/cover-art compatibility differs between players.
+
 ## 6. Environment Variables & Security Configuration
 
 The server behavior and security thresholds can be customized via environment variables in systemd units or `.env` files:
@@ -303,7 +309,7 @@ The server behavior and security thresholds can be customized via environment va
 | `MP3METAFIX_HOST` | `127.0.0.1` | Bind interface (use `127.0.0.1` when proxy is colocated; `0.0.0.0` with firewall when proxy is external) |
 | `MP3METAFIX_PORT` | `8844` | Server listening port |
 | `MP3METAFIX_SESSION_TTL_MINUTES` | `60` | Inactivity TTL for uploaded sessions |
-| `MP3METAFIX_MAX_UPLOAD_SIZE_MB` | `150` | Maximum single MP3 upload size (MB) |
+| `MP3METAFIX_MAX_UPLOAD_SIZE_MB` | `150` | Maximum single audio upload size (MB) |
 | `MP3METAFIX_MAX_ARTWORK_SIZE_MB` | `10` | Maximum artwork upload size (MB) |
 | `MP3METAFIX_MAX_GLOBAL_STORAGE_MB` | `2048` | Disk quota cap before automatic LRU session pruning |
 | `MP3METAFIX_TRUST_PROXIES` | `false` | Enables reverse proxy header processing (`X-Forwarded-For`, `X-Forwarded-Proto`) |

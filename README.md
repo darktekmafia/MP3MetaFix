@@ -1,6 +1,6 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 
@@ -15,10 +15,14 @@ The editor’s version dialog supports update checks without a header update bad
 - 🌐 **Multi-Interface Architecture & Gateway Hub**:
   - **Gateway Hub (`/`)**: Compact workspace selector with a one-time health/version check and no telemetry quickbar or resource polling.
   - **Administrator Control Center (`/admin`)**: CPU, memory, disk, and temporary-storage diagnostics, refreshed while signed in as an administrator. Open it through the account menu’s **Admin Dashboard** link.
-  - **MP3MetaFix (`/app`)**: Lightweight, mobile-first, single-track ID3v2.4 editor optimized for touchscreens and quick edits.
+  - **MP3MetaFix (`/app`)**: Lightweight, mobile-first, single-track MP3, M4A, and WAV editor optimized for touchscreens and quick edits.
   - **MP3MetaManager (`/manager`)**: Desktop power-user workspace featuring complete functional superset parity with `/app` (integrated single-track inspector, waveform scrubber, cover art studio) alongside high-density multi-track batch spreadsheet editing, universal ID3 frame/byte inspection, and synced lyrics.
   - **Persistent App Switcher**: Header navigation pill allowing instant workspace jumping without context loss.
-- 🎧 **Complete ID3v2.4 & ID3v2.3 Tagging**:
+- 🎧 **MP3, M4A & WAV Tagging**:
+  - MP3 ID3v2.3/v2.4, M4A AAC/ALAC native atoms, and WAV embedded ID3 tags with existing RIFF INFO text synchronization.
+  - Edit tags and artwork without re-encoding; downloads always retain the original audio format.
+  - Shared backend capabilities are available to `/manager` as its inspector is implemented.
+  - M4A track/disc numbers, totals, and BPM require whole numbers from 0–65535; blank removes the value. Browser playback depends on codec support, and WAV tag/artwork support varies between players.
   - Track Title, Artist, Album, Album Artist, Genre, Year / Date
   - Track Number / Total Tracks, Disc Number / Total Discs, BPM, Composer
   - Comments & Unsynchronized Lyrics

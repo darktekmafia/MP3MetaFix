@@ -7,6 +7,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const state = {
     hasSession: false,
     originalFilename: '',
+    format: 'mp3',
+    extension: '.mp3',
+    mimeType: 'audio/mpeg',
     targetFilename: '',
     hasArtwork: false,
     artworkRemoved: false,
@@ -209,8 +212,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let pendingArrayBuffer = null;
 
   async function handleFileUpload(file) {
-    if (!file.name.toLowerCase().endsWith('.mp3')) {
-      showToast('Please select a valid .mp3 audio file', 'error');
+    if (!/\.(mp3|m4a|wav)$/i.test(file.name)) {
+      showToast('Please select an MP3, M4A, or WAV audio file', 'error');
       return;
     }
 
@@ -226,7 +229,7 @@ document.addEventListener('DOMContentLoaded', () => {
     uploadProgressContainer.classList.remove('hidden');
     uploadProgressBar.style.width = '20%';
     uploadPercent.textContent = '20%';
-    uploadStatusText.textContent = 'Uploading MP3 stream...';
+    uploadStatusText.textContent = 'Uploading audio stream...';
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload', true);
@@ -284,6 +287,16 @@ document.addEventListener('DOMContentLoaded', () => {
   function loadSession(data, isRestore = false) {
     state.hasSession = true;
     state.originalFilename = data.original_filename;
+    state.format = data.audio_info?.format || 'mp3';
+    state.extension = data.audio_info?.extension || '.mp3';
+    state.mimeType = data.audio_info?.mime_type || 'audio/mpeg';
+    document.getElementById('fileExtensionBadge').textContent = state.extension;
+    inputCustomFilename.placeholder = `%artist% - %title%${state.extension}`;
+    // M4A stores these as unsigned integers rather than ID3 text.
+    ['inputTrackNumber', 'inputTotalTracks', 'inputDiscNumber', 'inputTotalDiscs', 'inputBpm'].forEach(id => {
+      const input = document.getElementById(id);
+      input.title = state.format === 'm4a' ? 'M4A: whole number from 0 to 65535, or blank' : '';
+    });
     state.targetFilename = data.target_filename || data.original_filename;
     state.hasArtwork = !!(data.artwork && data.artwork.has_artwork);
     state.artworkRemoved = false;
@@ -292,10 +305,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Header specs
     loadedFilename.textContent = data.original_filename;
     const duration = formatTime(data.audio_info?.duration || 0);
-    const bitrate = data.audio_info?.bitrate_kbps ? `${data.audio_info.bitrate_kbps} kbps` : 'MP3';
+    const bitrate = data.audio_info?.bitrate_kbps ? `${data.audio_info.bitrate_kbps} kbps` : state.format.toUpperCase();
     const sampleRate = data.audio_info?.sample_rate_hz ? `${(data.audio_info.sample_rate_hz / 1000).toFixed(1)} kHz` : '';
     const channels = data.audio_info?.channels === 2 ? 'Stereo' : (data.audio_info?.channels === 1 ? 'Mono' : '');
-    loadedAudioSpecs.textContent = [bitrate, sampleRate, channels, duration].filter(Boolean).join(' • ');
+    loadedAudioSpecs.textContent = [state.format.toUpperCase(), bitrate, sampleRate, channels, duration].filter(Boolean).join(' • ');
 
     // Fill Form fields
     const meta = data.metadata || {};
@@ -314,6 +327,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('inputComment').value = meta.comment || '';
     document.getElementById('inputLyrics').value = meta.lyrics || '';
 
+    inputCustomFilename.value = '';
     if (data.target_filename && data.target_filename !== data.original_filename && inputCustomFilename) {
       inputCustomFilename.value = data.target_filename;
     }
@@ -370,7 +384,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Show Editor, hide dropzone
     uploadSection.classList.add('hidden');
     editorSection.classList.remove('hidden');
-    showToast(isRestore ? 'Active session restored' : 'MP3 loaded and parsed successfully', 'success');
+    showToast(isRestore ? 'Active session restored' : `${state.format.toUpperCase()} loaded and parsed successfully`, 'success');
   }
 
   // --- Artwork Management ---
@@ -984,7 +998,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (data.artist && data.title) {
         pattern = '%artist% - %title%';
       } else {
-        pattern = state.originalFilename || 'track.mp3';
+        pattern = state.originalFilename || `track${state.extension}`;
       }
     }
 
@@ -997,9 +1011,8 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/%year%/gi, data.year || '2026')
       .replace(/%genre%/gi, data.genre || 'Audio');
 
-    if (!result.toLowerCase().endsWith('.mp3')) {
-      result += '.mp3';
-    }
+    // A filename pattern cannot convert the audio container.
+    result = result.replace(/\.(mp3|m4a|wav)$/i, '') + state.extension;
 
     filenamePreview.textContent = result;
   }
@@ -1026,7 +1039,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     btnSave.disabled = true;
     btnSaveDownload.disabled = true;
-    showToast('Saving tags and metadata to MP3...', 'info', 2000);
+    showToast('Saving audio tags and metadata...', 'info', 2000);
 
     try {
       const response = await fetch('/api/save', {
@@ -1042,9 +1055,11 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       if (response.ok && res.success) {
-        showToast('MP3 metadata saved successfully!', 'success');
+        showToast('Audio metadata saved successfully!', 'success');
         loadedFilename.textContent = res.target_filename;
         state.targetFilename = res.target_filename;
+        state.artworkRemoved = false;
+        state.metadata = res.metadata || {};
 
         if (downloadAfter) {
           await triggerDownload(res.target_filename);
@@ -1062,7 +1077,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function triggerDownload(filename) {
     if (!state.hasSession) return;
-    const cleanFilename = filename || state.targetFilename || state.originalFilename || 'track.mp3';
+    const cleanFilename = filename || state.targetFilename || state.originalFilename || `track${state.extension}`;
     const downloadUrl = `/api/download/${encodeURIComponent(cleanFilename)}`;
 
     // Try modern File System Access API (showSaveFilePicker) so browser prompts for exact save location
@@ -1071,11 +1086,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const handle = await window.showSaveFilePicker({
           suggestedName: cleanFilename,
           types: [{
-            description: 'MP3 Audio File',
-            accept: { 'audio/mpeg': ['.mp3'] }
+            description: `${state.format.toUpperCase()} Audio File`,
+            accept: { [state.mimeType]: [state.extension] }
           }]
         });
-        showToast('Writing MP3 file to selected folder...', 'info', 2000);
+        showToast('Writing audio file to selected folder...', 'info', 2000);
         const res = await fetch(downloadUrl);
         if (!res.ok) throw new Error(`Download failed with status ${res.status}`);
         const blob = await res.blob();
@@ -1125,7 +1140,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Discard & New File
   btnNewFile.addEventListener('click', () => {
-    if (confirm('Discard current session and upload a new MP3?')) {
+    if (confirm('Discard current session and upload a new audio file?')) {
       if (state.hasSession) {
         fetch('/api/session', { method: 'DELETE' }).catch(() => {});
       }

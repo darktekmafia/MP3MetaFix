@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-20
+
+### Added
+- Shared MP3, M4A (AAC/ALAC), and WAV metadata support for `/app` and the future `/manager` inspector, without transcoding audio.
+- M4A text, track/disc totals, BPM, lyrics, and JPEG/PNG cover art; WAV embedded ID3 tags/artwork with existing RIFF INFO text fallback and synchronization.
+- Format-aware upload selection, filename previews, native save dialogs, stream/download MIME types, and restored sessions.
+- Bounded M4A/WAV container validation, filename/signature matching, atomic metadata saves, and real-audio regression tests verifying encoded samples remain unchanged.
+
+
 ### Changed
 - Consolidated CPU, memory, disk, and temporary-storage telemetry in the administrator Control Center (`/admin`). The Gateway Hub now focuses on workspace selection, with no telemetry quickbar or recurring resource polling.
 - Kept a one-time public health/version check on the hub and raised its header above workspace cards so the account dropdown remains visible on mobile.
-- Synchronized version fallbacks with the current `0.4.1` release.
+- Synchronized version fallbacks with the current `0.5.0` release.
 
 ### Fixed
 - Fixed editor update checks throwing when the optional header update badge is absent, for both available-update and up-to-date responses.

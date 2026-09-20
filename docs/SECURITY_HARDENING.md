@@ -136,3 +136,9 @@ This document logs the threat model, attack surface analysis, vulnerability vect
 Detailed telemetry is consolidated in `/admin`. The hub has no resource quickbar and makes no `/api/system/stats` requests; its one-time `/api/health` request returns only basic status and version. Backend administrator authorization on `/api/system/stats` remains unchanged. Hiding UI elements is not used as an authorization boundary.
 
 The editor’s optional update-badge guard changes only DOM rendering. Administrator authorization on update APIs and safe text rendering of release notes remain unchanged.
+
+## Additional Audio Container Validation (v0.5.0)
+
+MP3, M4A, and WAV upload extensions are allowlisted and checked against the first 8 KB before session persistence. M4A and WAV then undergo bounded box/chunk traversal and Mutagen parsing; malformed or truncated uploads are removed. M4A must contain an audio track, no video track, and AAC or ALAC audio. WAV requires valid RIFF length, format and data chunks; INFO text processing is capped at 1 MB. MIME types are selected by validated format, never by the browser's supplied content type.
+
+Storage lookups use only fixed allowlisted audio basenames. Download names cannot change the original container extension. Authentication, signed file sessions, CSRF, rate limits, size bounds, and artwork validation apply equally to every format. Atomic writes preserve the prior session file on failure; regression tests cover invalid numeric tags, malformed containers, unauthorized uploads, and unchanged encoded audio samples.

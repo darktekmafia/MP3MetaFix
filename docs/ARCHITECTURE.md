@@ -96,9 +96,23 @@ MP3MetaFix maps high-level user fields to standard ID3v2.4 and ID3v2.3 tags:
 | Lyrics | `USLT` | UTF-8 | Unsynchronized song lyrics |
 | Cover Art | `APIC` | Binary | Embedded front cover image (`type=3`) |
 
+### Shared audio formats (v0.5.0)
+
+All interfaces use the same `audio_formats.py`, `metadata_engine.py`, storage manager, and API routes. `/manager` must reuse these capabilities when its single-track inspector is implemented, rather than maintaining a separate format engine.
+
+| Container | Metadata and artwork | MIME | Stored file |
+|---|---|---|---|
+| MP3 | ID3v2 text, USLT, APIC | `audio/mpeg` | `audio.mp3` |
+| M4A (AAC/ALAC) | MP4 text atoms, trkn/disk tuples, tmpo, lyrics, covr JPEG/PNG | `audio/mp4` | `audio.m4a` |
+| WAV | RIFF-embedded ID3; existing INFO text fallback and synchronization | `audio/wav` | `audio.wav` |
+
+`audio_info` includes `format`, `extension`, and `mime_type` in upload and session-restore responses. Filenames and native save dialogs retain that extension, even when a supplied pattern names another format. M4A numeric values are validated before saving; unsupported values return HTTP 422 without modifying the file. WAV INFO title/artist/album/genre/year/comment/track/composer values are synchronized only where those entries already exist; unknown INFO entries and other chunks remain intact. UTF-8 is written for changed INFO text; legacy text falls back to Windows-1252 when reading.
+
+Metadata writes copy the session file to a sibling temporary file, write native tags, validate the result, and atomically replace the session file. No transcoder runs in the application. Encoded samples remain unchanged, unrelated tags remain intact, and original uploads on the user's device are untouched. Saves briefly require space for a second copy (and an additional temporary copy when synchronizing WAV INFO). Existing MP3 sessions work without migration.
+
 ## 4. Audio Streaming & Range Requests
 
-To allow instantaneous scrubbing and preview in web browsers, the `GET /api/stream/{session_id}` endpoint implements **HTTP 206 Partial Content**:
+To allow instantaneous scrubbing and preview in web browsers, the `GET /api/stream` endpoint implements **HTTP 206 Partial Content**:
 - Parses `Range: bytes=start-end` request headers.
 - Streams audio chunks (64 KB) on-demand.
 - Supports seeking without downloading the full audio file ahead of time.
@@ -110,7 +124,7 @@ To allow instantaneous scrubbing and preview in web browsers, the `GET /api/stre
 - **File System Access API**:
   - In supported Chromium-based browsers, `window.showSaveFilePicker()` is utilized to prompt the user to choose an explicit save location on their local filesystem.
 - **Named Path Downloads**:
-  - `GET /api/download/{session_id}/{filename}` routes provide direct file path semantics for browsers and download managers.
+  - `GET /api/download/{filename}` routes provide direct file path semantics for browsers and download managers.
 - **Content-Disposition Encoding**:
   - Employs RFC 5987 parameter encoding (`filename*=UTF-8''...`) for full Unicode fidelity and an ASCII-sanitized `filename` fallback.
 

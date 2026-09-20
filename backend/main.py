@@ -55,7 +55,6 @@ from backend.config import (
 from backend.security import (
     SecurityHeadersMiddleware,
     CSRFProtectionMiddleware,
-    validate_mp3_magic_bytes,
     validate_and_normalize_image,
     sanitize_filename,
     create_signed_session_token,
@@ -64,12 +63,15 @@ from backend.security import (
 )
 from pydantic import BaseModel, Field
 
+from backend.audio_formats import audio_format, matches_audio_header
+
 from backend.storage import (
     storage_manager,
     start_periodic_cleanup_loop,
 )
 from backend.metadata_engine import (
     MetadataModel,
+    MetadataValidationError,
     extract_metadata_and_artwork,
     write_metadata_and_artwork,
     get_embedded_artwork_binary,
@@ -123,7 +125,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="MP3MetaFix API",
-    description="Server-side MP3 metadata and album art editor",
+    description="Server-side MP3, M4A, and WAV metadata and artwork editor",
     version=VERSION,
     lifespan=lifespan,
 )
@@ -154,7 +156,7 @@ def get_current_session_id(request: Request) -> str:
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session missing or expired. Please upload an MP3.",
+            detail="Session missing or expired. Please upload an audio file.",
         )
     session_id = verify_signed_session_token(token)
     if not session_id:
@@ -487,13 +489,13 @@ async def apply_update(request: Request, user: Dict[str, Any] = Depends(require_
 
 
 @app.post("/api/upload")
-async def upload_mp3(
+async def upload_audio(
     request: Request,
     response: Response,
     file: UploadFile = File(...),
     _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
-    """Upload an MP3 file, validate magic bytes, create authenticated session cookie, and extract metadata."""
+    """Validate an audio container, create an isolated session, and extract metadata."""
     # 1. Rate Limiting Check
     client_ip = upload_rate_limiter.get_client_ip(request)
     if not upload_rate_limiter.is_allowed(client_ip):
@@ -505,6 +507,11 @@ async def upload_mp3(
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file provided")
 
+    try:
+        descriptor = audio_format(file.filename)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Supported audio formats are MP3, M4A, and WAV.")
+
     # 2. Storage Quota Check
     if not storage_manager.ensure_storage_available(required_bytes=10 * 1024 * 1024):
         raise HTTPException(
@@ -514,18 +521,20 @@ async def upload_mp3(
 
     # Read initial chunk to validate magic bytes without storing entire file in memory
     header_chunk = await file.read(8192)
-    if not validate_mp3_magic_bytes(header_chunk):
+    if not matches_audio_header(header_chunk, descriptor["extension"]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid audio file. The file is not a valid MP3 stream.",
+            detail="Invalid audio file. The content does not match its audio format.",
         )
 
     # Create storage session
-    session_id, audio_path = storage_manager.create_session(file.filename)
+    session_id, audio_path = storage_manager.create_session(file.filename, descriptor["extension"])
 
     # Stream the file to disk enforcing max size
     total_bytes = len(header_chunk)
     try:
+        if total_bytes > MAX_UPLOAD_SIZE_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds maximum allowed size.")
         with open(audio_path, "wb") as f:
             f.write(header_chunk)
             while chunk := await file.read(1024 * 1024):  # 1MB chunks
@@ -538,6 +547,7 @@ async def upload_mp3(
                     )
                 f.write(chunk)
     except HTTPException:
+        storage_manager.cleanup_session(session_id)
         raise
     except Exception as e:
         logger.exception("Upload processing error")
@@ -551,11 +561,11 @@ async def upload_mp3(
     try:
         parsed = extract_metadata_and_artwork(audio_path)
     except Exception as e:
-        logger.warning(f"Failed to parse ID3 tags: {e}")
+        logger.warning("Failed to parse uploaded audio: %s", type(e).__name__)
         storage_manager.cleanup_session(session_id)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Could not parse ID3 tags from the uploaded file.",
+            detail="Could not parse the uploaded audio file.",
         )
 
     session_info = storage_manager.get_session_info(session_id) or {}
@@ -599,7 +609,7 @@ async def get_artwork(
         mime = meta_art.read_text().strip()
         return FileResponse(temp_art, media_type=mime)
 
-    # Otherwise read from the MP3
+    # Otherwise read from the audio file
     audio_path = storage_manager.get_audio_path(session_id)
     if not audio_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found")
@@ -625,6 +635,8 @@ async def upload_artwork(
 
     raw_bytes = await image.read()
     clean_bytes, mime_type = validate_and_normalize_image(raw_bytes, MAX_ARTWORK_SIZE_BYTES)
+
+    (sdir / "artwork_remove.flag").unlink(missing_ok=True)
 
     # Save to staging files in session
     temp_art = sdir / "artwork_pending.bin"
@@ -766,7 +778,7 @@ async def save_metadata(
     session_id: str = Depends(get_current_session_id),
     _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
-    """Commit edited metadata and staged artwork to the MP3 file for the authenticated session."""
+    """Commit edited metadata and staged artwork to the audio file for the authenticated session."""
     audio_path = storage_manager.get_audio_path(session_id)
     sdir = storage_manager.get_session_dir(session_id)
     if not audio_path or not sdir:
@@ -792,11 +804,13 @@ async def save_metadata(
             new_artwork_bytes=new_art_bytes,
             new_artwork_mime=new_art_mime,
         )
+    except MetadataValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        logger.exception("Failed to write ID3 tags")
+        logger.exception("Failed to write audio tags")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to write ID3 tags to the audio file.",
+            detail="Failed to write metadata to the audio file.",
         )
 
     # Clean up artwork staging flags
@@ -809,13 +823,13 @@ async def save_metadata(
 
     # Determine custom/sanitized output filename
     session_info = storage_manager.get_session_info(session_id) or {}
-    orig_name = session_info.get("original_filename", "track.mp3")
+    orig_name = session_info.get("original_filename", f"track{audio_path.suffix}")
 
     target_name = orig_name
     if meta.custom_filename:
-        target_name = sanitize_filename(meta.custom_filename)
+        target_name = sanitize_filename(meta.custom_filename, extension=audio_path.suffix)
     elif meta.artist and meta.title:
-        target_name = sanitize_filename(f"{meta.artist} - {meta.title}.mp3")
+        target_name = sanitize_filename(f"{meta.artist} - {meta.title}", extension=audio_path.suffix)
 
     storage_manager.update_session_info(session_id, {"target_filename": target_name})
 
@@ -831,21 +845,21 @@ async def save_metadata(
 
 @app.get("/api/download")
 @app.get("/api/download/{filename:path}")
-async def download_mp3(
+async def download_audio(
     background_tasks: BackgroundTasks,
     filename: Optional[str] = None,
     cleanup_after: bool = False,
     session_id: str = Depends(get_current_session_id),
     _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
-    """Download the modified MP3 file with clean Content-Disposition headers for the authenticated session."""
+    """Download the modified audio file with clean Content-Disposition headers for the authenticated session."""
     audio_path = storage_manager.get_audio_path(session_id)
     session_info = storage_manager.get_session_info(session_id)
     if not audio_path or not session_info:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    download_name = filename or session_info.get("target_filename") or session_info.get("original_filename", "track.mp3")
-    clean_name = sanitize_filename(download_name)
+    download_name = filename or session_info.get("target_filename") or session_info.get("original_filename", f"track{audio_path.suffix}")
+    clean_name = sanitize_filename(download_name, extension=audio_path.suffix)
     encoded_name = urllib.parse.quote(clean_name, safe="")
     ascii_name = re.sub(r'[^\x20-\x7e]', '_', clean_name).replace('"', '')
 
@@ -859,7 +873,7 @@ async def download_mp3(
 
     return FileResponse(
         path=audio_path,
-        media_type="audio/mpeg",
+        media_type=audio_format(audio_path)["mime_type"],
         filename=clean_name,
         headers=headers,
     )
@@ -896,7 +910,7 @@ async def stream_audio(
         headers = {
             "Accept-Ranges": "bytes",
             "Content-Length": str(file_size),
-            "Content-Type": "audio/mpeg",
+            "Content-Type": audio_format(audio_path)["mime_type"],
         }
         return StreamingResponse(full_iterator(), status_code=200, headers=headers)
 
@@ -912,7 +926,7 @@ async def stream_audio(
         headers = {
             "Accept-Ranges": "bytes",
             "Content-Length": str(file_size),
-            "Content-Type": "audio/mpeg",
+            "Content-Type": audio_format(audio_path)["mime_type"],
         }
         return StreamingResponse(full_iterator(), status_code=200, headers=headers)
 
@@ -1000,7 +1014,7 @@ async def stream_audio(
         "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Accept-Ranges": "bytes",
         "Content-Length": str(content_length),
-        "Content-Type": "audio/mpeg",
+        "Content-Type": audio_format(audio_path)["mime_type"],
     }
     return StreamingResponse(file_iterator(), status_code=206, headers=headers)
 
@@ -1027,7 +1041,7 @@ async def get_session_state(
     try:
         parsed = extract_metadata_and_artwork(audio_path)
     except Exception as e:
-        logger.warning(f"Failed to parse active session ID3 tags on restore: {e}")
+        logger.warning("Failed to restore audio tags: %s", type(e).__name__)
         return {"active": False}
 
     session_info = storage_manager.get_session_info(session_id) or {}
@@ -1059,7 +1073,7 @@ async def get_session_state(
         except Exception as e:
             logger.warning(f"Failed to read pending artwork: {e}")
 
-    orig_name = session_info.get("original_filename", "track.mp3")
+    orig_name = session_info.get("original_filename", f"track{audio_path.suffix}")
     target_name = session_info.get("target_filename", orig_name)
 
     return {

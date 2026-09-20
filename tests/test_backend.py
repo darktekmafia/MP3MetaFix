@@ -39,6 +39,10 @@ def setup_auth_environment(tmp_path, monkeypatch):
     monkeypatch.setattr("backend.auth.auth_manager", test_auth_mgr)
     login_rate_limiter.failed_attempts.clear()
     login_rate_limiter.blocked_until.clear()
+    # Isolate uploaded files and rate limits as well as account state.
+    from backend.security import upload_rate_limiter
+    monkeypatch.setattr("backend.main.storage_manager", SessionManager(temp_dir=tmp_path / "audio"))
+    upload_rate_limiter.history.clear()
     # Create default admin for standard test runs
     test_auth_mgr.create_initial_admin("admin", "AdminPass123!")
     return test_auth_mgr
@@ -296,7 +300,7 @@ def test_multi_interface_static_mounts(client):
     # 2. MP3MetaFix Quick Editor (/app)
     res_app = client.get("/app/")
     assert res_app.status_code == 200
-    assert "Drop your MP3 file here" in res_app.text
+    assert "Drop your audio file here" in res_app.text
     assert "app-switcher-nav" in res_app.text
 
     # 3. MP3MetaManager Desktop Workspace (/manager)
@@ -330,7 +334,7 @@ def test_api_upload_invalid_file(client):
         files={"file": ("malicious.exe", b"MZ\x90\x00ThisIsNotAnMP3", "audio/mpeg")},
     )
     assert response.status_code == 400
-    assert "not a valid MP3" in response.json()["detail"]
+    assert "Supported audio formats" in response.json()["detail"]
 
 
 def test_api_unauthenticated_access_rejected(client):
@@ -2278,3 +2282,197 @@ def test_guest_mode_vs_protected_mode_enforcement(unauth_client, auth_client, sa
 
 
 
+
+
+# --- Shared MP3 / M4A / WAV engine and API workflows ---
+@pytest.fixture
+def sample_wav_bytes():
+    import math
+    import struct
+    import wave
+    output = io.BytesIO()
+    with wave.open(output, "wb") as audio:
+        audio.setparams((1, 2, 44100, 0, "NONE", "not compressed"))
+        audio.writeframes(b"".join(struct.pack("<h", int(12000 * math.sin(2 * math.pi * 440 * i / 44100))) for i in range(6615)))
+    return output.getvalue()
+
+
+@pytest.fixture
+def sample_m4a_bytes():
+    return (Path(__file__).parent / "fixtures" / "tone.m4a").read_bytes()
+
+
+def audio_payload(path):
+    """Capture the actual encoded sample chunk, independently of tag offsets."""
+    data = path.read_bytes()
+    if path.suffix == ".wav":
+        offset = 12
+        while offset < len(data):
+            length = int.from_bytes(data[offset + 4:offset + 8], "little")
+            if data[offset:offset + 4] == b"data":
+                return data[offset + 8:offset + 8 + length]
+            offset += 8 + length + length % 2
+    elif path.suffix == ".m4a":
+        offset = 0
+        while offset < len(data):
+            length = int.from_bytes(data[offset:offset + 4], "big")
+            if data[offset + 4:offset + 8] == b"mdat":
+                return data[offset + 8:offset + length]
+            offset += length
+    else:
+        # These synthetic MP3s have no trailing ID3v1 tag.
+        offset = 10 + sum((data[6 + i] & 127) << (7 * (3 - i)) for i in range(4)) if data[:3] == b"ID3" else 0
+        return data[offset:]
+    raise AssertionError("Missing audio sample chunk")
+
+
+@pytest.mark.parametrize("extension,mime", [(".mp3", "audio/mpeg"), (".m4a", "audio/mp4"), (".wav", "audio/wav")])
+def test_audio_format_roundtrip(client, request, tmp_path, sample_image_bytes, extension, mime):
+    source = request.getfixturevalue("sample_" + extension[1:] + "_bytes")
+    original = tmp_path / ("original" + extension)
+    original.write_bytes(source)
+    expected_audio = audio_payload(original)
+    upload = client.post("/api/upload", files={"file": ("Söng" + extension.upper(), source, "application/octet-stream")})
+    assert upload.status_code == 200, upload.text
+    body = upload.json()
+    assert body["audio_info"]["extension"] == extension
+    assert body["audio_info"]["mime_type"] == mime
+    assert body["audio_info"]["duration"] > 0
+    assert body["audio_info"]["sample_rate_hz"] == 44100
+    assert "session_id" not in body
+    assert client.post("/api/artwork", files={"image": ("cover.jpg", sample_image_bytes, "image/jpeg")}).status_code == 200
+    metadata = dict(title="Été — 音楽", artist="Artist", album="Album", album_artist="Band", composer="Composer", genre="Ambient", year="2026", track_number="2", total_tracks="9", disc_number="1", total_discs="2", bpm="120", comment="Made with Suno", lyrics="[Verse]\nHello 🌍", custom_filename="../Export.mp3")
+    saved = client.post("/api/save", json=metadata)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["target_filename"] == "Export" + extension
+    for field, value in metadata.items():
+        if field != "custom_filename":
+            assert saved.json()["metadata"][field] == value
+    artwork = client.get("/api/artwork")
+    assert artwork.status_code == 200 and artwork.headers["content-type"] == "image/jpeg"
+    assert Image.open(io.BytesIO(artwork.content)).size == (100, 100)
+    restored = client.get("/api/session").json()
+    assert restored["active"] and restored["audio_info"]["extension"] == extension
+    assert restored["artwork"]["has_artwork"]
+    downloaded = client.get("/api/download/forged.mp3")
+    assert downloaded.headers["content-type"] == mime
+    assert "forged" + extension in downloaded.headers["content-disposition"]
+    output = tmp_path / ("output" + extension)
+    output.write_bytes(downloaded.content)
+    assert audio_payload(output) == expected_audio
+    assert extract_metadata_and_artwork(output)["metadata"]["lyrics"] == metadata["lyrics"]
+    stream = client.get("/api/stream", headers={"Range": "bytes=0-31"})
+    assert stream.status_code == 206 and stream.headers["content-type"] == mime
+    assert stream.content == downloaded.content[:32]
+    assert client.get("/api/stream", headers={"Range": "bytes=99999999-"}).status_code == 416
+    # Removing then replacing artwork must cancel the removal flag.
+    assert client.delete("/api/artwork").status_code == 200
+    assert client.post("/api/artwork", files={"image": ("cover.jpg", sample_image_bytes, "image/jpeg")}).status_code == 200
+    assert client.post("/api/save", json=metadata).json()["artwork"]["has_artwork"]
+    assert client.delete("/api/artwork").status_code == 200
+    assert not client.post("/api/save", json=metadata).json()["artwork"]["has_artwork"]
+    assert client.get("/api/artwork").status_code == 404
+    assert client.delete("/api/session").status_code == 200
+
+
+@pytest.mark.parametrize("extension", [".m4a", ".wav"])
+def test_audio_upload_security(client, unauth_client, request, monkeypatch, extension):
+    from backend.main import storage_manager
+    source = request.getfixturevalue("sample_" + extension[1:] + "_bytes")
+    assert unauth_client.post("/api/upload", files={"file": ("song" + extension, source)}).status_code == 401
+    assert client.post("/api/upload", headers={"Sec-Fetch-Site": "cross-site"}, files={"file": ("song" + extension, source)}).status_code == 403
+    # Foreign signatures, extension mismatch, and truncated containers must fail.
+    for data in (b"MZ" + b"\0" * 64, source[:24]):
+        assert client.post("/api/upload", files={"file": ("song" + extension, data)}).status_code in (400, 422)
+    assert client.post("/api/upload", files={"file": ("song.mp3", source)}).status_code == 400
+    assert storage_manager.get_session_stats()["active_sessions_count"] == 0
+    monkeypatch.setattr("backend.main.MAX_UPLOAD_SIZE_BYTES", 16)
+    assert client.post("/api/upload", files={"file": ("song" + extension, source)}).status_code == 413
+    assert storage_manager.get_session_stats()["active_sessions_count"] == 0
+
+
+@pytest.mark.parametrize("field,value", [("bpm", "120.5"), ("track_number", "1/9"), ("total_tracks", "65536"), ("disc_number", "-1"), ("total_discs", "oops")])
+def test_m4a_invalid_numbers_preserve_file(client, sample_m4a_bytes, field, value):
+    assert client.post("/api/upload", files={"file": ("tone.m4a", sample_m4a_bytes)}).status_code == 200
+    before = client.get("/api/download").content
+    result = client.post("/api/save", json={"title": "Should not be saved", field: value})
+    assert result.status_code == 422
+    assert "whole number" in result.json()["detail"]
+    assert client.get("/api/download").content == before
+
+
+@pytest.mark.parametrize("extension", [".m4a", ".wav"])
+def test_unedited_tags_artwork_and_audio_preserved(tmp_path, request, sample_image_bytes, extension):
+    from mutagen.mp4 import MP4, MP4FreeForm
+    from mutagen.wave import WAVE
+    from mutagen.id3 import TXXX
+    path = tmp_path / ("track" + extension)
+    path.write_bytes(request.getfixturevalue("sample_" + extension[1:] + "_bytes"))
+    write_metadata_and_artwork(path, MetadataModel(title="Original"), sample_image_bytes, "image/jpeg")
+    if extension == ".m4a":
+        audio = MP4(path)
+        audio.tags["----:com.apple.iTunes:KEEP"] = [MP4FreeForm(b"custom value")]
+    else:
+        audio = WAVE(path)
+        audio.tags.add(TXXX(encoding=3, desc="KEEP", text=["custom value"]))
+    audio.save()
+    before = audio_payload(path)
+    write_metadata_and_artwork(path, MetadataModel(title="Changed"))
+    assert audio_payload(path) == before
+    assert get_embedded_artwork_binary(path)[0] == sample_image_bytes
+    if extension == ".m4a":
+        assert MP4(path).tags["----:com.apple.iTunes:KEEP"][0] == b"custom value"
+    else:
+        assert WAVE(path).tags["TXXX:KEEP"].text == ["custom value"]
+
+
+def test_wave_info_fallback_and_sync(tmp_path, sample_wav_bytes):
+    from backend.wave_metadata import read_info, info_chunks
+    def chunk(kind, data):
+        return kind + len(data).to_bytes(4, "little") + data + b"\0" * (len(data) % 2)
+    extra = chunk(b"LIST", b"INFO" + chunk(b"INAM", b"Original\0") + chunk(b"ICMT", b"Comment\0") + chunk(b"IENG", b"Keep engineer\0"))
+    data = bytearray(sample_wav_bytes + extra + chunk(b"JUNK", b"unchanged"))
+    data[4:8] = (len(data) - 8).to_bytes(4, "little")
+    path = tmp_path / "info.wav"
+    path.write_bytes(data)
+    metadata = extract_metadata_and_artwork(path)["metadata"]
+    assert metadata["title"] == "Original" and metadata["comment"] == "Comment"
+    before = audio_payload(path)
+    write_metadata_and_artwork(path, MetadataModel(title="New 音楽", comment=""))
+    assert read_info(path)["title"] == "New 音楽"
+    assert "comment" not in read_info(path)
+    assert extract_metadata_and_artwork(path)["metadata"]["comment"] == ""
+    assert (b"IENG", b"Keep engineer\0") in next(iter(info_chunks(path).values()))
+    assert b"unchanged" in path.read_bytes()
+    assert audio_payload(path) == before
+
+
+def test_audio_filename_extension_and_legacy_session(tmp_path):
+    for extension in (".mp3", ".m4a", ".wav"):
+        assert sanitize_filename("../../song.mp3", extension=extension) == "song" + extension
+        assert sanitize_filename("", extension=extension) == "track" + extension
+        assert sanitize_filename("x" * 300, extension=extension).endswith(extension)
+        assert len(sanitize_filename("x" * 300, extension=extension)) == 255
+    manager = SessionManager(temp_dir=tmp_path)
+    sid, path = manager.create_session("old.mp3")
+    path.write_bytes(b"old")
+    assert manager.get_audio_path(sid) == path
+    # Original session metadata predates format descriptors.
+    info = manager.get_session_info(sid)
+    info.pop("extension")
+    (path.parent / "session.json").write_text(json.dumps(info))
+    assert manager.get_audio_path(sid) == path
+    assert manager.get_audio_path("../../outside") is None
+
+
+def test_atomic_tag_failure_preserves_original(tmp_path, sample_wav_bytes, monkeypatch):
+    path = tmp_path / "song.wav"
+    path.write_bytes(sample_wav_bytes)
+    def failing_write(temporary, *args):
+        temporary.write_bytes(b"corrupt")
+        raise OSError("simulated failure")
+    monkeypatch.setattr("backend.metadata_engine._write_id3", failing_write)
+    with pytest.raises(OSError):
+        write_metadata_and_artwork(path, MetadataModel(title="Changed"))
+    assert path.read_bytes() == sample_wav_bytes
+    assert not list(tmp_path.glob(".save-*"))
