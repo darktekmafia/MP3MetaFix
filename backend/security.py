@@ -245,7 +245,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com data:",
-            "img-src 'self' data: blob: https://*.githubusercontent.com",
+            "img-src 'self' data: blob: https://*.githubusercontent.com https://*.suno.ai https://*.suno.com",
             "media-src 'self' blob: data:",
             "connect-src 'self' https://cloudflareinsights.com https://api.github.com",
             "base-uri 'self'",
