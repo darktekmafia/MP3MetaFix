@@ -41,7 +41,7 @@ See the audit for precise prerequisites, code references, bounded probes, and li
 ### Audio and images
 
 - MP3/M4A/WAV extensions are allowlisted and checked against the initial 8 KiB before writing to session storage (after framework multipart spooling).
-- M4A/WAV undergo bounded container traversal and Mutagen parsing. M4A handlers target AAC/ALAC audio-only files. WAV requires valid RIFF lengths and format/data chunks; INFO input/output is capped at 1 MiB.
+- M4A/WAV undergo bounded container traversal and Mutagen parsing. M4A handlers target AAC, ALAC, and Opus audio-only files. WAV requires valid RIFF lengths and format/data chunks; INFO input/output is capped at 1 MiB.
 - Stream/download MIME is selected by audio format. Downloads use attachment filenames. Byte-range requests reject invalid/unsupported ranges.
 - Separately uploaded artwork passes magic checks, Pillow verification/re-encoding, and dimension checks (4096px per side). `Image.MAX_IMAGE_PIXELS=10_000_000` configures Pillow's warning/error thresholds; it is not an explicit hard rejection at exactly ten million pixels.
 - **Embedded artwork does not pass that normalization pipeline.** Untrusted APIC MIME and bytes are returned directly; this is the high-severity active-content finding. M4A cover extraction also needs consistent size/image validation.

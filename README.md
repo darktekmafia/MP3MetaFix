@@ -25,7 +25,7 @@ The editor’s version dialog supports update checks without a header update bad
   - **MP3MetaManager (`/manager`)**: Desktop workspace shell with navigation and a coming-soon state. The integrated editor, batch spreadsheet, raw metadata inspector, and synced lyrics are planned. It must inherit every `/app` capability through the shared engine/API.
   - **Persistent App Switcher**: Header navigation pill allowing instant workspace jumping without context loss.
 - 🎧 **MP3, M4A & WAV Tagging**:
-  - MP3 ID3v2.3/v2.4, M4A AAC/ALAC native atoms, and WAV embedded ID3 tags with existing RIFF INFO text synchronization.
+  - MP3 ID3v2.3/v2.4, M4A AAC/ALAC/Opus native atoms, and WAV embedded ID3 tags with existing RIFF INFO text synchronization.
   - Edit tags and artwork without re-encoding; downloads always retain the original audio format.
   - Shared backend capabilities are available to `/manager` as its inspector is implemented.
   - M4A track/disc numbers, totals, and BPM require whole numbers from 0–65535; blank removes the value. Browser playback depends on codec support, and WAV tag/artwork support varies between players.

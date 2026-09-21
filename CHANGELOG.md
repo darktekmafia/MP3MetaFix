@@ -9,12 +9,15 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ## [Unreleased]
 
+### Fixed
+- Accept Opus codec in M4A files. Suno now encodes downloads as Opus-in-MP4 instead of AAC; the codec allowlist previously rejected these with HTTP 422. Owner-confirmed working with a real Suno M4A file.
+
 ### Documentation
 - Added the owner’s exact M4A upload HTTP 422 browser error to the session handoff, with parsing-stage interpretation and request-validation caveat.
 - Repaired relative documentation links and identified the missing standalone LICENSE file without inventing license text.
 - Added the permanent 2026-09-20 security audit and full session handoff, with unresolved findings, evidence, and verification limits.
 - Corrected security and deployment claims: multipart limits occur after spooling, artwork can serve active content, account recovery/token revocation remain incomplete, updater locking is worker-local, and the active user service lacks template hardening.
-- Recorded the owner-confirmed WAV success and unresolved real-file M4A parsing failure despite passing synthetic AAC checks.
+- Diagnosed and resolved the owner-reported M4A parsing failure: Suno's encoder switched from AAC to Opus; the codec allowlist now accepts Opus-in-MP4.
 - Clarified that `/manager` is a shell with shared-engine parity planned, not a completed batch editor; distinguished stored settings from runtime enforcement and public static pages from protected APIs.
 - Replaced unsupported Suno compliance assertions with implementation scope and an explicit unverified policy-review status.
 
@@ -22,7 +25,7 @@ Historical release entries describe what was recorded at the time. Security comp
 ## [0.5.0] - 2026-09-20
 
 ### Added
-- Shared MP3, M4A (AAC/ALAC), and WAV metadata support for `/app` and the future `/manager` inspector, without transcoding audio.
+- Shared MP3, M4A (AAC/ALAC/Opus), and WAV metadata support for `/app` and the future `/manager` inspector, without transcoding audio.
 - M4A text, track/disc totals, BPM, lyrics, and JPEG/PNG cover art; WAV embedded ID3 tags/artwork with existing RIFF INFO text fallback and synchronization.
 - Format-aware upload selection, filename previews, native save dialogs, stream/download MIME types, and restored sessions.
 - Bounded M4A/WAV container validation, filename/signature matching, atomic metadata saves, and real-audio regression tests verifying encoded samples remain unchanged.

@@ -314,9 +314,9 @@ Open **Admin Dashboard** from the signed-in administrator account menu to view l
 
 ### Audio format support (v0.5.0)
 
-MP3, M4A (AAC/ALAC), and standard RIFF/WAVE uploads use the existing Mutagen dependency; there is no new runtime package or transcoding service. RF64, raw AAC, video MP4, and other formats are not accepted. Reload the editor after updating to load the versioned frontend assets; restart the backend through your normal local workflow to load the new handlers. Existing MP3 sessions and secrets require no migration.
+MP3, M4A (AAC/ALAC/Opus), and standard RIFF/WAVE uploads use the existing Mutagen dependency; there is no new runtime package or transcoding service. RF64, raw AAC, video MP4, and other formats are not accepted. Reload the editor after updating to load the versioned frontend assets; restart the backend through your normal local workflow to load the new handlers. Existing MP3 sessions and secrets require no migration.
 
-Owner testing confirmed WAV editing, but a real M4A file failed parsing. Synthetic AAC M4A tests passed; the specific compatibility failure is unresolved.
+Owner testing confirmed MP3, WAV, and real Suno Opus M4A editing. Synthetic AAC M4A tests also pass.
 
 The endpoint’s existing 150 MB upload limit applies to every format; WAV can reach it sooner because it is often uncompressed. Allow temporary disk headroom for atomic tag writes (up to two additional file copies for WAV with INFO metadata). Playback and waveform decoding depend on browser codec support; metadata editing does not require browser decoding. WAV ID3/cover-art compatibility differs between players.
 

@@ -60,9 +60,9 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 **MP3MetaFix** is the dedicated single-track audio metadata, cover art, and inspection workspace. Designed mobile-first for friction-free music tagging on smartphones, tablets, and desktops alike.
 
 ### Completed Features ✅
-- [x] **Native-format engine and UI implementation (v0.5.0; M4A compatibility follow-up open)**:
-  - Shared engine supports M4A AAC/ALAC atoms and WAV ID3 artwork/tags plus existing RIFF INFO text; encoded audio is preserved.
-  - Synthetic MP3/AAC M4A/WAV tests verify upload, restore, playback, filename patterns, artwork, and export without changing format. Owner confirmed WAV; one real M4A fails parsing with no diagnosed cause.
+- [x] **Native-format engine and UI implementation (v0.5.0)**:
+  - Shared engine supports M4A AAC/ALAC/Opus atoms and WAV ID3 artwork/tags plus existing RIFF INFO text; encoded audio is preserved.
+  - Synthetic MP3/AAC M4A/WAV tests verify upload, restore, playback, filename patterns, artwork, and export without changing format. Owner confirmed WAV and real Suno Opus M4A.
   - `/manager` inherits these shared engine/API capabilities as part of its required `/app` feature parity; its current UI remains a placeholder.
 
 
@@ -91,7 +91,7 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - Mobile-first, non-disruptive detection pill (`✨ Suno Detected`) and interactive per-field selective merge table with `Apply Selected`, `Fill Blank Only`, and `Apply All` presets (zero blind overwrites).
 
 ### Active Backlog & Future Vision 📋
-- [ ] **Diagnose owner-reported M4A parsing failure**: obtain a suitable sample, distinguish header rejection from parsing failure, and add a regression fixture without weakening container checks. Synthetic AAC success is not full Suno compatibility.
+- [x] **Diagnosed and resolved M4A parsing failure**: Suno's encoder switched from AAC to Opus-in-MP4; added Opus to the codec allowlist. Owner-confirmed working with a real Suno download.
 - [ ] **Native Web Share API (`navigator.share`)**:
   - One-tap mobile export to send modified MP3s directly to mobile audio players (VLC, Files, Telegram, Discord, Apple Music).
 - [ ] **MediaSession API Integration**:
@@ -209,7 +209,7 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
 - [ ] **Native Windows Desktop Experience**:
   - Standalone bundled Windows `.exe` using PyInstaller / PyWebView (Edge WebView2 backend) with system tray integration and zero Python prerequisite.
 - [ ] **Multi-Format Audio Engine Expansion**:
-  - MP3, M4A (AAC/ALAC), and WAV handlers are implemented; real-file M4A compatibility remains unresolved. Remaining formats: **FLAC** (Vorbis comments & picture blocks), **OGG / Opus**, and **AIFF** (ID3 chunks).
+  - MP3, M4A (AAC/ALAC/Opus), and WAV handlers are implemented and owner-tested. Remaining formats: **FLAC** (Vorbis comments & picture blocks), **OGG / Opus**, and **AIFF** (ID3 chunks).
 - [ ] **Pluggable Storage Backend Drivers (`StorageProvider`)**:
   - Abstract storage interface supporting Local Filesystem, SMB/NFS shared network mounts, and S3 / MinIO Object Storage.
 - [ ] **Asynchronous Background Task Queue**:

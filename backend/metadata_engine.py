@@ -357,8 +357,9 @@ def _m4a_artwork(tags):
 
 def _extract_m4a(file_path):
     audio = MP4(file_path)
-    if not (audio.info.codec.startswith("mp4a") or audio.info.codec == "alac"):
-        raise ValueError("Unsupported M4A audio codec; use AAC or ALAC.")
+    codec = audio.info.codec or ""
+    if not (codec.startswith("mp4a") or codec in ("alac", "Opus")):
+        raise ValueError("Unsupported M4A audio codec; expected AAC, ALAC, or Opus.")
     tags = audio.tags or {}
     metadata = {}
     for field, atom in M4A_TEXT_FIELDS.items():
