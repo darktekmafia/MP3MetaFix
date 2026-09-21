@@ -52,3 +52,7 @@ The [original audit](SECURITY_AUDIT_2026-09-20.md) is historical evidence. The [
 The final isolated regression run passed **104 tests**, with four warnings. New regressions verify rejection of active artwork, pre-auth spooling protection, token revocation, fail-closed account storage, update lifetime locking, outbound restrictions, and Opus preservation. Tests use temporary data and mock privileged/network effects, not live accounts.
 
 No CVE/dependency advisory scan, destructive stress test, external penetration test, live updater execution, or complete browser exploit test was performed. See [the audit](SECURITY_AUDIT_2026-09-20.md). Fixes must add regression coverage and follow [development_workflow.md](development_workflow.md), including local-only commits until explicit remote approval.
+
+## Local migration follow-up (unreleased)
+
+Duplicate system-unit disablement was reported completed. The dedicated-account [migration helper](ACCOUNT_MIGRATION.md) is prepared with private verified data copying, selective read-only code mounts, and rollback. The migrated service denies web updates without granting service-manager privileges. Automated and disposable mount tests precede the privileged cutover; do not infer that the live account has changed until system-service identity is verified. General installer integration and LXC account-migration testing remain outstanding.

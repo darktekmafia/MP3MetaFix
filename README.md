@@ -232,3 +232,7 @@ See [ROADMAP.md](ROADMAP.md) for full details.
 ## License
 
 Declared project license: MIT © 2026 MP3MetaFix Contributors. A standalone LICENSE file is currently missing from this checkout; maintainers should add the authorized license text before distribution.
+
+### Local service-account migration (unreleased)
+
+A scoped [local migration helper](docs/ACCOUNT_MIGRATION.md) can move the standard developer user service to a dedicated non-login account while preserving data. It requires administrator authentication and keeps the checkout read-only for the backend. General guided account selection/creation and existing system-service migration remain roadmap work.

@@ -334,6 +334,7 @@ The server reads environment variables. Configure them in the service environmen
 
 | Variable | Default | Description |
 |---|---|---|
+| `MP3METAFIX_ALLOW_WEB_UPDATES` | `true` | Set false for deployments whose code is read-only to the backend; administrator update checks remain available |
 | `MP3METAFIX_HOST` | `127.0.0.1` | Bind interface (use `127.0.0.1` when proxy is colocated; `0.0.0.0` with firewall when proxy is external) |
 | `MP3METAFIX_PORT` | `8844` | Server listening port |
 | `MP3METAFIX_SESSION_TTL_MINUTES` | `60` | Inactivity TTL for uploaded sessions |
@@ -345,3 +346,9 @@ The server reads environment variables. Configure them in the service environmen
 | `MP3METAFIX_SECRET_KEY` | *(auto-generated)* | Cryptographic HMAC secret key (persisted to `data/.secret_key`) |
 
 For comprehensive vulnerability analysis, attack surfaces, and defense mechanisms, consult [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md).
+
+## Local account migration (unreleased)
+
+The [local migration procedure](ACCOUNT_MIGRATION.md) adds explicit `--migrate-account` and `--rollback-account` installer actions for the standard developer user service. This is not an automatic upgrade change. Root cutover requires local administrator authentication; retain the working user service until verification succeeds. General existing-system-service migration and installer account selection/creation remain planned.
+
+The Ubuntu 24.04 testing LXC upgrade from v0.4.0 to v0.5.1 was reported successful. No pre-upgrade snapshot was taken, so that original baseline is not available for a repeat test. Account migration in that LXC has not been tested. Duplicate workstation system-unit disablement was reported completed after the v0.5.1 audit.

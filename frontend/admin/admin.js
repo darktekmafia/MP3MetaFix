@@ -231,6 +231,12 @@
       const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       if (timeLabel) timeLabel.textContent = `Last checked: ${nowStr}`;
 
+      const installButton = document.getElementById('btnAdminInstallUpdate');
+      const installLabel = document.getElementById('btnAdminInstallUpdateLabel');
+      if (installButton) installButton.disabled = data.web_updates_enabled === false;
+      if (installLabel) installLabel.textContent = data.web_updates_enabled === false
+        ? 'Updates managed locally' : 'Install Update';
+
       if (data.update_available) {
         if (cardOk) cardOk.classList.add('hidden');
         if (cardWarn) cardWarn.classList.remove('hidden');

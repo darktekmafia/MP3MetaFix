@@ -2770,3 +2770,12 @@ do_update
     result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, timeout=10)
     assert result.returncode != 0
     assert "unsafe-dependency-update" not in result.stdout
+
+
+def test_readonly_deployment_cannot_launch_web_installer(auth_client, monkeypatch):
+    import backend.main as main
+    monkeypatch.setattr(main, 'ALLOW_WEB_UPDATES', False)
+    def forbidden():
+        raise AssertionError('Installer must not be invoked')
+    monkeypatch.setattr(main, 'start_install_update', forbidden)
+    assert auth_client.post('/api/updates/apply').status_code == 403

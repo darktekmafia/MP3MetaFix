@@ -51,6 +51,8 @@ show_help() {
     echo "Options:"
     echo "  --install               Install MP3MetaFix & systemd service (default action)"
     echo "  --update                Pull latest updates and rebuild dependencies"
+    echo "  --migrate-account       Migrate the supported local user service to a dedicated account"
+    echo "  --rollback-account      Restore that user service with the latest migrated data"
     echo "  --uninstall             Remove MP3MetaFix service, desktop launcher, and configs"
     echo "  --status                Check installation and service status"
     echo "  --access                Show network bind address, proxy trust status, and LAN URLs"
@@ -469,6 +471,16 @@ migrate_existing_services() {
         return 1
     fi
     return 0
+}
+
+# Explicit local migration; never invoked by installation or web updates implicitly.
+do_account_migration() {
+    local migration_action="$1"
+    if [ "$EUID" -eq 0 ]; then
+        python3 "${INSTALL_DIR}/scripts/migrate_local_account.py" "$migration_action"
+    else
+        sudo python3 "${INSTALL_DIR}/scripts/migrate_local_account.py" "$migration_action"
+    fi
 }
 
 # Perform Update
@@ -1014,6 +1026,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --install) ACTION="install"; shift ;;
         --update) ACTION="update"; shift ;;
+        --migrate-account) ACTION="migrate-account"; shift ;;
+        --rollback-account) ACTION="rollback-account"; shift ;;
         --uninstall) ACTION="uninstall"; shift ;;
         --status) ACTION="status"; shift ;;
         --access) ACTION="access"; shift ;;
@@ -1099,6 +1113,8 @@ done
 case "$ACTION" in
     install) do_install ;;
     update) do_update ;;
+    migrate-account) do_account_migration --apply ;;
+    rollback-account) do_account_migration --rollback ;;
     status) do_status ;;
     access) do_access_config "$TARGET_BIND_HOST" "$TARGET_PORT_ARG" "$TARGET_TRUST_PROXIES" "$TARGET_TRUSTED_PROXIES" "$TARGET_PROXY_HOST" ;;
     uninstall) do_uninstall ;;

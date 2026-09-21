@@ -9,6 +9,14 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ## [Unreleased]
 
+### Added
+- Explicit local service-account migration/rollback commands with read-only application mounts, verified private data copying, and failed-start recovery. Privileged live cutover requires local administrator authentication; general system-service migration remains planned.
+- Deployment policy `MP3METAFIX_ALLOW_WEB_UPDATES` to disable in-app installation for read-only code deployments, with an explanatory admin UI label.
+
+### Documentation
+- Expanded the roadmap with local service-account migration, a guided upgrade/rollback path, and one-shot installation that offers account selection or creation with minimal CLI administration.
+- Added Ubuntu 24.04 LXC v0.4.0 upgrade coverage and explicit preservation, hardening, dependency, and health-check requirements to the planned installer work.
+
 ## [0.5.1] - 2026-09-21
 
 ### Security

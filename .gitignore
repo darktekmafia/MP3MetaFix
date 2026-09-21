@@ -134,3 +134,7 @@ GEMINI.md
 .windsurf/
 
 !tests/fixtures/opus.m4a
+
+# Retained local account-migration recovery data
+/data.migration-restore/
+/data.before-account-rollback/

@@ -185,7 +185,7 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
 - [x] **Baseline Security Controls (incomplete; see audit remediation backlog)**:
   - Timestamped HMAC-SHA256 session cookies, POSIX `0700` filesystem isolation, decoupled SHA-256 hashed storage directories.
   - Chunk-level magic bytes validation, uploaded-image checks (Pillow thresholds and dimension limits), sliding-window rate limiting with proxy anti-spoofing.
-  - Origin/Sec-Fetch-Site CSRF protection and generic errors on normal editing paths; updater sanitization remains open.
+  - Origin/Sec-Fetch-Site CSRF protection and generic errors on normal editing paths; v0.5.1 also restricts updater output to fixed status messages.
 - [x] **Non-Destructive Systemd Migration Engine (`scripts/migrate_service.py`)**:
   - Safe, atomic unit updates during upgrades while preserving administrator customizations, custom environment variables, and cgroup resource limits.
 - [x] **Service Network Access, Proxy Trust & LAN Maintenance CLI (`scripts/configure_access.py`)**:
@@ -202,8 +202,20 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
   - Revoke prior account tokens after password changes and define logout revocation (medium).
   - Serialize in-app updater processes across workers/disconnects and emit fixed status messages. Web updates require a local restart.
   - Validate outbound redirect destinations and bound Suno response reads (medium).
-  - Applied and verified user-service containment. Dedicated-account migration is deferred; disabling the duplicate failed system unit requires local administrator authentication.
-- [ ] **Dedicated service account and duplicate-unit cleanup**: complete deferred identity isolation and system-unit maintenance; retain the tested user sandbox in the meantime.
+  - Applied and verified user-service containment. Dedicated-account migration remains planned; duplicate system-unit disablement was subsequently reported completed.
+- [ ] **Dedicated service-account migration — local implementation first (in progress)**:
+  - Added a scoped [local migration/rollback helper](docs/ACCOUNT_MIGRATION.md); automated and disposable mount verification precedes privileged live cutover. General system-service conversion remains planned.
+  - Complete and verify migration of the existing local installation from the desktop Linux identity to a dedicated, unprivileged service account; keep the current sandbox until migration succeeds.
+  - Preserve application accounts/passwords, signing secrets, audio/session data, environment settings, network bindings, and proxy configuration. Relocate files only when necessary and adjust access permissions deliberately.
+  - Provide a guided upgrade path for existing installations, with an explicit migration choice, preflight checks, backups, service handoff, health verification, and rollback on failure. Detect duplicate units without disabling unrelated services.
+  - Validate fresh installation, upgrade, repeated execution, and interrupted migration; include Ubuntu 24.04 LXC and the local workstation. The LXC successfully upgraded from v0.4.0 to v0.5.1; no pre-upgrade snapshot was taken, and its account migration remains untested. Check actual sandbox support on each target.
+- [ ] **Guided, one-shot installation with service-account selection or creation**:
+  - Design for users who cannot confidently perform CLI administration: after the initial installer launch, use plain-language prompts and safe defaults to complete as much setup as possible without separate commands or manual file edits.
+  - Offer creation of a dedicated non-login Linux service account as the recommended choice, or selection of a suitable existing unprivileged account. Explain that this is separate from the application's administrator login; never silently default the backend to root.
+  - Automate missing dependencies, account validation/creation, application/data permissions, service setup, supported hardening, startup, and health checks. Clearly explain any required privilege prompt or unsupported host restriction.
+  - Finish with the working access URL and clear success/recovery guidance. Make reruns safe and provide explicit unattended options for experienced operators.
+  - Integrate hardening and account migration into upgrades while preserving existing customizations. Plan a narrowly scoped, authorized restart mechanism so routine updates do not ultimately require users to type service commands; do not grant the web backend general administrative access.
+  - **Current limitation:** existing v0.5.1 upgrades preserve the service identity and sandbox configuration; automatic account migration and guided account creation are not implemented; the new explicit helper supports only the standard local developer user service.
 - [ ] **Apply stored quota/TTL settings to runtime policy**: settings persist today, while runtime enforcement reads environment-derived configuration.
 
 - [ ] **Multi-Arch Docker & OCI Container Images**:

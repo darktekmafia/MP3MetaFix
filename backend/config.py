@@ -24,6 +24,7 @@ ADMIN_DIR.mkdir(parents=True, exist_ok=True)
 # Server Config
 HOST = os.getenv("MP3METAFIX_HOST", "127.0.0.1")
 PORT = int(os.getenv("MP3METAFIX_PORT", "8844"))
+ALLOW_WEB_UPDATES = os.getenv("MP3METAFIX_ALLOW_WEB_UPDATES", "true").lower() in ("true", "1", "yes")
 DEBUG = os.getenv("MP3METAFIX_DEBUG", "false").lower() in ("true", "1", "yes")
 
 # Storage & Lifecycle Config

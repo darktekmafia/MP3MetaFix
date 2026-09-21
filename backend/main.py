@@ -80,6 +80,8 @@ from backend.suno_extractor import (
     fetch_suno_metadata,
     extract_suno_id,
 )
+from backend.config import ALLOW_WEB_UPDATES
+
 from backend.updater import (
     get_system_version_info,
     check_github_updates,
@@ -470,12 +472,16 @@ async def get_app_version():
 @app.get("/api/updates/check")
 async def check_updates(force: bool = False, user: Dict[str, Any] = Depends(require_admin)):
     """Check GitHub repository for new releases and changelog."""
-    return await check_github_updates(force_refresh=force)
+    result = dict(await check_github_updates(force_refresh=force))
+    result["web_updates_enabled"] = ALLOW_WEB_UPDATES
+    return result
 
 
 @app.post("/api/updates/apply")
 async def apply_update(request: Request, user: Dict[str, Any] = Depends(require_admin)):
     """Stream in-app update installation output as Server-Sent Events (SSE). Admin only."""
+    if not ALLOW_WEB_UPDATES:
+        raise HTTPException(403, "Updates for this installation are managed locally by its administrator.")
     return StreamingResponse(
         start_install_update(),
         media_type="text/event-stream",
