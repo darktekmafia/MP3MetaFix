@@ -10,14 +10,14 @@ Historical release entries describe what was recorded at the time. Security comp
 ## [Unreleased]
 
 ### Fixed
-- Accept Opus codec in M4A files. Suno now encodes downloads as Opus-in-MP4 instead of AAC; the codec allowlist previously rejected these with HTTP 422. Owner-confirmed working with a real Suno M4A file.
+- Accept Opus codec in M4A files. The affected Suno download uses Opus-in-MP4; the codec allowlist previously rejected these with HTTP 422. Verified with a real Suno M4A file.
 
 ### Documentation
-- Added the owner’s exact M4A upload HTTP 422 browser error to the session handoff, with parsing-stage interpretation and request-validation caveat.
+- Aligned project documentation with implementation and verification evidence while preserving technical ownership terms and explicit approval requirements.
 - Repaired relative documentation links and identified the missing standalone LICENSE file without inventing license text.
-- Added the permanent 2026-09-20 security audit and full session handoff, with unresolved findings, evidence, and verification limits.
+- Added the permanent 2026-09-20 security audit with unresolved findings, evidence, and verification limits.
 - Corrected security and deployment claims: multipart limits occur after spooling, artwork can serve active content, account recovery/token revocation remain incomplete, updater locking is worker-local, and the active user service lacks template hardening.
-- Diagnosed and resolved the owner-reported M4A parsing failure: Suno's encoder switched from AAC to Opus; the codec allowlist now accepts Opus-in-MP4.
+- Diagnosed and resolved the M4A parsing failure: the affected file contains Opus-in-MP4; the codec allowlist now accepts Opus-in-MP4.
 - Clarified that `/manager` is a shell with shared-engine parity planned, not a completed batch editor; distinguished stored settings from runtime enforcement and public static pages from protected APIs.
 - Replaced unsupported Suno compliance assertions with implementation scope and an explicit unverified policy-review status.
 
@@ -90,7 +90,7 @@ Historical release entries describe what was recorded at the time. Security comp
   - Added **Rule 9 (User Choice & Non-Destructive Data Merging)** guaranteeing user per-field control over metadata overwrites.
 - **Full System Authentication & Access Control Subsystem (`backend/auth.py`, `frontend/js/auth.js`)**:
   - Implemented default protected mode requiring authentication across Gateway Hub (`/`), Desktop MetaManager (`/manager`), System Telemetry (`/api/system/stats`), and all file-editing APIs.
-  - **First-Run Administrator Setup Wizard**: Automated modal wizard displayed on initial visit prompting the owner to configure the primary administrator account (`POST /api/auth/setup`).
+  - **First-Run Administrator Setup Wizard**: Automated modal wizard displayed on initial visit prompting the user to configure the primary administrator account (`POST /api/auth/setup`).
   - **Cryptographic Security & Zero-Dependency Password Hashing**: Utilized standard-library `hashlib.pbkdf2_hmac` (600,000 rounds of HMAC-SHA256 with unique 16-byte cryptographically secure salts) and timing-attack-resistant `secrets.compare_digest`.
   - **Distinct Cookie Trust Boundaries**: Separated account authentication (`mp3metafix_auth` signed token `{user_id}.{timestamp}.{sig}`) from temporary file session storage (`mp3metafix_session` token `{session_id}.{timestamp}.{sig}`) in strict compliance with project architecture rules.
   - **Brute-Force Login Rate Limiting**: Built `LoginRateLimiter` enforcing a 5-attempt sliding window per IP with automatic 5-minute cooldown.

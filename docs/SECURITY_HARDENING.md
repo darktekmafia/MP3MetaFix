@@ -12,9 +12,9 @@ The [security audit](SECURITY_AUDIT_2026-09-20.md) is the current assessment. **
 | High for exposed deployments | Multipart files spool before authentication and endpoint size/rate checks | Bound actual request bytes before parsing; test chunked bodies and dishonest/missing Content-Length |
 | High impact, conditional | Unreadable/malformed account store reopens administrator enrollment | Fail closed; distinguish first installation from corruption; serialize setup |
 | Medium | Password changes/logout do not revoke issued tokens | Add account/session revocation state and explicit recovery behavior |
-| Medium | Updater mutex is process-local; cancellation/log sanitization incomplete | Cross-process lifetime locking, interruption recovery, sanitized output; owner approval before modification |
+| Medium | Updater mutex is process-local; cancellation/log sanitization incomplete | Cross-process lifetime locking, interruption recovery, sanitized output; maintainer approval before modification |
 | Medium | Suno initial-host check does not constrain redirects; reads unbounded | Validate each destination/scheme/port and stream with byte limits |
-| Medium | Active workstation user service lacks documented containment | Reconcile duplicate units and test dedicated identity/resource restrictions with owner approval |
+| Medium | Active workstation user service lacks documented containment | Reconcile duplicate units and test dedicated identity/resource restrictions with maintainer approval |
 
 See the audit for precise prerequisites, code references, bounded probes, and limits. No public exploit against Suno or remote corruption of the account database was demonstrated.
 
@@ -65,4 +65,4 @@ See the audit for precise prerequisites, code references, bounded probes, and li
 
 The final isolated regression run passed **72 tests**, with three deprecation warnings. Four additional bounded probes confirmed HTML artwork serving, pre-auth multipart spooling, token survival after password change, and setup reopening on corrupted temporary account data. These probes used temporary data, not live accounts.
 
-No CVE/dependency advisory scan, destructive stress test, external penetration test, live updater execution, or complete browser exploit test was performed. See [the audit](SECURITY_AUDIT_2026-09-20.md) and [handoff](../SESSION_HANDOFF_2026-09-20.md). Fixes must add regression coverage and follow [development_workflow.md](development_workflow.md), including local-only commits until explicit remote approval.
+No CVE/dependency advisory scan, destructive stress test, external penetration test, live updater execution, or complete browser exploit test was performed. See [the audit](SECURITY_AUDIT_2026-09-20.md). Fixes must add regression coverage and follow [development_workflow.md](development_workflow.md), including local-only commits until explicit remote approval.

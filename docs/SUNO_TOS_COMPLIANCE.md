@@ -2,7 +2,7 @@
 
 Implementation reviewed: 2026-09-20, MP3MetaFix v0.5.0.
 
-**Policy/legal compliance has not been verified in this session.** This file documents observed implementation and review requirements; it is not a compliance certification. Earlier versions asserted compliance without substantiating current Suno terms. Maintainers should review the [published Suno terms](https://suno.com/terms) before making such claims or expanding the integration. The terms were not revalidated during the documentation update.
+**Policy/legal compliance has not been independently verified.** This file documents observed implementation and review requirements; it is not a compliance certification. Earlier versions asserted compliance without substantiating current Suno terms. Maintainers should review the [published Suno terms](https://suno.com/terms) before making such claims or expanding the integration. The terms were not revalidated during the documentation update.
 
 ## Current implementation
 
@@ -28,4 +28,4 @@ See [security audit findings 1, 2, and 6](SECURITY_AUDIT_2026-09-20.md). No expl
 4. Add bounded response reads, redirect/destination validation, and appropriate request/concurrency limits.
 5. Treat private page structures as compatibility-sensitive; maintain parsing tests and clearly distinguish extraction failures from audio-container failures.
 
-The owner's unresolved M4A parse failure concerns the local audio upload/metadata engine. No evidence currently connects it to Suno page extraction or policy restrictions.
+The reported M4A upload HTTP 422 failure was resolved by accepting Opus-in-MP4 in the local codec allowlist. It was an audio-container compatibility issue, separate from Suno page extraction and policy review.

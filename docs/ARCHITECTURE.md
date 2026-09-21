@@ -58,7 +58,7 @@ The shared backend uses `audio_formats.py`, `metadata_engine.py`, storage manage
 | M4A (AAC/ALAC/Opus) | MP4 text atoms, trkn/disk tuples, tmpo, lyrics, covr JPEG/PNG | `audio/mp4` | `audio.m4a` |
 | WAV | RIFF-embedded ID3; existing INFO text fallback and synchronization | `audio/wav` | `audio.wav` |
 
-Owner-confirmed MP3, WAV, and real Suno Opus M4A editing. Synthetic AAC M4A tests also pass. The table describes implemented handlers, not complete compatibility certification for every encoder variant.
+MP3, WAV, and real Suno Opus M4A editing have been verified. Synthetic AAC M4A tests also pass. The table describes implemented handlers, not complete compatibility certification for every encoder variant.
 
 `audio_info` includes `format`, `extension`, and `mime_type` in upload and session-restore responses. Filenames and native save dialogs retain that extension, even when a supplied pattern names another format. M4A numeric values are validated before saving; unsupported values return HTTP 422 without modifying the file. WAV INFO title/artist/album/genre/year/comment/track/composer values are synchronized only where those entries already exist; unknown INFO entries and other chunks remain intact. UTF-8 is written for changed INFO text; legacy text falls back to Windows-1252 when reading.
 

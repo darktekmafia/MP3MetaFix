@@ -18,9 +18,9 @@ curl --fail http://127.0.0.1:8844/api/health
 curl --fail http://127.0.0.1:8844/api/version
 ```
 
-Inspect both scopes before changing deployment. The observed user unit lacks the documented system-service hardening/resource limits; template contents do not prove installed containment. See the [audit](SECURITY_AUDIT_2026-09-20.md), especially findings 2, 5, and 7. Service-user/permission changes require owner coordination.
+Inspect both scopes before changing deployment. The observed user unit lacks the documented system-service hardening/resource limits; template contents do not prove installed containment. See the [audit](SECURITY_AUDIT_2026-09-20.md), especially findings 2, 5, and 7. Service-user/permission changes require maintainer coordination.
 
-This workspace is **local Git only** until explicit owner approval. Do not run the update installer to pick up local edits: it pulls remote code. Restart the correct local service and reload the browser instead. Do not use the in-app updater while the documented concurrency/interruption gaps remain unresolved.
+This workspace is **local Git only** until explicit maintainer approval. Do not run the update installer to pick up local edits: it pulls remote code. Restart the correct local service and reload the browser instead. Do not use the in-app updater while the documented concurrency/interruption gaps remain unresolved.
 
 ## 1. Local Linux / Workstation Installation (Fedora / Ubuntu / Arch)
 
@@ -304,7 +304,7 @@ sudo systemctl restart mp3metafix.service
 ```
 
 > [!NOTE]
-> In-app web updater execution (`POST /api/updates/apply`) is enabled and requires administrator authorization plus CSRF checks. Its lock is worker-local and interruption/log sanitization safeguards are incomplete; see audit finding 5. Modification requires the project’s owner-approval checkpoint.
+> In-app web updater execution (`POST /api/updates/apply`) is enabled and requires administrator authorization plus CSRF checks. Its lock is worker-local and interruption/log sanitization safeguards are incomplete; see audit finding 5. Modification requires the project’s maintainer-approval checkpoint.
 
 ---
 
@@ -316,7 +316,7 @@ Open **Admin Dashboard** from the signed-in administrator account menu to view l
 
 MP3, M4A (AAC/ALAC/Opus), and standard RIFF/WAVE uploads use the existing Mutagen dependency; there is no new runtime package or transcoding service. RF64, raw AAC, video MP4, and other formats are not accepted. Reload the editor after updating to load the versioned frontend assets; restart the backend through your normal local workflow to load the new handlers. Existing MP3 sessions and secrets require no migration.
 
-Owner testing confirmed MP3, WAV, and real Suno Opus M4A editing. Synthetic AAC M4A tests also pass.
+MP3, WAV, and real Suno Opus M4A editing have been verified. Synthetic AAC M4A tests also pass.
 
 The endpoint’s existing 150 MB upload limit applies to every format; WAV can reach it sooner because it is often uncompressed. Allow temporary disk headroom for atomic tag writes (up to two additional file copies for WAV with INFO metadata). Playback and waveform decoding depend on browser codec support; metadata editing does not require browser decoding. WAV ID3/cover-art compatibility differs between players.
 

@@ -1,6 +1,6 @@
 # MP3MetaFix security audit — 2026-09-20
 
-Reviewed local commit da83731 (v0.5.0). Audit only: no application edits, installer executions, credential changes, or remote pushes. M4A compatibility debugging was excluded at the owner's request.
+Reviewed local commit da83731 (v0.5.0). Audit only: no application edits, installer executions, credential changes, or remote pushes. Audio-format compatibility debugging was outside the audit scope.
 
 ## Findings, in priority order
 
@@ -31,7 +31,7 @@ Recommendation: validate an account/session version or revocation state on every
 ### 5. Medium — Update installation is not serialized across workers or disconnects
 References: backend/main.py:108,467–488; backend/updater.py:190–244.
 The live service runs two Uvicorn workers; asyncio.Lock is process-local. Different workers can launch concurrent installers. The pre-stream locked() check also happens before acquisition. The subprocess generator has no finally block that terminates/waits for the installer on cancellation, so client disconnect can release the lock while installation continues. Output lines and exception strings are returned without the sanitization asserted by existing documentation.
-Recommendation: cross-process exclusive locking covering the full installer lifetime, defined disconnect/cancellation recovery, and log/error sanitization; tests with mocked subprocesses and multiple workers. No actual installer or update endpoint was invoked. Modifying this privileged flow requires the project's explicit owner approval checkpoint.
+Recommendation: cross-process exclusive locking covering the full installer lifetime, defined disconnect/cancellation recovery, and log/error sanitization; tests with mocked subprocesses and multiple workers. No actual installer or update endpoint was invoked. Modifying this privileged flow requires the project's explicit maintainer approval checkpoint.
 
 ### 6. Medium — Suno artwork allowlist does not constrain redirects
 References: backend/main.py:725–737; backend/suno_extractor.py:189–205.
@@ -42,7 +42,7 @@ Recommendation: HTTPS/default-port policy; disable redirects or validate every h
 ### 7. Medium defense-in-depth gap — Active service lacks documented containment
 Read-only systemctl inspection of the working user service showed NoNewPrivileges=no, ProtectSystem=no, PrivateTmp=no, MemoryMax=infinity, TasksMax=38134, and no CPU quota. It runs in the desktop user's context, not the documented dedicated service account. A separate system-level unit is already failing with 203/EXEC permission denied, as previously reported.
 Impact: resource exhaustion or backend compromise has fewer limits and access to the desktop user's permissions. Current binding is 127.0.0.1:8844, reducing direct remote exposure; reverse-proxy reachability was not assessed.
-Recommendation: reconcile the duplicate units and apply tested containment/dedicated identity with the owner's approval. No service configuration was changed during this audit.
+Recommendation: reconcile the duplicate units and apply tested containment/dedicated identity with explicit maintainer approval. No service configuration was changed during this audit.
 
 ## Verification and limits
 

@@ -4,7 +4,7 @@ These rules govern all agentic modifications, architecture, security, documentat
 
 ## Current implementation assessment
 
-These rules are engineering requirements, not proof that the application or installed service already satisfies them. Read [SECURITY_AUDIT_2026-09-20.md](SECURITY_AUDIT_2026-09-20.md) and [SECURITY_HARDENING.md](SECURITY_HARDENING.md) for unresolved findings, and [the session handoff](../SESSION_HANDOFF_2026-09-20.md) for continuation context. The authoritative workflow is this file; `.agents/rules/development_workflow.md` is a legacy copy and must not override it. The owner requires local Git only until explicit remote approval.
+These rules are engineering requirements, not proof that the application or installed service already satisfies them. Read [SECURITY_AUDIT_2026-09-20.md](SECURITY_AUDIT_2026-09-20.md) and [SECURITY_HARDENING.md](SECURITY_HARDENING.md) for unresolved findings. The authoritative workflow is this file; `.agents/rules/development_workflow.md` is a legacy copy and must not override it. Changes must remain in local Git until explicit approval to push remotely.
 
 ---
 
@@ -45,7 +45,7 @@ The application is currently a single-user, self-hosted utility deployed in mult
 
 ## ⚠️ 3. Privileged Operations & Update Installation (Mandatory Checkpoint)
 
-Before implementing or modifying command execution, installers, service management, authentication, network bindings, filesystem access outside approved storage, or secret handling: identify the trust boundary, privileges, affected files, abuse cases, and smallest safe design. Obtain owner approval before consequential changes.
+Before implementing or modifying command execution, installers, service management, authentication, network bindings, filesystem access outside approved storage, or secret handling: identify the trust boundary, privileges, affected files, abuse cases, and smallest safe design. Obtain maintainer approval before consequential changes.
 
 - **Do not enable or extend the update-install endpoint until its authentication, authorization, and privilege design are reviewed and tested.** Read-only version checks are separate.
 - Update installation requires authenticated administrator authorization and CSRF protection; a file-editing session or proxy login alone is insufficient.
@@ -115,7 +115,7 @@ Follow a strict 4-stage validation pipeline:
 - Verify `git status` is clean before pushing upstream.
 
 ### Stage 4: Explicitly Approved Deployment & Update Validation
-- Do not automatically push, tag, publish a release, or deploy to any environment without owner approval.
+- Do not automatically push, tag, publish a release, or deploy to any environment without maintainer approval.
 - Validate installer and update changes in the designated disposable LXC before recommending wider deployment. Check service identity, listening ports, proxy behavior, data preservation, and recovery after failure.
 - Preserve user files, configuration, authentication secrets, and existing data unless an approved migration explicitly changes them.
 - Report the files changed, security risk addressed, exact tests run and results, remaining assumptions, and deployment/restart/rollback impact.

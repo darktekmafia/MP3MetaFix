@@ -10,7 +10,7 @@
 
 ## Current status — v0.5.0
 
-WAV editing is owner-confirmed. Synthetic AAC M4A roundtrips pass, but an owner-provided M4A failed parsing; its cause is unresolved. See the [roadmap](ROADMAP.md) and [session handoff](SESSION_HANDOFF_2026-09-20.md).
+The editor supports MP3, M4A (AAC/ALAC/Opus), and WAV. MP3/WAV and synthetic AAC M4A checks pass; the reported real Suno M4A failure was resolved by accepting Opus-in-MP4. See the [roadmap](ROADMAP.md) for planned features.
 
 The [2026-09-20 security audit](docs/SECURITY_AUDIT_2026-09-20.md) found unresolved high-severity issues in embedded artwork serving, pre-authentication upload buffering, and account-store failure handling, plus gaps in token revocation, update locking, outbound fetches, and service containment. Existing controls are not a security certification.
 
