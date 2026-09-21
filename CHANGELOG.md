@@ -23,6 +23,7 @@ Historical release entries describe what was recorded at the time. Security comp
 - Deployment policy `MP3METAFIX_ALLOW_WEB_UPDATES` to disable in-app installation for read-only code deployments, with an explanatory admin UI label.
 
 ### Documentation
+- Require planned audio fingerprinting and duplicate detection to be read-only, preserve source bytes and provenance markers, and store analysis separately. No application or version change.
 - Synchronize development with the tested account-migration work and current documentation; main remains limited to explicitly approved release updates.
 - Record the read-only LXC/NPM comparison and remaining browser authentication uncertainty.
 - Plan admin-only update discovery and strict installer release-branch enforcement.
