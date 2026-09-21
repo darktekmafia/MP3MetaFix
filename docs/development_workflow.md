@@ -115,6 +115,8 @@ Follow a strict 4-stage validation pipeline:
 - Verify `git status` is clean before pushing upstream.
 
 ### Stage 4: Explicitly Approved Deployment & Update Validation
+- All future remote pushes must target `development`, with an explicit destination. Updating `main` requires an explicit user request to merge `development` → `main` after user testing and feedback confirm readiness. Approval for a development push does not authorize release, deployment, or promotion to main.
+- The installer release source remains `origin main`. Strict enforcement is planned: the existing plain `git pull` fallback must be removed, and non-main checkouts must be handled safely before this guarantee can be claimed.
 - Do not automatically push, tag, publish a release, or deploy to any environment without maintainer approval.
 - Validate installer and update changes in the designated disposable LXC before recommending wider deployment. Check service identity, listening ports, proxy behavior, data preservation, and recovery after failure.
 - Preserve user files, configuration, authentication secrets, and existing data unless an approved migration explicitly changes them.

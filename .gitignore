@@ -134,3 +134,8 @@ GEMINI.md
 .windsurf/
 
 !tests/fixtures/opus.m4a
+
+# Private local session notes; retain only the public documentation notice
+SESSION_HANDOFF*.md
+session_handoff*.md
+!SESSION_HANDOFF_2026-09-20.md

@@ -232,3 +232,5 @@ See [ROADMAP.md](ROADMAP.md) for full details.
 ## License
 
 Declared project license: MIT © 2026 MP3MetaFix Contributors. A standalone LICENSE file is currently missing from this checkout; maintainers should add the authorized license text before distribution.
+
+Development changes are published to `development`. Promotion to `main` requires an explicit maintainer merge request after user testing and feedback. Release installation continues to target `main`; strict installer branch enforcement remains roadmap work.

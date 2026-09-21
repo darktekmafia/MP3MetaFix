@@ -9,6 +9,11 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ## [Unreleased]
 
+### Documentation
+- Replace the historical session handoff with a short documentation notice; ignore future local handoff notes.
+- Require development-branch pushes and explicit approval for development-to-main promotion after testing and feedback.
+- Plan admin-only update checks and strict main-only installer update handling. Application version remains 0.5.1.
+
 ## [0.5.1] - 2026-09-21
 
 ### Security
