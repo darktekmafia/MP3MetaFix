@@ -9,11 +9,14 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ## [Unreleased]
 
+### Deployment
+- Completed and verified local Fedora migration to the dedicated `mp3metafix` system service after corrected retry. Confirmed process identity, health, private data ownership, sandbox/resource limits, and disabled/inactive former user service. Browser editing confirmation and general installer/LXC account migration remain outstanding.
+
 ### Fixed
 - Verified the corrected migration/retry implementation with 122 passing tests; four existing/expected warnings remain.
 - Corrected local account-migration recovery to stop auto-restarting system units before restoring configuration.
 - Replaced socket masking with a read-only temporary bus directory and added a dedicated-account system-service probe before stopping the working backend.
-- Added explicit recovery retry that archives earlier destination data, migrates current source data, and preserves repeated rollback backups. The first Fedora live attempt recovered to the working user service after a namespace failure; corrected live cutover remains pending.
+- Added explicit recovery retry that archives earlier destination data, migrates current source data, and preserves repeated rollback backups. The first Fedora live attempt recovered to the working user service after a namespace failure; the corrected retry subsequently completed and was verified.
 
 ### Added
 - Explicit local service-account migration/rollback commands with read-only application mounts, verified private data copying, and failed-start recovery. Privileged live cutover requires local administrator authentication; general system-service migration remains planned.

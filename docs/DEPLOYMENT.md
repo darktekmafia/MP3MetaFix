@@ -6,29 +6,22 @@ This guide covers deployment options for MP3MetaFix across **Local Fedora 44 Dev
 
 ## Current workstation status and deployment cautions
 
-As verified on 2026-09-21, the working backend is the **user** `mp3metafix.service`, serving loopback port 8844 with two workers at v0.5.1. Its installed hardening drop-in is derived from `deploy/user-hardening.conf`. Dedicated-account migration is deferred. The duplicate **system** unit still fails with 203/EXEC; disabling it requires local sudo authentication:
-
-```bash
-sudo systemctl disable --now mp3metafix.service
-```
-
-This targets only the duplicate system unit; keep managing the working service with `--user`.
+As verified after local migration on 2026-09-21, the working backend is the **system** `mp3metafix.service`, serving loopback port 8844 with two workers at v0.5.1 under the dedicated `mp3metafix` Linux account. The old user service is disabled/inactive and retained for recovery.
 
 For this workstation:
 
 ```bash
-systemctl --user status mp3metafix.service
-systemctl --user restart mp3metafix.service
-journalctl --user -u mp3metafix.service -f
+sudo systemctl status mp3metafix.service
+sudo systemctl restart mp3metafix.service
+journalctl -u mp3metafix.service -f
 curl --fail http://127.0.0.1:8844/api/health
-curl --fail http://127.0.0.1:8844/api/version
 ```
 
-The user profile uses `PrivateUsers=true`, `ProtectSystem=strict`, `ProtectHome=tmpfs`, an explicit checkout bind/write allowance, private temporary storage, no new privileges, blocked service-manager sockets, UMask 0077, MemoryMax 512M, TasksMax 64, and CPUQuota 80%. Home-directory installs are exposed only through the explicit checkout bind. The checkout remains writable for updates; the desktop Unix identity is still a containment tradeoff. See [verification and limitations](SECURITY_REMEDIATION_2026-09-21.md).
+The service has verified read-only application mounts under `/opt/mp3metafix`, private data under `/var/lib/mp3metafix` (0700), ProtectSystem=strict, ProtectHome=tmpfs, PrivateTmp, NoNewPrivileges, an inaccessible system bus, and 512 MiB/64-task/80% CPU limits. The code mounts refer to the development checkout, which must remain available. Details and rollback are in [account migration](ACCOUNT_MIGRATION.md).
 
-Existing deployments do not acquire hardening merely by pulling updated templates. Render `deploy/user-hardening.conf` with the absolute checkout path into the user unit's drop-in directory, reload the user daemon, restart, and verify effective properties. A custom data directory outside the checkout needs an explicit writable/bind allowance. Test namespace support on the target host, especially LXC, before enabling this profile.
+Web installation is disabled on this deployment. Local edits remain visible through the mounts; restart the **system** service to load backend changes. Do not start the retained user service or use its stale checkout data copy. General installer update/access commands are not yet fully integrated with this deployment; follow the local migration maintenance instructions.
 
-Do not run the update installer to pick up uncommitted local edits: it pulls remote code. Restart the correct service and reload the browser. Upgrading to v0.5.1 requires signing in again; passwords, signing secrets, and file sessions are preserved. Password changes and logout now revoke all browsers' login tokens for the account.
+Other installations do not acquire these settings or change accounts merely by pulling updated templates. Namespace support must be checked on the target host, particularly LXC. The v0.5.1 authentication upgrade requires signing in again; the later account migration preserves passwords, signing secrets, and application data.
 
 ## 1. Local Linux / Workstation Installation (Fedora / Ubuntu / Arch)
 
@@ -312,7 +305,7 @@ sudo systemctl restart mp3metafix.service
 ```
 
 > [!NOTE]
-> In-app web updater execution (`POST /api/updates/apply`) is enabled and requires administrator authorization plus CSRF checks. A process-shared lock and inherited installer descriptor prevent overlapping web updates; a background task survives stream disconnects and only fixed messages reach the browser. Web updates install files/dependencies and explicitly require a local restart (`systemctl --user restart mp3metafix.service` for this workstation). They do not invoke service managers or unit migration. Modification requires the project’s maintainer-approval checkpoint.
+> In-app web updater execution (`POST /api/updates/apply`) is enabled and requires administrator authorization plus CSRF checks. A process-shared lock and inherited installer descriptor prevent overlapping web updates; a background task survives stream disconnects and only fixed messages reach the browser. Web updates install files/dependencies and explicitly require a local restart (using the appropriate user/system service for that installation). They do not invoke service managers or unit migration. Modification requires the project’s maintainer-approval checkpoint.
 
 ---
 
@@ -349,6 +342,6 @@ For comprehensive vulnerability analysis, attack surfaces, and defense mechanism
 
 ## Local account migration (unreleased)
 
-The [local migration procedure](ACCOUNT_MIGRATION.md) adds explicit `--migrate-account`, `--retry-account`, and `--rollback-account` installer actions for the standard developer user service. This is not an automatic upgrade change. Root cutover requires local administrator authentication; retain the working user service until verification succeeds. General existing-system-service migration and installer account selection/creation remain planned.
+The [local migration procedure](ACCOUNT_MIGRATION.md) adds explicit `--migrate-account`, `--retry-account`, and `--rollback-account` installer actions for the standard developer user service. This is not an automatic upgrade change. Root cutover requires local administrator authentication. The workstation retry completed and its dedicated identity, health, and effective restrictions were verified; retain recovery data until browser editing is confirmed. General existing-system-service migration and installer account selection/creation remain planned.
 
 The Ubuntu 24.04 testing LXC upgrade from v0.4.0 to v0.5.1 was reported successful. No pre-upgrade snapshot was taken, so that original baseline is not available for a repeat test. Account migration in that LXC has not been tested. Duplicate workstation system-unit disablement was reported completed after the v0.5.1 audit.

@@ -12,7 +12,7 @@
 
 The editor supports MP3, M4A (AAC/ALAC/Opus), and WAV. MP3/WAV and synthetic AAC M4A checks pass; the reported real Suno M4A failure was resolved by accepting Opus-in-MP4. See the [roadmap](ROADMAP.md) for planned features.
 
-The [v0.5.1 security remediation report](docs/SECURITY_REMEDIATION_2026-09-21.md) records verified fixes for artwork serving, upload admission, account recovery/revocation, updater locking, and outbound fetching. The current user service is sandboxed; dedicated-account migration is deferred and duplicate system-service cleanup requires local administrator authentication. Sign in again after upgrading. Web updates install files and require a local service restart.
+The [v0.5.1 security remediation report](docs/SECURITY_REMEDIATION_2026-09-21.md) records verified fixes for artwork serving, upload admission, account recovery/revocation, updater locking, and outbound fetching. The local workstation now runs a verified dedicated-account system service with read-only application mounts; general installer account migration remains planned. Sign in again after upgrading. Where enabled, web updates install files and require a local service restart. They are disabled on the migrated read-only workstation deployment.
 
 ## ✨ Features
 

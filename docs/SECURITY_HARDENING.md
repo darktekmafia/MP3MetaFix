@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-09-21, application v0.5.1.
 
-The [original audit](SECURITY_AUDIT_2026-09-20.md) is historical evidence. The [remediation verification report](SECURITY_REMEDIATION_2026-09-21.md) records the six application fixes, tested user-service hardening, and remaining deployment tradeoffs. Dedicated-account migration is deferred; the duplicate system unit still needs local administrator cleanup. No claim of absolute security is made.
+The [original audit](SECURITY_AUDIT_2026-09-20.md) is historical evidence. The [remediation verification report](SECURITY_REMEDIATION_2026-09-21.md) records the six application fixes, tested user-service hardening, and remaining deployment tradeoffs. The subsequent local migration is complete: the system service runs under a dedicated account and the old user service is disabled. General installer/LXC migration remains outstanding. No claim of absolute security is made.
 
 ## Existing controls and their limits
 
@@ -44,7 +44,7 @@ The [original audit](SECURITY_AUDIT_2026-09-20.md) is historical evidence. The [
 
 - `/api/updates/apply` is enabled and admin/CSRF protected. A shared file lock is acquired before acceptance, held by a background task, and inherited by the installer. Browser disconnect does not release it.
 - SSE returns only fixed status messages; raw installer output and exception details are withheld. Web updates cannot manage services and explicitly require a local restart.
-- Service templates contain restrictions; installed units may differ. The active user unit now has verified NoNewPrivileges, private user/tmp namespaces, hidden home contents, a restricted filesystem, and memory/task/CPU limits. The duplicate system unit still fails 203/EXEC pending sudo cleanup.
+- Service templates contain restrictions; installed units may differ. The migrated system unit has a verified dedicated identity, NoNewPrivileges, private temporary storage, hidden home/bus contents, read-only application mounts, private writable data, and memory/task/CPU limits. The old user unit is inactive and disabled.
 - Service migration/access scripts use scoped parsing, validated inputs, and atomic unit writes. Preserving an existing unit does not add missing containment automatically.
 
 ## Verification
@@ -55,6 +55,6 @@ No CVE/dependency advisory scan, destructive stress test, external penetration t
 
 ## Local migration follow-up (unreleased)
 
-Duplicate system-unit disablement was reported completed. The dedicated-account [migration helper](ACCOUNT_MIGRATION.md) is prepared with private verified data copying, selective read-only code mounts, and rollback. The migrated service denies web updates without granting service-manager privileges. Automated and disposable mount tests precede the privileged cutover; do not infer that the live account has changed until system-service identity is verified. General installer integration and LXC account-migration testing remain outstanding.
+Duplicate system-unit disablement was reported completed. The dedicated-account [migration helper](ACCOUNT_MIGRATION.md) completed locally with private verified data copying, selective read-only code mounts, and rollback. The migrated service denies web updates without granting service-manager privileges. Live system-service identity, health, and restrictions were verified after successful retry. Browser login/editing confirmation remains outstanding. General installer integration and LXC account-migration testing remain outstanding.
 
-The first Fedora system-service migration attempt failed at namespace setup while masking the system bus socket; the user backend recovered. The corrected profile hides the bus directory using a read-only temporary filesystem and probes the actual dedicated-account/system-manager boundary before any retry stops the working backend. Retry/recovery preserves previous data and stops queued system-service restarts. Live migration remains pending; SELinux enforcement is not disabled.
+The first Fedora system-service migration attempt failed at namespace setup while masking the system bus socket; the user backend recovered. The corrected profile hides the bus directory using a read-only temporary filesystem and probes the actual dedicated-account/system-manager boundary before any retry stops the working backend. Retry/recovery preserves previous data and stops queued system-service restarts. The corrected retry completed successfully; SELinux enforcement was not disabled.

@@ -202,10 +202,11 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
   - Revoke prior account tokens after password changes and define logout revocation (medium).
   - Serialize in-app updater processes across workers/disconnects and emit fixed status messages. Web updates require a local restart.
   - Validate outbound redirect destinations and bound Suno response reads (medium).
-  - Applied and verified user-service containment. Dedicated-account migration remains planned; duplicate system-unit disablement was subsequently reported completed.
-- [ ] **Dedicated service-account migration — local implementation first (in progress)**:
-  - Added a scoped [local migration/rollback helper](docs/ACCOUNT_MIGRATION.md); the first Fedora cutover hit a namespace failure and recovered the user backend. Corrected retry adds a real dedicated-account system sandbox probe before cutover; live success remains pending. General system-service conversion remains planned.
-  - Complete and verify migration of the existing local installation from the desktop Linux identity to a dedicated, unprivileged service account; keep the current sandbox until migration succeeds.
+  - Applied and verified user-service containment. Local dedicated-account migration subsequently completed; the old user service is disabled and retained for recovery.
+- [x] **Local dedicated service-account migration**:
+  - Corrected retry completed on Fedora; verified dedicated process identity, healthy v0.5.1 backend, private data ownership, effective sandbox restrictions, and disabled/inactive old user service.
+- [ ] **General service-account migration and installer integration**:
+  - Added a scoped [local migration/rollback helper](docs/ACCOUNT_MIGRATION.md); the first Fedora cutover hit a namespace failure and recovered the user backend. Corrected retry adds a real dedicated-account system sandbox probe before cutover; local live success is verified. General system-service conversion remains planned.
   - Preserve application accounts/passwords, signing secrets, audio/session data, environment settings, network bindings, and proxy configuration. Relocate files only when necessary and adjust access permissions deliberately.
   - Provide a guided upgrade path for existing installations, with an explicit migration choice, preflight checks, backups, service handoff, health verification, and rollback on failure. Detect duplicate units without disabling unrelated services.
   - Validate fresh installation, upgrade, repeated execution, and interrupted migration; include Ubuntu 24.04 LXC and the local workstation. The LXC successfully upgraded from v0.4.0 to v0.5.1; no pre-upgrade snapshot was taken, and its account migration remains untested. Check actual sandbox support on each target.

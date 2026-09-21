@@ -1,5 +1,7 @@
 # Security remediation verification — v0.5.1
 
+> Subsequent local deployment update: the dedicated-account migration completed and was verified. The old user service is disabled/inactive; the system service runs as `mp3metafix`. The user-service observations below describe the earlier audit checkpoint. Use [current deployment instructions](ACCOUNT_MIGRATION.md) for service management; do not disable the now-active system unit using the historical cleanup command below.
+
 This report follows the [2026-09-20 audit](SECURITY_AUDIT_2026-09-20.md). The original report remains historical evidence; the status below supersedes its open-finding summary.
 
 | Audit finding | Current status | Evidence and limits |
