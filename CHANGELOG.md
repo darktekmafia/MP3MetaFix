@@ -10,6 +10,7 @@ Historical release entries describe what was recorded at the time. Security comp
 ## [Unreleased]
 
 ### Documentation
+- Require planned audio fingerprinting and duplicate detection to be read-only, preserve source bytes and provenance markers, and store analysis separately. No application or version change.
 - Replace the historical session handoff with a short documentation notice; ignore future local handoff notes.
 - Require development-branch pushes and explicit approval for development-to-main promotion after testing and feedback.
 - Plan admin-only update checks and strict main-only installer update handling. Application version remains 0.5.1.
