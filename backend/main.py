@@ -84,6 +84,7 @@ from backend.updater import (
     get_system_version_info,
     check_github_updates,
     stream_install_update,
+    start_install_update,
 )
 from backend.auth import (
     auth_manager,
@@ -96,6 +97,7 @@ from backend.auth import (
     SettingsUpdateRequest,
     create_auth_token,
     verify_auth_token,
+    AuthStoreError,
 )
 
 logging.basicConfig(
@@ -104,8 +106,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("mp3metafix")
 
-# Concurrency mutex: prevent overlapping in-app update runs
-_update_lock = asyncio.Lock()
 
 
 @asynccontextmanager
@@ -129,6 +129,12 @@ app = FastAPI(
     version=VERSION,
     lifespan=lifespan,
 )
+
+@app.exception_handler(AuthStoreError)
+async def account_store_error(request, exc):
+    from starlette.responses import JSONResponse
+    return JSONResponse({'detail': 'Account storage unavailable. Local administrator recovery is required.'}, status_code=503)
+
 
 # Trust reverse proxy headers (X-Forwarded-For, X-Forwarded-Proto) only from verified proxies
 if TRUST_PROXIES:
@@ -182,7 +188,7 @@ def get_current_user(request: Request) -> Optional[Dict[str, Any]]:
     if not token:
         return None
 
-    user_id = verify_auth_token(token)
+    user_id = auth_manager.verify_token(token)
     if not user_id:
         return None
 
@@ -256,7 +262,7 @@ async def initial_setup(req: SetupRequest, request: Request, response: Response)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-    token = create_auth_token(admin_user["id"])
+    token = auth_manager.issue_token(admin_user["id"])
     is_https = (request.url.scheme == "https")
     response.set_cookie(
         key=AUTH_COOKIE_NAME,
@@ -289,7 +295,7 @@ async def login(req: LoginRequest, request: Request, response: Response):
         )
 
     login_rate_limiter.record_success(client_ip)
-    token = create_auth_token(user["id"])
+    token = auth_manager.issue_token(user["id"])
     is_https = (request.url.scheme == "https")
     response.set_cookie(
         key=AUTH_COOKIE_NAME,
@@ -306,6 +312,9 @@ async def login(req: LoginRequest, request: Request, response: Response):
 @app.post("/api/auth/logout")
 async def logout(request: Request, response: Response):
     """Log out of the account session and clear auth cookie."""
+    user = get_current_user(request)
+    if user:
+        auth_manager.revoke_sessions(user["id"])
     is_https = (request.url.scheme == "https")
     response.delete_cookie(key=AUTH_COOKIE_NAME, path="/", secure=is_https, httponly=True)
     return {"success": True}
@@ -318,7 +327,7 @@ async def change_password(req: ChangePasswordRequest, user: Dict[str, Any] = Dep
         auth_manager.change_password(user["id"], req.current_password, req.new_password)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    return {"success": True, "message": "Password updated successfully."}
+    return {"success": True, "message": "Password updated. Sign in again on each device."}
 
 
 @app.get("/api/settings")
@@ -467,19 +476,8 @@ async def check_updates(force: bool = False, user: Dict[str, Any] = Depends(requ
 @app.post("/api/updates/apply")
 async def apply_update(request: Request, user: Dict[str, Any] = Depends(require_admin)):
     """Stream in-app update installation output as Server-Sent Events (SSE). Admin only."""
-    if _update_lock.locked():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="An update is already in progress. Please wait for it to complete.",
-        )
-
-    async def _locked_stream():
-        async with _update_lock:
-            async for chunk in stream_install_update():
-                yield chunk
-
     return StreamingResponse(
-        _locked_stream(),
+        start_install_update(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -496,14 +494,6 @@ async def upload_audio(
     _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
     """Validate an audio container, create an isolated session, and extract metadata."""
-    # 1. Rate Limiting Check
-    client_ip = upload_rate_limiter.get_client_ip(request)
-    if not upload_rate_limiter.is_allowed(client_ip):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many upload requests. Please slow down.",
-        )
-
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file provided")
 
@@ -513,7 +503,7 @@ async def upload_audio(
         raise HTTPException(status_code=400, detail="Supported audio formats are MP3, M4A, and WAV.")
 
     # 2. Storage Quota Check
-    if not storage_manager.ensure_storage_available(required_bytes=10 * 1024 * 1024):
+    if not storage_manager.ensure_storage_available(required_bytes=MAX_UPLOAD_SIZE_BYTES + MAX_ARTWORK_SIZE_BYTES):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Server temporary storage quota exceeded. Please try again later.",
@@ -633,10 +623,13 @@ async def upload_artwork(
     if not sdir:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    raw_bytes = await image.read()
+    raw_bytes = await image.read(MAX_ARTWORK_SIZE_BYTES + 1)
     clean_bytes, mime_type = validate_and_normalize_image(raw_bytes, MAX_ARTWORK_SIZE_BYTES)
 
     (sdir / "artwork_remove.flag").unlink(missing_ok=True)
+
+    if storage_manager.get_total_temp_size_bytes() + len(clean_bytes) > storage_manager.max_storage_bytes:
+        raise HTTPException(507, 'Temporary storage quota exceeded.')
 
     # Save to staging files in session
     temp_art = sdir / "artwork_pending.bin"
@@ -694,7 +687,7 @@ async def api_suno_extract(
 ):
     """Extract metadata and artwork information from a Suno Clip UUID or song URL."""
     try:
-        meta = fetch_suno_metadata(req.query)
+        meta = await asyncio.to_thread(fetch_suno_metadata, req.query)
         return {
             "success": True,
             "data": meta,
@@ -726,29 +719,20 @@ async def api_suno_apply_artwork(
     if not parsed.hostname or not any(parsed.hostname.lower() == d or parsed.hostname.lower().endswith("." + d) for d in allowed_domains):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid artwork source domain.")
 
+    from backend.outbound import fetch_public_bytes
     try:
-        img_req = urllib.request.Request(
-            req.image_url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-        )
-        with urllib.request.urlopen(img_req, timeout=10) as resp:
-            if resp.status != 200:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to download artwork from Suno CDN.")
-            img_bytes = resp.read()
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching Suno artwork: {e}")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Could not retrieve artwork from Suno.")
-
-    if len(img_bytes) > MAX_ARTWORK_SIZE_BYTES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Artwork file exceeds maximum size limit.")
+        img_bytes = await asyncio.to_thread(fetch_public_bytes, req.image_url, set(allowed_domains), MAX_ARTWORK_SIZE_BYTES)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not retrieve artwork from the permitted HTTPS source.") from None
 
     # Validate and normalize image via Pillow decompression bomb defense
     try:
         clean_bytes, mime_type = validate_and_normalize_image(img_bytes, MAX_ARTWORK_SIZE_BYTES)
     except ValueError as ve:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+
+    if storage_manager.get_total_temp_size_bytes() + len(clean_bytes) > storage_manager.max_storage_bytes:
+        raise HTTPException(507, 'Temporary storage quota exceeded.')
 
     # Stage artwork in session directory
     temp_art = sdir / "artwork_pending.bin"
@@ -783,6 +767,11 @@ async def save_metadata(
     sdir = storage_manager.get_session_dir(session_id)
     if not audio_path or not sdir:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    # The request-wide cross-process writer lease makes this headroom check stable.
+    extra = 2 * (audio_path.stat().st_size + MAX_ARTWORK_SIZE_BYTES + 1024 * 1024)
+    if storage_manager.get_total_temp_size_bytes() + extra > storage_manager.max_storage_bytes:
+        raise HTTPException(507, 'Insufficient temporary storage for an atomic save.')
 
     # Check for staged new artwork or explicit removal
     new_art_bytes = None
@@ -864,7 +853,7 @@ async def download_audio(
     ascii_name = re.sub(r'[^\x20-\x7e]', '_', clean_name).replace('"', '')
 
     if cleanup_after:
-        background_tasks.add_task(storage_manager.cleanup_session, session_id)
+        raise HTTPException(400, 'Use DELETE /api/session to remove a session after downloading.')
 
     headers = {
         "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}',
@@ -1116,3 +1105,7 @@ if ADMIN_DIR.is_dir():
 
 if STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")
+
+# Registered after routes so authorization is available before multipart parsing.
+from backend.request_limits import RequestLimitsMiddleware
+app.add_middleware(RequestLimitsMiddleware, access_check=lambda request: enforce_access_policy(request))

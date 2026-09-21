@@ -1,6 +1,6 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.5.1-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 
@@ -8,11 +8,11 @@
 
 ---
 
-## Current status — v0.5.0
+## Current status — v0.5.1
 
 The editor supports MP3, M4A (AAC/ALAC/Opus), and WAV. MP3/WAV and synthetic AAC M4A checks pass; the reported real Suno M4A failure was resolved by accepting Opus-in-MP4. See the [roadmap](ROADMAP.md) for planned features.
 
-The [2026-09-20 security audit](docs/SECURITY_AUDIT_2026-09-20.md) found unresolved high-severity issues in embedded artwork serving, pre-authentication upload buffering, and account-store failure handling, plus gaps in token revocation, update locking, outbound fetches, and service containment. Existing controls are not a security certification.
+The [v0.5.1 security remediation report](docs/SECURITY_REMEDIATION_2026-09-21.md) records verified fixes for artwork serving, upload admission, account recovery/revocation, updater locking, and outbound fetching. The current user service is sandboxed; dedicated-account migration is deferred and duplicate system-service cleanup requires local administrator authentication. Sign in again after upgrading. Web updates install files and require a local service restart.
 
 ## ✨ Features
 
@@ -61,12 +61,12 @@ The editor’s version dialog supports update checks without a header update bad
   - **Cryptographic Session Cookies**: Timestamped HMAC-SHA256 signed `HttpOnly`, `SameSite=Lax` session cookies.
   - **Decoupled Hashed Storage**: Session directories isolated via one-way SHA-256 hashes (`SHA-256(secret:uuid)[:32]`).
   - **POSIX 0700 Isolation**: Multi-user permissions hardening on temporary storage.
-  - **Storage Quota Precheck**: LRU eviction for session storage; not a hard bound on multipart spooling or concurrent writes.
-  - **Upload Rate Limiting**: Per-worker sliding window with proxy IP anti-spoofing; runs after multipart parsing.
-  - **CSRF & Safe DOM Rendering**: Fetch-site/origin checks and safe metadata text rendering; embedded-artwork active content remains an open issue.
-  - **Uploaded Image Checks**: Pillow pixel warning/error thresholds and 4096px dimension checks; embedded artwork bypasses normalization.
-  - **Exception Masking**: Generic errors on normal editing paths; updater output/exception sanitization remains incomplete.
-  - **Service Templates**: Include resource restrictions; inspect the installed unit. The audited user service lacks the documented restrictions.
+  - **Storage Quota Precheck**: LRU eviction for session storage; combined with early request-byte limits, a cross-process writer lease, and atomic-save headroom checks.
+  - **Upload Rate Limiting**: Per-worker sliding window with proxy IP anti-spoofing; runs before multipart parsing.
+  - **CSRF & Safe DOM Rendering**: Fetch-site/origin checks and safe metadata text rendering; embedded artwork is normalized before serving.
+  - **Uploaded Image Checks**: hard 10-million-pixel and 4096px dimension checks, including embedded artwork previews.
+  - **Exception Masking**: Generic errors on normal editing paths; the updater emits fixed status text instead of raw logs or exception details.
+  - **Service Templates**: Include resource restrictions; inspect the installed unit. The current user service has verified filesystem and resource restrictions; it still uses the desktop Unix account.
 - 🐧 **Smart Universal Linux Installer (`install.sh`)**:
   - Automatically detects your distro (`dnf`, `apt`, `pacman`).
   - Installs and enables a **systemd background service** (`mp3metafix.service`) to start automatically on system boot.

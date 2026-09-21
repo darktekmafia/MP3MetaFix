@@ -10,6 +10,9 @@ from mutagen.mp4 import MP4, MP4Cover
 from mutagen.wave import WAVE
 from backend.audio_formats import audio_format, validate_audio_container
 from backend.wave_metadata import read_info, sync_existing_info
+from backend.security import validate_and_normalize_image
+from backend.config import MAX_ARTWORK_SIZE_BYTES
+from fastapi import HTTPException
 from mutagen.mp3 import MP3, HeaderNotFoundError
 from mutagen.id3 import (
     ID3,
@@ -159,16 +162,12 @@ def extract_metadata_and_artwork(file_path: Path) -> Dict[str, Any]:
     artwork_base64 = None
     artwork_size_bytes = 0
 
-    if tags:
-        for k, v in tags.items():
-            if isinstance(v, APIC) or k.startswith("APIC"):
-                has_artwork = True
-                artwork_mime = v.mime if hasattr(v, "mime") and v.mime else "image/jpeg"
-                img_data = v.data
-                artwork_size_bytes = len(img_data)
-                # Generate base64 thumbnail for frontend preview
-                artwork_base64 = f"data:{artwork_mime};base64,{base64.b64encode(img_data).decode('ascii')}"
-                break
+    art = get_embedded_artwork_binary(file_path)
+    if art:
+        img_data, artwork_mime = art
+        has_artwork = True
+        artwork_size_bytes = len(img_data)
+        artwork_base64 = f"data:{artwork_mime};base64,{base64.b64encode(img_data).decode('ascii')}"
 
     result = {
         "metadata": {
@@ -213,7 +212,7 @@ def extract_metadata_and_artwork(file_path: Path) -> Dict[str, Any]:
 
 
 def get_embedded_artwork_binary(file_path: Path) -> Optional[Tuple[bytes, str]]:
-    """Retrieve raw artwork bytes and MIME type from a supported audio file."""
+    """Return normalized raster artwork with a verified MIME type."""
     try:
         descriptor = audio_format(file_path)
         if descriptor["format"] == "m4a":
@@ -226,8 +225,7 @@ def get_embedded_artwork_binary(file_path: Path) -> Optional[Tuple[bytes, str]]:
 
     for k, v in tags.items():
         if isinstance(v, APIC) or k.startswith("APIC"):
-            mime = v.mime if hasattr(v, "mime") and v.mime else "image/jpeg"
-            return v.data, mime
+            return _safe_artwork(v.data)
     return None
 
 
@@ -346,13 +344,21 @@ def _m4a_number(value, field):
     return int(text)
 
 
+def _safe_artwork(data):
+    """Never trust embedded MIME or emit active content; preserve original tags on disk."""
+    try:
+        return validate_and_normalize_image(data, MAX_ARTWORK_SIZE_BYTES)
+    except HTTPException:
+        return None
+
+
 def _m4a_artwork(tags):
     covers = tags.get("covr", [])
     if not covers:
         return None
     cover = covers[0]
     mime = "image/png" if cover.imageformat == MP4Cover.FORMAT_PNG else "image/jpeg"
-    return bytes(cover), mime
+    return _safe_artwork(bytes(cover))
 
 
 def _extract_m4a(file_path):

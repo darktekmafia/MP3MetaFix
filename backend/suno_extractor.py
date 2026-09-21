@@ -187,21 +187,10 @@ def fetch_suno_metadata(clip_id_or_url: str, timeout: int = 10) -> Dict[str, Any
         raise ValueError("Invalid Suno Clip UUID or URL format.")
 
     url = f"https://suno.com/song/{clip_id}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
-
+    from backend.outbound import fetch_public_bytes
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            if response.status != 200:
-                raise ValueError(f"Suno returned HTTP status {response.status}")
-            html_bytes = response.read()
-            html_text = html_bytes.decode("utf-8", errors="ignore")
+        html_bytes = fetch_public_bytes(url, {'suno.com'}, 4 * 1024 * 1024, timeout)
+        html_text = html_bytes.decode('utf-8', errors='ignore')
     except urllib.error.HTTPError as e:
         if e.code == 404:
             raise ValueError(f"Suno song not found (Clip ID: {clip_id}).")

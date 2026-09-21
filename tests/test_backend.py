@@ -54,8 +54,8 @@ def auth_client(setup_auth_environment):
     from backend.auth import create_auth_token, AUTH_COOKIE_NAME
     c = TestClient(app)
     admin_user = setup_auth_environment._load_users()[0]
-    token = create_auth_token(admin_user["id"])
-    c.cookies.set(AUTH_COOKIE_NAME, token)
+    token = setup_auth_environment.issue_token(admin_user["id"])
+    c.cookies.set(AUTH_COOKIE_NAME, token, domain="testserver.local", path="/")
     return c
 
 
@@ -773,12 +773,12 @@ def test_api_updates_apply_endpoint_active(client, unauth_client, monkeypatch):
     """Verify POST /api/updates/apply is active: requires admin auth and streams SSE (not the old 403 disabled)."""
     import asyncio
 
-    async def _mock_stream():
+    async def _mock_stream(lock_fd=None):
         yield 'data: {"type": "step", "step": "init", "message": "Starting mock update..."}\n\n'
         yield 'data: {"type": "log", "message": "Pulling changes..."}\n\n'
         yield 'data: {"type": "complete", "success": true, "message": "Update complete."}\n\n'
 
-    monkeypatch.setattr("backend.main.stream_install_update", _mock_stream)
+    monkeypatch.setattr("backend.updater.stream_install_update", _mock_stream)
 
     # Unauthenticated request must be rejected
     res_unauth = unauth_client.post("/api/updates/apply")
@@ -849,19 +849,21 @@ async def test_stream_install_update_generator(tmp_path, monkeypatch):
     process = AsyncMock()
     process.stdout = output
     process.returncode = 0
+    process.wait.return_value = 0
     spawn = AsyncMock(return_value=process)
     monkeypatch.setattr("backend.updater.asyncio.create_subprocess_exec", spawn)
 
     events = [event async for event in stream_install_update()]
     payloads = [json.loads(event.removeprefix("data: ").strip()) for event in events]
     assert [payload["type"] for payload in payloads] == ["step", "log", "complete"]
-    assert payloads[1]["message"] == "Mock update output"
+    assert "Mock update output" not in events[1]
+    assert "withheld" in payloads[1]["message"]
     assert payloads[2]["success"] is True
     spawn.assert_awaited_once_with(
         "bash", str(installer), "--update", "--headless",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
-        cwd=str(tmp_path),
+        cwd=str(tmp_path), env={**__import__("os").environ, "MP3METAFIX_WEB_UPDATE":"1"}, pass_fds=(),
     )
     process.wait.assert_awaited_once()
 
@@ -2039,7 +2041,7 @@ def test_api_suno_apply_artwork(client, sample_mp3_bytes, sample_image_bytes):
     mock_resp.read.return_value = sample_image_bytes
     mock_resp.__enter__.return_value = mock_resp
 
-    with patch("urllib.request.urlopen", return_value=mock_resp):
+    with patch("backend.outbound.fetch_public_bytes", return_value=sample_image_bytes):
         res_apply = client.post(
             "/api/suno/apply-artwork",
             json={"image_url": "https://cdn2.suno.ai/21eb08e7-bd94-4e2c-8bca-0245b480a711.jpeg"},
@@ -2419,7 +2421,7 @@ def test_unedited_tags_artwork_and_audio_preserved(tmp_path, request, sample_ima
     before = audio_payload(path)
     write_metadata_and_artwork(path, MetadataModel(title="Changed"))
     assert audio_payload(path) == before
-    assert get_embedded_artwork_binary(path)[0] == sample_image_bytes
+    assert get_embedded_artwork_binary(path)[0] == validate_and_normalize_image(sample_image_bytes, 10 * 1024 * 1024)[0]
     if extension == ".m4a":
         assert MP4(path).tags["----:com.apple.iTunes:KEEP"][0] == b"custom value"
     else:
@@ -2476,3 +2478,295 @@ def test_atomic_tag_failure_preserves_original(tmp_path, sample_wav_bytes, monke
         write_metadata_and_artwork(path, MetadataModel(title="Changed"))
     assert path.read_bytes() == sample_wav_bytes
     assert not list(tmp_path.glob(".save-*"))
+
+
+# Security audit regression coverage (all files/accounts isolated by fixtures).
+@pytest.mark.parametrize('extension', ['.mp3', '.wav', '.m4a'])
+def test_embedded_active_content_never_served(client, tmp_path, request, extension):
+    from mutagen.wave import WAVE
+    from mutagen.mp4 import MP4, MP4Cover
+    path = tmp_path / ('active' + extension)
+    path.write_bytes(request.getfixturevalue({'.mp3':'sample_mp3_bytes','.wav':'sample_wav_bytes','.m4a':'sample_m4a_bytes'}[extension]))
+    payload = b'<html><script>window.auditMarker=true</script></html>'
+    if extension == '.m4a':
+        audio = MP4(path); audio['covr'] = [MP4Cover(payload)]; audio.save()
+    else:
+        if extension == '.wav':
+            audio = WAVE(path); audio.add_tags(); tags = audio.tags
+        else:
+            tags = ID3(path)
+        tags.add(APIC(mime='text/html', type=3, data=payload)); tags.save(path)
+    before = path.read_bytes()
+    response = client.post('/api/upload', files={'file':(path.name,before,'application/octet-stream')})
+    assert response.status_code == 200
+    assert response.json()['artwork']['has_artwork'] is False
+    assert client.get('/api/artwork').status_code == 404
+    assert payload not in client.get('/api/session').content
+    # Bad cover is ignored at the serving boundary, not silently removed from the file.
+    assert client.get('/api/download').content == before
+
+
+def test_no_multipart_spooling_without_access(unauth_client, monkeypatch):
+    from starlette.datastructures import UploadFile
+    async def forbidden(*args):
+        pytest.fail('Unauthorized request reached multipart disk writes')
+    monkeypatch.setattr(UploadFile, 'write', forbidden)
+    assert unauth_client.post('/api/upload', files={'file':('x.wav',b'x'*2000000)}).status_code == 401
+
+
+def test_body_limits_ignore_dishonest_content_length(client, monkeypatch):
+    monkeypatch.setattr('backend.request_limits.MAX_UPLOAD_SIZE_BYTES', 16)
+    data = b'x' * (128 * 1024)
+    assert client.post('/api/upload', files={'file':('x.wav',data)}, headers={'content-length':'1'}).status_code == 413
+    assert client.post('/api/auth/login', content=b'x'*(300*1024), headers={'content-type':'application/json','content-length':'1'}).status_code == 413
+
+
+@pytest.mark.parametrize('contents', ['{broken', '{}', '{"users": []}', '{"users": [{}]}'])
+def test_corrupt_accounts_fail_closed(unauth_client, setup_auth_environment, contents):
+    setup_auth_environment.users_file.write_text(contents)
+    assert unauth_client.get('/api/auth/status').status_code == 503
+    assert unauth_client.post('/api/auth/setup', json={'username':'attacker','password':'Password123!'}).status_code == 503
+    assert setup_auth_environment.users_file.read_text() == contents
+
+
+def test_deleted_initialized_accounts_fail_closed(unauth_client, setup_auth_environment):
+    setup_auth_environment.users_file.unlink()
+    assert unauth_client.get('/api/auth/status').status_code == 503
+    assert unauth_client.post('/api/auth/setup', json={'username':'attacker','password':'Password123!'}).status_code == 503
+
+
+def test_password_change_and_logout_revoke_tokens(client):
+    from backend.auth import AUTH_COOKIE_NAME
+    old = client.cookies.get(AUTH_COOKIE_NAME)
+    assert client.post('/api/auth/change-password',json={'current_password':'AdminPass123!','new_password':'Changed123!'}).status_code == 200
+    stolen = TestClient(app)
+    assert stolen.get('/api/settings',headers={'Authorization':'Bearer '+old}).status_code == 401
+    assert client.post('/api/auth/login',json={'username':'admin','password':'Changed123!'}).status_code == 200
+    current = client.cookies.get(AUTH_COOKIE_NAME)
+    assert client.post('/api/auth/logout').status_code == 200
+    assert stolen.get('/api/settings',headers={'Authorization':'Bearer '+current}).status_code == 401
+
+
+def test_initial_setup_serialized_across_processes(tmp_path):
+    import subprocess, sys
+    folder = tmp_path/'accounts'
+    code = """import sys
+from pathlib import Path
+from backend.auth import AuthManager
+m=AuthManager(Path(sys.argv[1]))
+try:
+ m.create_initial_admin(sys.argv[2], 'TestPassword123!')
+ print('created')
+except ValueError:
+ print('already configured')
+"""
+    processes=[subprocess.Popen([sys.executable,'-c',code,str(folder),name],stdout=subprocess.PIPE,text=True) for name in ('first','second')]
+    results=[p.communicate(timeout=15)[0].strip() for p in processes]
+    assert sorted(results)==['already configured','created']
+    assert len(json.loads((folder/'users.json').read_text())['users'])==1
+
+
+@pytest.mark.parametrize('url', ['http://cdn2.suno.ai/x','https://cdn2.suno.ai:444/x','https://user:pass@cdn2.suno.ai/x','https://evil.test/x'])
+def test_outbound_rejects_unsafe_url_before_dns(monkeypatch,url):
+    from backend.outbound import fetch_public_bytes
+    monkeypatch.setattr('socket.getaddrinfo',lambda *a,**kw:pytest.fail('Unsafe URL reached DNS'))
+    with pytest.raises(ValueError): fetch_public_bytes(url,{'cdn2.suno.ai'},100)
+
+
+def test_outbound_rejects_private_dns(monkeypatch):
+    import socket
+    from backend.outbound import fetch_public_bytes
+    monkeypatch.setattr(socket,'getaddrinfo',lambda *a,**kw:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('127.0.0.1',443))])
+    with pytest.raises(ValueError): fetch_public_bytes('https://cdn2.suno.ai/x',{'cdn2.suno.ai'},100)
+
+
+@pytest.mark.parametrize('status,data,expected', [(302,b'',False),(200,b'x'*101,False),(200,b'valid',True)])
+def test_outbound_redirect_and_stream_bounds(monkeypatch,status,data,expected):
+    import socket
+    from backend.outbound import fetch_public_bytes
+    monkeypatch.setattr(socket,'getaddrinfo',lambda *a,**kw:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',443))])
+    class Response:
+        def __init__(self): self.status=status; self.body=io.BytesIO(data)
+        def getheader(self,name,default=None): return default
+        def read1(self,n): return self.body.read(n)
+    class Connection:
+        sock=None
+        def __init__(self,*a,**kw): pass
+        def request(self,*a,**kw): pass
+        def getresponse(self): return Response()
+        def close(self): pass
+    monkeypatch.setattr('http.client.HTTPSConnection',Connection)
+    if expected: assert fetch_public_bytes('https://cdn2.suno.ai/x',{'cdn2.suno.ai'},100)==data
+    else:
+        with pytest.raises(ValueError): fetch_public_bytes('https://cdn2.suno.ai/x',{'cdn2.suno.ai'},100)
+
+
+@pytest.mark.anyio
+async def test_updater_disconnect_retains_lock(monkeypatch):
+    import asyncio
+    import backend.updater as updater
+    from fastapi import HTTPException
+    finish=asyncio.Event()
+    async def mock_stream(fd):
+        assert fd is not None
+        yield updater._event('step','Starting test')
+        await finish.wait()
+        yield updater._event('complete','Done',success=True)
+    monkeypatch.setattr(updater,'stream_install_update',mock_stream)
+    stream=updater.start_install_update()
+    await anext(stream)
+    await stream.aclose()  # Simulate disconnected SSE consumer.
+    with pytest.raises(HTTPException) as exc: updater.start_install_update()
+    assert exc.value.status_code == 409
+    finish.set()
+    await asyncio.gather(*list(updater._update_jobs))
+    again=updater.start_install_update()
+    assert [item async for item in again]
+
+
+def test_image_hard_pixel_limit():
+    # Above 10M pixels but below the per-side 4096 bound and Pillow's 20M error threshold.
+    buffer = io.BytesIO()
+    Image.new('1',(3200,3200)).save(buffer,format='PNG')
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        validate_and_normalize_image(buffer.getvalue(),10*1024*1024)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_updater_lock_cross_process_and_inherited_lifetime(tmp_path, monkeypatch):
+    import subprocess, sys
+    from backend.locking import file_lock
+    from backend.updater import start_install_update
+    from fastapi import HTTPException
+    monkeypatch.setattr('backend.config.DATA_DIR',tmp_path)
+    # A harmless child holds the same inherited open file description after parent closes it.
+    lease=file_lock(tmp_path/'.update.lock',blocking=False)
+    fd=lease.__enter__()
+    child=subprocess.Popen([sys.executable,'-c','import sys; sys.stdin.read(1)'],stdin=subprocess.PIPE,pass_fds=(fd,))
+    lease.__exit__(None,None,None)
+    try:
+        with pytest.raises(HTTPException) as exc: start_install_update()
+        assert exc.value.status_code == 409
+    finally:
+        child.communicate(b'x',timeout=5)
+    with file_lock(tmp_path/'.update.lock',blocking=False): pass
+
+
+@pytest.mark.anyio
+async def test_updater_failure_never_exposes_subprocess_details(tmp_path,monkeypatch):
+    from unittest.mock import AsyncMock
+    from backend.updater import stream_install_update
+    (tmp_path/'install.sh').write_text('must not execute')
+    monkeypatch.setattr('backend.updater.BASE_DIR',tmp_path)
+    monkeypatch.setattr('backend.updater.asyncio.create_subprocess_exec',AsyncMock(side_effect=OSError('/private/path secret=abc')))
+    events=''.join([item async for item in stream_install_update()])
+    assert 'private/path' not in events and 'secret=abc' not in events
+    assert '"type": "error"' in events
+
+
+def test_atomic_save_storage_headroom(client,sample_wav_bytes,monkeypatch):
+    import backend.main as main
+    assert client.post('/api/upload',files={'file':('tone.wav',sample_wav_bytes)}).status_code==200
+    before=client.get('/api/download').content
+    monkeypatch.setattr(main.storage_manager,'max_storage_bytes',len(before)+1024)
+    assert client.post('/api/save',json={'title':'changed'}).status_code==507
+    assert client.get('/api/download').content==before
+
+
+def test_initial_signing_key_shared_by_workers(tmp_path):
+    import subprocess,sys,os
+    env={**os.environ,'MP3METAFIX_DATA_DIR':str(tmp_path/'fresh')}
+    env.pop('MP3METAFIX_SECRET_KEY',None)
+    # Print only digest equality inside this synthetic isolated environment.
+    code='from backend.config import SESSION_SECRET_KEY; import hashlib; print(hashlib.sha256(SESSION_SECRET_KEY.encode()).hexdigest())'
+    procs=[subprocess.Popen([sys.executable,'-c',code],env=env,stdout=subprocess.PIPE,text=True) for _ in range(4)]
+    outputs=[p.communicate(timeout=10)[0].strip() for p in procs]
+    assert len(set(outputs))==1 and outputs[0]
+    assert ((tmp_path/'fresh'/'.secret_key').stat().st_mode & 0o777)==0o600
+
+
+def test_web_installer_only_updates_files(tmp_path):
+    import subprocess,os
+    source=Path('install.sh').read_text()
+    # Extract definitions, never execute the real command dispatcher or installer operations.
+    source=source[:source.index('# Parse Arguments')] if '# Parse Arguments' in source else source[:source.index('FORCE_HEADLESS=false')]
+    harness=tmp_path/'installer-harness.sh'
+    harness.write_text(source+'''
+INSTALL_DIR="'''+str(tmp_path)+'''"
+VERSION_FILE=/nonexistent
+print_banner() { :; }
+log_info() { :; }
+log_success() { echo "$*"; }
+setup_python_env() { echo dependencies-checked; }
+migrate_existing_services() { echo unsafe-migration; exit 77; }
+systemctl() { echo unsafe-service-control; exit 78; }
+MP3METAFIX_WEB_UPDATE=1
+do_update
+''')
+    result=subprocess.run(['bash',str(harness)],capture_output=True,text=True,timeout=10)
+    assert result.returncode==0,result.stderr
+    assert 'dependencies-checked' in result.stdout and 'restart is required' in result.stdout
+    assert 'unsafe-' not in result.stdout
+
+
+def test_opus_m4a_native_roundtrip(client,tmp_path):
+    from mutagen.mp4 import MP4
+    original=Path('tests/fixtures/opus.m4a')
+    assert MP4(original).info.codec=='Opus'
+    upload=client.post('/api/upload',files={'file':('suno.m4a',original.read_bytes(),'audio/mp4')})
+    assert upload.status_code==200 and upload.json()['audio_info']['format']=='m4a'
+    assert client.post('/api/save',json={'title':'Opus preserved'}).status_code==200
+    result=tmp_path/'saved.m4a';result.write_bytes(client.get('/api/download').content)
+    assert MP4(result).info.codec=='Opus'
+    assert extract_metadata_and_artwork(result)['metadata']['title']=='Opus preserved'
+    assert audio_payload(result)==audio_payload(original)
+
+
+def test_download_cannot_delete_via_get(client,sample_mp3_bytes):
+    assert client.post('/api/upload',files={'file':('x.mp3',sample_mp3_bytes)}).status_code==200
+    assert client.get('/api/download?cleanup_after=true').status_code==400
+    assert client.get('/api/session').json()['active'] is True
+
+
+@pytest.mark.anyio
+async def test_chunked_request_cap_before_parser_write(client,monkeypatch):
+    import httpx
+    from backend.auth import AUTH_COOKIE_NAME
+    monkeypatch.setattr('backend.request_limits.MAX_UPLOAD_SIZE_BYTES',16)
+    async def chunks():
+        yield b'--bound\r\nContent-Disposition: form-data; name="file"; filename="x.wav"\r\n\r\n'
+        for _ in range(3): yield b'x'*32768
+        yield b'\r\n--bound--\r\n'
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://testserver') as c:
+        response=await c.post('/api/upload',content=chunks(),headers={'Content-Type':'multipart/form-data; boundary=bound','Authorization':'Bearer '+client.cookies.get(AUTH_COOKIE_NAME)})
+    assert response.status_code==413
+
+
+@pytest.mark.parametrize("failure", ["fetch", "pull"])
+def test_web_installer_git_failure_aborts_before_dependencies(tmp_path, failure):
+    import subprocess
+    source = Path("install.sh").read_text()
+    source = source[:source.index("# Parse Arguments")] if "# Parse Arguments" in source else source[:source.index("FORCE_HEADLESS=false")]
+    (tmp_path / ".git").mkdir()
+    harness = tmp_path / "failed-update.sh"
+    harness.write_text(source + f'''
+INSTALL_DIR="{tmp_path}"
+print_banner() {{ :; }}
+log_info() {{ :; }}
+setup_python_env() {{ echo unsafe-dependency-update; }}
+git() {{
+    case "$3" in
+        rev-parse) echo unchanged ;;
+        {failure}) return 1 ;;
+        *) return 0 ;;
+    esac
+}}
+MP3METAFIX_WEB_UPDATE=1
+_MP3METAFIX_REEXEC=0
+do_update
+''')
+    result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0
+    assert "unsafe-dependency-update" not in result.stdout

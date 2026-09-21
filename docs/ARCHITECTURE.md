@@ -6,7 +6,7 @@ This document details the software architecture, metadata processing engine, sec
 
 ## 1. System Overview
 
-MP3MetaFix is a client-server application with known security gaps:
+MP3MetaFix is a client-server application:
 - **Backend**: Python 3.14 + FastAPI + Starlette + Mutagen + Pillow.
 - **Frontend**: Zero-framework Vanilla JS + CSS Glassmorphism Design System.
 - **IPC / Transport**: RESTful JSON APIs and HTTP 206 Partial Content audio streaming.
@@ -15,16 +15,15 @@ MP3MetaFix is a client-server application with known security gaps:
 
 ## 2. Security Perimeter & Threat Model
 
-The implemented boundaries and open gaps are documented in [SECURITY_HARDENING.md](SECURITY_HARDENING.md) and the [2026-09-20 audit](SECURITY_AUDIT_2026-09-20.md). They are not a completed security perimeter.
+Current controls and remaining deployment tradeoffs are documented in [SECURITY_HARDENING.md](SECURITY_HARDENING.md) and the [v0.5.1 verification report](SECURITY_REMEDIATION_2026-09-21.md).
 
-Actual upload processing is important: HTTP middleware handles proxy/CSRF/header behavior; FastAPI parses multipart data into temporary files **before** dependency authorization and endpoint upload rate/size checks. After access checks, the endpoint validates the initial audio signature, streams to hashed session storage with a byte counter, and parses the container. Earlier diagrams incorrectly implied authentication and size limits preceded all disk writes.
-
-- Account identity and temporary file-session cookies are distinct HMAC-signed, expiring credentials. File cookies do not confer login/admin access. Account tokens currently survive password changes and logout.
-- Session storage uses `SHA-256("storage_dir:" + secret + ":" + session_id)[:32]`, requesting 0700 directory permissions. File-session IDs are not returned in JSON; account IDs are returned by authentication APIs.
-- A 10 MiB quota precheck and LRU/TTL cleanup manage session storage, but do not reserve the full upload or concurrent save copies. Runtime limits use environment configuration, not saved UI quota preferences.
-- Safe DOM text rendering, CSRF checks, proxy trust, Pydantic field bounds, and generic normal-editing errors exist. Updater output masking remains incomplete.
-- CSP allows inline scripts; nosniff cannot protect an endpoint explicitly serving untrusted HTML. Embedded artwork is currently such an endpoint. Uploaded images undergo Pillow normalization, but embedded artwork does not.
-- HSTS is not emitted by the backend. HTTPS termination, proxy request limits, and installed service containment require separate configuration/verification.
+- ASGI request admission checks editing access and upload rate limits before multipart parsing. Actual body bytes are bounded even without an honest Content-Length. Upload/artwork bodies allow 64 KiB overhead beyond their configured file limits; other mutations allow 256 KiB. Reads have 30-second idle and 300-second total deadlines.
+- A process-shared writer lease serializes storage mutations, including multipart spooling. Upload quota checks allow the maximum upload plus artwork; saves check space for up to two additional copies before modifying data. Runtime quotas still come from environment configuration, not persisted UI preferences.
+- Account identity and file-session cookies remain separate. Account signing keys incorporate the password hash and revocation epoch; password changes and logout invalidate all login tokens for that account. Invalid initialized account stores fail closed with HTTP 503. Account writes and signing-key initialization are serialized and atomic.
+- Session storage uses `SHA-256("storage_dir:" + secret + ":" + session_id)[:32]` with 0700 directories. File-session identifiers are not returned in JSON; authenticated account APIs return account IDs.
+- Uploaded and embedded artwork is decoded and normalized to bounded raster output before preview/serving. Unsafe embedded tags remain in the original audio unless explicitly removed, but are not served as active content. Artwork responses use a sandboxed deny-all CSP; the general UI CSP still allows inline scripts.
+- Safe DOM construction, CSRF validation, trusted-proxy checks, model bounds, and sanitized errors remain enforced. The updater streams only fixed messages.
+- HTTPS termination, proxy limits, firewall rules, and service containment require deployment verification. Rate limits remain per worker; filesystem storage is not a tenant authorization model.
 
 ---
 
@@ -152,7 +151,7 @@ MP3MetaFix integrates automated server-side extraction and non-destructive clien
 
 ### Extraction Architecture (`backend/suno_extractor.py`)
 1. **UUID Identification**: Matches standard v4 UUIDs from direct strings, song URLs (`https://suno.com/song/{uuid}`), and embedded comment tags (`made with suno; ... id={uuid}`).
-2. **Initial URL Construction**: Requests begin at `https://suno.com/song/{uuid}` with a 10s timeout and browser headers; automatic redirects and whole-response reads remain audit findings.
+2. **Initial URL Construction**: Requests begin at `https://suno.com/song/{uuid}`. The shared outbound helper requires HTTPS/443, allowed hosts and public DNS addresses, pins the connection to a validated address with TLS hostname verification, rejects redirects/compression, and bounds HTML to 4 MiB. Fetches run in worker threads with 10-second socket/read deadlines; OS DNS resolution follows host resolver timing.
 3. **Next.js SSR Stream Deserializer**: Parses Server Component stream payloads (`self.__next_f.push`) to extract:
    - Track Title (`TIT2`)
    - Creator Display Name & Handle (`TPE1`, `TPE2`, `@username`)
@@ -162,7 +161,7 @@ MP3MetaFix integrates automated server-side extraction and non-destructive clien
    - Creation Date / Year (`TDRC`)
    - Model Engine / Version (`COMM`)
 4. **Artwork Staging & Validation (`POST /api/suno/apply-artwork`)**:
-   - Downloads artwork from Suno CDN domain (`cdn2.suno.ai`, `cdn1.suno.ai`).
+   - Downloads artwork from the allowed Suno CDN hosts through the same confined helper, bounded by the configured artwork byte limit.
    - Normalizes and validates byte streams via Pillow with decompression bomb defenses (`MAX_IMAGE_PIXELS = 10,000,000`).
    - Stages normalized artwork directly into the cryptographic session directory.
 
@@ -207,7 +206,7 @@ MP3MetaFix integrates a zero-external-dependency authentication subsystem built 
 2. **Distinct Cookie Trust Boundaries**:
    - `mp3metafix_auth`: Manages user account authentication (`{user_id}.{timestamp}.{sig}`).
    - `mp3metafix_session`: Manages isolated temporary file-editing storage (`{session_id}.{timestamp}.{sig}`).
-   - The two cookie names and backend dependency checks separate their roles; both currently use the configured signing secret.
+   - The two cookie names and backend checks separate their roles. File cookies use the configured secret; account cookies use a derived per-account key incorporating the password hash and revocation epoch.
 3. **Filesystem Security (POSIX 0700 / 0600)**:
    - Account and system settings metadata are stored in `data/auth/users.json` and `data/auth/settings.json`.
    - The `data/auth/` directory is created with POSIX `0700` (`rwx------`) permissions and files are created with POSIX `0600` (`rw-------`).
@@ -224,6 +223,6 @@ For full feature backlogs, milestones, and strategic plans for each interface, s
 
 ## 11. Update execution and persisted settings
 
-The update endpoint is enabled and administrator-protected, but uses a process-local asyncio lock. It does not serialize installers across the two observed workers or safely handle every disconnect; raw output/exception sanitization is incomplete. See audit finding 5 before modifying this privileged flow.
+The update endpoint requires administrator authorization and CSRF validation. It acquires a process-shared file lock before responding and runs installation in a background task that survives SSE disconnects. The child installer inherits the lock descriptor, preserving exclusion if its worker exits. Fixed status messages replace raw subprocess output. Web-triggered installation updates files/dependencies and requires a deliberate local service restart; it does not migrate units or invoke service managers. CLI updates retain service maintenance behavior.
 
-AuthManager persists Guest Mode and quota/TTL preferences. Guest Mode is consulted by editing authorization; runtime upload, storage, and session limits still use environment-derived configuration. Password changes update the hash without invalidating existing tokens. Invalid account JSON is treated as an empty store and can reopen setup; this is a known high-impact failure mode, not intended recovery behavior.
+AuthManager persists Guest Mode and quota/TTL preferences. Guest Mode affects editing authorization; runtime limits still use environment-derived configuration. Private atomic account writes and an initialization marker prevent malformed or deleted initialized stores from reopening enrollment. Password changes and logout revoke account-wide login tokens.

@@ -2,6 +2,8 @@
 
 Reviewed local commit da83731 (v0.5.0). Audit only: no application edits, installer executions, credential changes, or remote pushes. Audio-format compatibility debugging was outside the audit scope.
 
+**Historical report:** see [v0.5.1 remediation verification](SECURITY_REMEDIATION_2026-09-21.md) for fixes and remaining deployment limitations. Findings below describe the audited commit, not the current remediation status.
+
 ## Findings, in priority order
 
 ### 1. High — Embedded artwork can become same-origin active content

@@ -16,7 +16,7 @@ VERSION_FILE="${INSTALL_DIR}/VERSION"
 if [ -f "$VERSION_FILE" ]; then
     VERSION="$(cat "$VERSION_FILE" | tr -d '[:space:]')"
 else
-    VERSION="0.5.0"
+    VERSION="0.5.1"
 fi
 
 # Colors for output
@@ -300,6 +300,15 @@ Environment="MP3METAFIX_TRUST_PROXIES=false"
 ExecStart=${INSTALL_DIR}/.venv/bin/uvicorn backend.main:app --host \$MP3METAFIX_HOST --port \$MP3METAFIX_PORT --workers 2 --no-proxy-headers
 Restart=always
 RestartSec=3
+PrivateUsers=true
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=${INSTALL_DIR}
+PrivateTmp=true
+NoNewPrivileges=true
+InaccessiblePaths=-/run/user/%U/bus -/run/dbus/system_bus_socket
+ReadWritePaths=${INSTALL_DIR}
+UMask=0077
 MemoryMax=512M
 TasksMax=64
 CPUQuota=80%
@@ -472,8 +481,14 @@ do_update() {
         if [ "$_MP3METAFIX_REEXEC" != "1" ]; then
             log_info "Checking for git updates..."
             PREV_COMMIT=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)
-            git -C "$INSTALL_DIR" fetch --tags || true
-            git -C "$INSTALL_DIR" pull origin main || git -C "$INSTALL_DIR" pull || true
+            if [ "${MP3METAFIX_WEB_UPDATE:-0}" = "1" ]; then
+                # Never report a failed download/merge as a successful web update.
+                git -C "$INSTALL_DIR" fetch --tags || return 1
+                git -C "$INSTALL_DIR" pull --ff-only origin main || return 1
+            else
+                git -C "$INSTALL_DIR" fetch --tags || true
+                git -C "$INSTALL_DIR" pull origin main || git -C "$INSTALL_DIR" pull || true
+            fi
             NEW_COMMIT=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)
 
             if [ -n "$PREV_COMMIT" ] && [ -n "$NEW_COMMIT" ] && [ "$PREV_COMMIT" != "$NEW_COMMIT" ]; then
@@ -491,6 +506,12 @@ do_update() {
 
     # Update dependencies
     setup_python_env
+
+    # A sandboxed web process must not control the user's service manager or privileges.
+    if [ "${MP3METAFIX_WEB_UPDATE:-0}" = "1" ]; then
+        log_success "Update files installed. A local service restart is required."
+        return 0
+    fi
 
     local has_errors=false
 

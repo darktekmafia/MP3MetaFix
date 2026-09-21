@@ -5,9 +5,25 @@ All notable changes to **MP3MetaFix** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Historical release entries describe what was recorded at the time. Security completion claims in older entries are superseded by the [2026-09-20 audit](docs/SECURITY_AUDIT_2026-09-20.md); those findings remain unresolved.
+Historical release entries describe what was recorded at the time. Security completion claims in older entries are superseded by the [2026-09-20 audit](docs/SECURITY_AUDIT_2026-09-20.md); see the [v0.5.1 remediation status](docs/SECURITY_REMEDIATION_2026-09-21.md) for subsequent fixes and deployment exceptions.
 
 ## [Unreleased]
+
+## [0.5.1] - 2026-09-21
+
+### Security
+- Normalize and bound embedded MP3/WAV/M4A artwork before preview/serving; reject active content while preserving original tags.
+- Authenticate uploads and count request bytes before multipart spooling, with idle/deadline limits, cross-process storage serialization, and atomic-save headroom checks.
+- Fail closed on corrupt/deleted initialized account stores; serialize enrollment/account writes and first-start signing-key creation across workers.
+- Invalidate prior login tokens after password changes/logout using credential-derived signing keys and a revocation epoch. Existing browsers must sign in again after upgrade.
+- Serialize in-app installers across workers and browser disconnects; retain an inherited process lock and stream fixed status messages instead of raw logs.
+- Constrain Suno downloads to bounded HTTPS fetches with public pinned destinations, no redirects, and response-size limits.
+- Reject state-changing GET download cleanup; require the existing CSRF-protected session deletion route.
+
+### Changed
+- Web updates require successful Git fetch/fast-forward operations, install files/dependencies only, and require a local service restart; the web process no longer needs service-manager access.
+- Added and applied a tested user-service sandbox with filesystem/privacy restrictions and memory/task/CPU limits. Dedicated service-account migration is deferred; duplicate system-unit cleanup requires local sudo authentication.
+- Added security regression tests and a synthetic Opus-in-MP4 preservation fixture. No new runtime dependencies.
 
 ### Fixed
 - Accept Opus codec in M4A files. The affected Suno download uses Opus-in-MP4; the codec allowlist previously rejected these with HTTP 422. Verified with a real Suno M4A file.
@@ -16,7 +32,7 @@ Historical release entries describe what was recorded at the time. Security comp
 - Aligned project documentation with implementation and verification evidence while preserving technical ownership terms and explicit approval requirements.
 - Repaired relative documentation links and identified the missing standalone LICENSE file without inventing license text.
 - Added the permanent 2026-09-20 security audit with unresolved findings, evidence, and verification limits.
-- Corrected security and deployment claims: multipart limits occur after spooling, artwork can serve active content, account recovery/token revocation remain incomplete, updater locking is worker-local, and the active user service lacks template hardening.
+- Recorded the original security/deployment gaps and their subsequent v0.5.1 remediations, with explicit verification limits and deferred service-account migration.
 - Diagnosed and resolved the M4A parsing failure: the affected file contains Opus-in-MP4; the codec allowlist now accepts Opus-in-MP4.
 - Clarified that `/manager` is a shell with shared-engine parity planned, not a completed batch editor; distinguished stored settings from runtime enforcement and public static pages from protected APIs.
 - Replaced unsupported Suno compliance assertions with implementation scope and an explicit unverified policy-review status.

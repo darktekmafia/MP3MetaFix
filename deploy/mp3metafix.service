@@ -16,7 +16,12 @@ Restart=always
 RestartSec=3
 
 # Hardening and Resource Sandboxing options
-ProtectSystem=full
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=%INSTALL_DIR%
+ReadWritePaths=%INSTALL_DIR%
+InaccessiblePaths=-/run/user -/run/dbus/system_bus_socket
+UMask=0077
 PrivateTmp=true
 NoNewPrivileges=true
 MemoryMax=512M

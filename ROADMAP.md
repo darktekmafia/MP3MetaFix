@@ -195,14 +195,15 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
 
 ### Active Backlog & Future Vision 📋
 
-- [ ] **Security audit remediation (2026-09-20)** — [full findings](docs/SECURITY_AUDIT_2026-09-20.md):
+- [x] **Application security audit remediation (v0.5.1)** — [verification and deployment exceptions](docs/SECURITY_REMEDIATION_2026-09-21.md):
   - Reject/normalize embedded active-content artwork before preview or serving (high).
   - Enforce request-byte limits before multipart spooling/authentication and reserve storage across workers (high).
   - Fail closed on damaged account stores; serialize first-admin creation (high, conditional).
   - Revoke prior account tokens after password changes and define logout revocation (medium).
-  - Serialize updater processes across workers, handle disconnects, and sanitize logs (medium; approval required).
+  - Serialize in-app updater processes across workers/disconnects and emit fixed status messages. Web updates require a local restart.
   - Validate outbound redirect destinations and bound Suno response reads (medium).
-  - Reconcile duplicate services and apply tested service containment with approval (medium).
+  - Applied and verified user-service containment. Dedicated-account migration is deferred; disabling the duplicate failed system unit requires local administrator authentication.
+- [ ] **Dedicated service account and duplicate-unit cleanup**: complete deferred identity isolation and system-unit maintenance; retain the tested user sandbox in the meantime.
 - [ ] **Apply stored quota/TTL settings to runtime policy**: settings persist today, while runtime enforcement reads environment-derived configuration.
 
 - [ ] **Multi-Arch Docker & OCI Container Images**:

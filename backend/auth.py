@@ -11,6 +11,8 @@ import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
+from backend.locking import file_lock, atomic_json
+from functools import wraps
 
 from backend.config import (
     DATA_DIR,
@@ -82,6 +84,8 @@ def verify_auth_token(
     if len(parts) != 3:
         return None
     user_id, timestamp_str, provided_sig = parts
+    if not provided_sig.isascii():
+        return None
     try:
         timestamp = int(timestamp_str)
     except ValueError:
@@ -176,6 +180,18 @@ class SettingsUpdateRequest(BaseModel):
 
 # --- Authentication & Settings Manager ---
 
+class AuthStoreError(RuntimeError):
+    """Account storage is unavailable; never interpret corruption as enrollment."""
+
+
+def locked_users(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with file_lock(self.auth_dir / '.accounts.lock'):
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
 class AuthManager:
     """Manages user persistence, credential verification, and system settings."""
 
@@ -205,25 +221,64 @@ class AuthManager:
 
     def _load_users(self) -> List[Dict[str, Any]]:
         if not self.users_file.exists():
+            if (self.auth_dir / '.initialized').exists():
+                raise AuthStoreError('Account storage unavailable.')
             return []
         try:
-            with open(self.users_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data.get("users", []) if isinstance(data, dict) else []
-        except Exception as e:
-            logger.error(f"Error reading users file: {e}")
-            return []
+            data = json.loads(self.users_file.read_text(encoding='utf-8'))
+            users = data['users']
+            if not isinstance(users, list) or not users:
+                raise ValueError('Invalid account records')
+            ids = set()
+            names = set()
+            for user in users:
+                if not isinstance(user, dict) or not all(isinstance(user.get(k), str) and user[k] for k in ('id', 'username', 'password_hash', 'role')):
+                    raise ValueError('Invalid account record')
+                if user['role'] not in ('admin', 'user') or user['id'] in ids or user['username'].lower() in names:
+                    raise ValueError('Invalid account identity')
+                uuid.UUID(user['id'])
+                ids.add(user['id'])
+                names.add(user['username'].lower())
+            if not any(u['role'] == 'admin' for u in users):
+                raise ValueError('Missing administrator')
+            # Mark existing installations as initialized without changing credentials.
+            (self.auth_dir / '.initialized').touch(mode=0o600, exist_ok=True)
+            return users
+        except Exception as exc:
+            logger.error('Account storage unavailable: %s', type(exc).__name__)
+            raise AuthStoreError('Account storage unavailable.') from None
 
     def _save_users(self, users: List[Dict[str, Any]]):
-        temp_file = self.users_file.with_suffix(".tmp")
-        payload = {"users": users, "updated_at": int(time.time())}
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-        try:
-            os.chmod(temp_file, 0o600)
-        except Exception:
-            pass
-        temp_file.replace(self.users_file)
+        atomic_json(self.users_file, {'users': users, 'updated_at': int(time.time())})
+        (self.auth_dir / '.initialized').touch(mode=0o600, exist_ok=True)
+
+    def _token_key(self, user):
+        material = 'account-session:' + user['password_hash'] + ':' + user.get('session_epoch', '')
+        return hmac.new(SESSION_SECRET_KEY.encode(), material.encode(), hashlib.sha256).hexdigest()
+
+    def issue_token(self, user_id):
+        for user in self._load_users():
+            if user['id'] == user_id:
+                return create_auth_token(user_id, secret_key=self._token_key(user))
+        raise AuthStoreError('Account unavailable.')
+
+    def verify_token(self, token):
+        if not isinstance(token, str) or len(token) > 512:
+            return None
+        user_id = token.split('.')[0]
+        for user in self._load_users():
+            if user['id'] == user_id:
+                return verify_auth_token(token, secret_key=self._token_key(user))
+        return None
+
+    @locked_users
+    def revoke_sessions(self, user_id):
+        users = self._load_users()
+        for user in users:
+            if user['id'] == user_id:
+                user['session_epoch'] = secrets.token_hex(32)
+                self._save_users(users)
+                return
 
     def _load_settings(self) -> Dict[str, Any]:
         if not self.settings_file.exists():
@@ -246,14 +301,7 @@ class AuthManager:
             }
 
     def _save_settings(self, settings: Dict[str, Any]):
-        temp_file = self.settings_file.with_suffix(".tmp")
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
-        try:
-            os.chmod(temp_file, 0o600)
-        except Exception:
-            pass
-        temp_file.replace(self.settings_file)
+        atomic_json(self.settings_file, settings)
 
     def is_setup_required(self) -> bool:
         """Returns True if no administrator accounts exist in the system."""
@@ -263,6 +311,7 @@ class AuthManager:
     def get_users_count(self) -> int:
         return len(self._load_users())
 
+    @locked_users
     def create_initial_admin(self, username: str, password: str) -> Dict[str, Any]:
         """Creates the primary admin user during first-time setup."""
         if not self.is_setup_required():
@@ -282,7 +331,7 @@ class AuthManager:
             "updated_at": int(time.time()),
         }
         self._save_users([user_record])
-        logger.info(f"Primary administrator account created: '{clean_username}' ({user_id})")
+        logger.info("Primary administrator account created")
         return {
             "id": user_record["id"],
             "username": user_record["username"],
@@ -318,6 +367,7 @@ class AuthManager:
                 }
         return None
 
+    @locked_users
     def change_password(self, user_id: str, old_password: str, new_password: str) -> bool:
         """Update a user's password after verifying their current password."""
         if len(new_password) < 8:
@@ -329,12 +379,13 @@ class AuthManager:
                 if not verify_password(old_password, u.get("password_hash", "")):
                     raise ValueError("Current password is incorrect.")
                 u["password_hash"] = hash_password(new_password)
+                u["session_epoch"] = secrets.token_hex(32)
                 u["updated_at"] = int(time.time())
                 updated = True
                 break
         if updated:
             self._save_users(users)
-            logger.info(f"Password updated for user ID {user_id}")
+            logger.info("Account password updated")
             return True
         return False
 
@@ -342,6 +393,7 @@ class AuthManager:
         """Return active system settings."""
         return self._load_settings()
 
+    @locked_users
     def update_settings(self, updates: Dict[str, Any]) -> Dict[str, Any]:
         """Apply updates to system settings."""
         current = self._load_settings()

@@ -132,3 +132,5 @@ AGENTS.md
 GEMINI.md
 .cursor/
 .windsurf/
+
+!tests/fixtures/opus.m4a

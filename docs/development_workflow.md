@@ -4,7 +4,7 @@ These rules govern all agentic modifications, architecture, security, documentat
 
 ## Current implementation assessment
 
-These rules are engineering requirements, not proof that the application or installed service already satisfies them. Read [SECURITY_AUDIT_2026-09-20.md](SECURITY_AUDIT_2026-09-20.md) and [SECURITY_HARDENING.md](SECURITY_HARDENING.md) for unresolved findings. The authoritative workflow is this file; `.agents/rules/development_workflow.md` is a legacy copy and must not override it. Changes must remain in local Git until explicit approval to push remotely.
+These rules are engineering requirements, not proof that the application or installed service already satisfies them. Read the historical [SECURITY_AUDIT_2026-09-20.md](SECURITY_AUDIT_2026-09-20.md), current [remediation verification](SECURITY_REMEDIATION_2026-09-21.md), and [SECURITY_HARDENING.md](SECURITY_HARDENING.md) for implemented protections and remaining deployment tradeoffs. The authoritative workflow is this file; `.agents/rules/development_workflow.md` is a legacy copy and must not override it. Changes must remain in local Git until explicit approval to push remotely.
 
 ---
 

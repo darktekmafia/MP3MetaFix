@@ -6,7 +6,13 @@ This guide covers deployment options for MP3MetaFix across **Local Fedora 44 Dev
 
 ## Current workstation status and deployment cautions
 
-As observed on 2026-09-20, the working backend is the **user** `mp3metafix.service`, serving loopback port 8844 with two Uvicorn workers. It was restarted and verified at v0.5.0 / `da83731`. A separate enabled **system** unit is failing with 203/EXEC permission denied. It was left unchanged; do not assume both units should run.
+As verified on 2026-09-21, the working backend is the **user** `mp3metafix.service`, serving loopback port 8844 with two workers at v0.5.1. Its installed hardening drop-in is derived from `deploy/user-hardening.conf`. Dedicated-account migration is deferred. The duplicate **system** unit still fails with 203/EXEC; disabling it requires local sudo authentication:
+
+```bash
+sudo systemctl disable --now mp3metafix.service
+```
+
+This targets only the duplicate system unit; keep managing the working service with `--user`.
 
 For this workstation:
 
@@ -18,9 +24,11 @@ curl --fail http://127.0.0.1:8844/api/health
 curl --fail http://127.0.0.1:8844/api/version
 ```
 
-Inspect both scopes before changing deployment. The observed user unit lacks the documented system-service hardening/resource limits; template contents do not prove installed containment. See the [audit](SECURITY_AUDIT_2026-09-20.md), especially findings 2, 5, and 7. Service-user/permission changes require maintainer coordination.
+The user profile uses `PrivateUsers=true`, `ProtectSystem=strict`, `ProtectHome=tmpfs`, an explicit checkout bind/write allowance, private temporary storage, no new privileges, blocked service-manager sockets, UMask 0077, MemoryMax 512M, TasksMax 64, and CPUQuota 80%. Home-directory installs are exposed only through the explicit checkout bind. The checkout remains writable for updates; the desktop Unix identity is still a containment tradeoff. See [verification and limitations](SECURITY_REMEDIATION_2026-09-21.md).
 
-This workspace is **local Git only** until explicit maintainer approval. Do not run the update installer to pick up local edits: it pulls remote code. Restart the correct local service and reload the browser instead. Do not use the in-app updater while the documented concurrency/interruption gaps remain unresolved.
+Existing deployments do not acquire hardening merely by pulling updated templates. Render `deploy/user-hardening.conf` with the absolute checkout path into the user unit's drop-in directory, reload the user daemon, restart, and verify effective properties. A custom data directory outside the checkout needs an explicit writable/bind allowance. Test namespace support on the target host, especially LXC, before enabling this profile.
+
+Do not run the update installer to pick up uncommitted local edits: it pulls remote code. Restart the correct service and reload the browser. Upgrading to v0.5.1 requires signing in again; passwords, signing secrets, and file sessions are preserved. Password changes and logout now revoke all browsers' login tokens for the account.
 
 ## 1. Local Linux / Workstation Installation (Fedora / Ubuntu / Arch)
 
@@ -304,7 +312,7 @@ sudo systemctl restart mp3metafix.service
 ```
 
 > [!NOTE]
-> In-app web updater execution (`POST /api/updates/apply`) is enabled and requires administrator authorization plus CSRF checks. Its lock is worker-local and interruption/log sanitization safeguards are incomplete; see audit finding 5. Modification requires the project’s maintainer-approval checkpoint.
+> In-app web updater execution (`POST /api/updates/apply`) is enabled and requires administrator authorization plus CSRF checks. A process-shared lock and inherited installer descriptor prevent overlapping web updates; a background task survives stream disconnects and only fixed messages reach the browser. Web updates install files/dependencies and explicitly require a local restart (`systemctl --user restart mp3metafix.service` for this workstation). They do not invoke service managers or unit migration. Modification requires the project’s maintainer-approval checkpoint.
 
 ---
 
@@ -322,7 +330,7 @@ The endpoint’s existing 150 MB upload limit applies to every format; WAV can r
 
 ## 6. Environment Variables & Security Configuration
 
-The server reads environment variables. Configure them in the service environment or export them before launch; the backend does not itself load a `.env` file. Persisted UI quota/TTL preferences currently do not reconfigure these runtime limits. Endpoint limits also do not cap multipart preprocessing; enforce early request limits at the proxy and in a future application fix.
+The server reads environment variables. Configure them in the service environment or export them before launch; the backend does not itself load a `.env` file. Persisted UI quota/TTL preferences currently do not reconfigure these runtime limits. ASGI admission now checks access before multipart parsing, counts actual body bytes, enforces read deadlines, and serializes storage mutations across workers. Keep proxy limits as an additional boundary.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -331,7 +339,7 @@ The server reads environment variables. Configure them in the service environmen
 | `MP3METAFIX_SESSION_TTL_MINUTES` | `60` | Inactivity TTL for uploaded sessions |
 | `MP3METAFIX_MAX_UPLOAD_SIZE_MB` | `150` | Maximum single audio upload size (MB) |
 | `MP3METAFIX_MAX_ARTWORK_SIZE_MB` | `10` | Maximum artwork upload size (MB) |
-| `MP3METAFIX_MAX_GLOBAL_STORAGE_MB` | `2048` | Session-storage quota precheck with LRU pruning; not a strict concurrent-write cap |
+| `MP3METAFIX_MAX_GLOBAL_STORAGE_MB` | `2048` | Session-storage budget with LRU pruning and serialized upload/save headroom checks; excludes unrelated host files |
 | `MP3METAFIX_TRUST_PROXIES` | `false` | Enables reverse proxy header processing (`X-Forwarded-For`, `X-Forwarded-Proto`) |
 | `MP3METAFIX_TRUSTED_PROXIES` | `127.0.0.1,::1` | Comma-separated list of trusted proxy IPs or CIDRs |
 | `MP3METAFIX_SECRET_KEY` | *(auto-generated)* | Cryptographic HMAC secret key (persisted to `data/.secret_key`) |

@@ -47,27 +47,31 @@ PROXY_HOST = os.getenv("MP3METAFIX_PROXY_HOST", "").strip()
 
 # Cryptographic Session & Cookie Config
 def get_secret_key() -> str:
+    from backend.locking import file_lock
+    import secrets
+    import tempfile
     env_key = os.getenv("MP3METAFIX_SECRET_KEY")
     if env_key:
         return env_key
-    key_file = DATA_DIR / ".secret_key"
-    if key_file.exists():
+    key_file = DATA_DIR / '.secret_key'
+    with file_lock(DATA_DIR / '.secret.lock'):
+        if key_file.exists():
+            key = key_file.read_text(encoding='utf-8').strip()
+            if not key:
+                raise RuntimeError('Configured signing key is empty; local recovery required.')
+            return key
+        new_key = secrets.token_hex(32)
+        fd, name = tempfile.mkstemp(prefix='.key-', dir=DATA_DIR)
         try:
-            return key_file.read_text(encoding="utf-8").strip()
-        except Exception:
-            pass
-    import secrets
-    new_key = secrets.token_hex(32)
-    try:
-        key_file.parent.mkdir(parents=True, exist_ok=True)
-        key_file.write_text(new_key, encoding="utf-8")
-        try:
-            os.chmod(key_file, 0o600)
-        except Exception:
-            pass
-    except Exception:
-        pass
-    return new_key
+            with os.fdopen(fd, 'w') as f:
+                f.write(new_key)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(name, key_file)
+        finally:
+            Path(name).unlink(missing_ok=True)
+        return new_key
+
 
 SESSION_SECRET_KEY = get_secret_key()
 SESSION_COOKIE_NAME = "mp3metafix_session"
@@ -82,7 +86,7 @@ def get_version() -> str:
     version_file = BASE_DIR / "VERSION"
     if version_file.exists():
         return version_file.read_text().strip()
-    return "0.5.0"
+    return "0.5.1"
 
 def get_git_commit() -> Optional[str]:
     """Retrieve current short Git commit hash if running in a git repository."""

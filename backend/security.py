@@ -50,6 +50,8 @@ def verify_signed_session_token(token: str, max_age_seconds: int = SESSION_COOKI
         return None
 
     session_id, ts_str, sig = parts[0], parts[1], parts[2]
+    if not sig.isascii():
+        return None
     try:
         ts = int(ts_str)
         now = int(time.time())
@@ -147,6 +149,12 @@ Image.MAX_IMAGE_PIXELS = 10_000_000
 MAX_COVER_ART_DIMENSION = 4096
 
 
+def _bounded_image_output(buffer, mime, max_bytes):
+    if buffer.tell() > max_bytes:
+        raise HTTPException(413, 'Normalized artwork exceeds maximum allowed size.')
+    return buffer.getvalue(), mime
+
+
 def validate_and_normalize_image(image_bytes: bytes, max_bytes: int) -> Tuple[bytes, str]:
     """Validate image magic bytes, format, and dimensions using Pillow. Returns (clean_bytes, mime_type)."""
     if len(image_bytes) > max_bytes:
@@ -169,6 +177,8 @@ def validate_and_normalize_image(image_bytes: bytes, max_bytes: int) -> Tuple[by
 
     try:
         with Image.open(io.BytesIO(image_bytes)) as img:
+            if img.width * img.height > 10_000_000:
+                raise Image.DecompressionBombError("Pixel limit exceeded")
             img.verify()
     except Image.DecompressionBombError:
         logger.warning("Image decompression bomb rejected: exceeds pixel threshold")
@@ -199,24 +209,24 @@ def validate_and_normalize_image(image_bytes: bytes, max_bytes: int) -> Tuple[by
                 if img.mode in ("RGB", "L"):
                     out_io = io.BytesIO()
                     img.save(out_io, format="JPEG", quality=92, optimize=True)
-                    return out_io.getvalue(), mime_type
+                    return _bounded_image_output(out_io, mime_type, max_bytes)
                 else:
                     # Convert palette/RGBA to RGB JPEG
                     rgb_img = img.convert("RGB")
                     out_io = io.BytesIO()
                     rgb_img.save(out_io, format="JPEG", quality=92, optimize=True)
-                    return out_io.getvalue(), mime_type
+                    return _bounded_image_output(out_io, mime_type, max_bytes)
             elif fmt == "PNG":
                 mime_type = "image/png"
                 out_io = io.BytesIO()
                 img.save(out_io, format="PNG", optimize=True)
-                return out_io.getvalue(), mime_type
+                return _bounded_image_output(out_io, mime_type, max_bytes)
             elif fmt == "WEBP":
                 # Convert WebP to JPEG for maximum ID3 compatibility across hardware/car players
                 rgb_img = img.convert("RGB")
                 out_io = io.BytesIO()
                 rgb_img.save(out_io, format="JPEG", quality=92, optimize=True)
-                return out_io.getvalue(), "image/jpeg"
+                return _bounded_image_output(out_io, "image/jpeg", max_bytes)
             else:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -254,7 +264,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "base-uri 'self'",
             "form-action 'self'",
         ]
-        response.headers["Content-Security-Policy"] = "; ".join(csp_directives)
+        response.headers["Content-Security-Policy"] = ("default-src 'none'; sandbox" if request.url.path == "/api/artwork" else "; ".join(csp_directives))
         return response
 
 

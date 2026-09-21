@@ -1,3 +1,5 @@
+> Update, 2026-09-21: This handoff is historical. The Opus-in-MP4 codec fix resolved the reported M4A HTTP 422. Security remediation and current verification are recorded in `docs/SECURITY_REMEDIATION_2026-09-21.md`. The existing user service is hardened; dedicated-account migration is explicitly deferred and duplicate system-unit cleanup still needs local sudo. Consult current Git status/history for release progress rather than the older local-only instructions below.
+
 # MP3MetaFix session handoff — 2026-09-20
 
 This working document is intended for the owner and the next LLM continuing this project. It records completed work, verification, known failures, and unresolved security findings. Audit recommendations below are not implemented fixes or permission to change privileged infrastructure.

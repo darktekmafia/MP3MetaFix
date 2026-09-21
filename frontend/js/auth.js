@@ -523,8 +523,10 @@
       const data = await res.json();
 
       if (res.ok) {
-        notify('Password updated successfully', 'success');
+        notify('Password updated. Sign in again on each device.', 'success');
         form.reset();
+        closeModal('settingsModal');
+        await checkAuthStatus();
       } else {
         if (errorEl && errorText) {
           errorText.textContent = data.detail || 'Could not change password.';

@@ -172,73 +172,72 @@ async def check_github_updates(force_refresh: bool = False) -> Dict[str, Any]:
     return result
 
 
-async def stream_install_update() -> AsyncGenerator[str, None]:
-    """
-    Execute `install.sh --update --headless` in an async subprocess
-    and stream stdout/stderr line-by-line as Server-Sent Events (SSE).
-    """
-    install_script = BASE_DIR / "install.sh"
-    
-    if not install_script.exists():
-        payload = json.dumps({"type": "error", "message": "install.sh not found on server."})
-        yield f"data: {payload}\n\n"
+_update_jobs = set()
+
+
+def _event(kind, message, **fields):
+    return 'data: ' + json.dumps({'type': kind, 'message': message, **fields}) + '\n\n'
+
+
+async def stream_install_update(lock_fd=None):
+    """Drain installer output, exposing only fixed status text, never raw log content."""
+    install_script = BASE_DIR / 'install.sh'
+    if not install_script.is_file():
+        yield _event('error', 'Update installer is unavailable.', success=False)
         return
-
-    # Ensure executable permission
-    try:
-        os.chmod(install_script, 0o755)
-    except Exception:
-        pass
-
-    # Send initial event
-    yield f"data: {json.dumps({'type': 'step', 'step': 'init', 'message': 'Starting MP3MetaFix in-app updater...'})}\n\n"
-    await asyncio.sleep(0.1)
-
-    cmd = ["bash", str(install_script), "--update", "--headless"]
-    logger.info(f"Executing in-app updater: {' '.join(cmd)}")
-
+    yield _event('step', 'Starting update installation.', step='init')
     try:
         process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(BASE_DIR),
+            'bash', str(install_script), '--update', '--headless',
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            cwd=str(BASE_DIR), env={**os.environ, 'MP3METAFIX_WEB_UPDATE': '1'}, pass_fds=(() if lock_fd is None else (lock_fd,)),
         )
-
-        # Stream output lines
-        while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
-            text = line.decode("utf-8", errors="replace").rstrip()
-            if text:
-                # Strip excessive ANSI codes if needed or pass cleanly
-                payload = json.dumps({"type": "log", "message": text})
-                yield f"data: {payload}\n\n"
-                await asyncio.sleep(0.01)
-
-        await process.wait()
-        logger.info(f"Update process finished with returncode: {process.returncode}")
-
-        # Returncode 0 is normal exit; -15 or 143 is SIGTERM from systemd service restart
-        if process.returncode in (0, -15, 143):
-            logger.info("In-app update completed successfully.")
-            payload = json.dumps({
-                "type": "complete",
-                "success": True,
-                "message": "Update installed successfully! Server is restarting...",
-            })
-            yield f"data: {payload}\n\n"
+        # Fixed-size reads handle arbitrary lines without unbounded buffering.
+        notified = False
+        while await process.stdout.read(4096):
+            if not notified:
+                yield _event('log', 'Installer is running; detailed output is withheld for security.')
+                notified = True
+        code = await process.wait()
+        if code == 0:
+            yield _event('complete', 'Update files installed. Restart the backend service from the local terminal to activate them.', success=True, restart_required=True)
         else:
-            logger.error(f"In-app update failed with exit code {process.returncode}")
-            payload = json.dumps({
-                "type": "error",
-                "success": False,
-                "message": f"Update script exited with error code {process.returncode}.",
-            })
-            yield f"data: {payload}\n\n"
-
+            yield _event('error', 'Update did not complete successfully. Check service health before retrying.', success=False)
     except Exception as exc:
-        logger.exception("Error executing in-app update subprocess")
-        payload = json.dumps({"type": "error", "message": f"Execution error: {str(exc)}"})
-        yield f"data: {payload}\n\n"
+        logger.error('Update execution failed: %s', type(exc).__name__)
+        yield _event('error', 'Update execution failed. Check service health before retrying.', success=False)
+
+
+def start_install_update():
+    """Acquire the process-shared lease before responding, then run independently of SSE."""
+    from backend.config import DATA_DIR
+    from backend.locking import file_lock
+    from fastapi import HTTPException
+    lease = file_lock(DATA_DIR / '.update.lock', blocking=False)
+    try:
+        fd = lease.__enter__()
+    except BlockingIOError:
+        raise HTTPException(409, 'An update is already in progress.') from None
+    queue = asyncio.Queue(maxsize=16)
+    def publish(item):
+        if queue.full():
+            queue.get_nowait()
+        queue.put_nowait(item)
+    async def run():
+        try:
+            async for event in stream_install_update(fd):
+                publish(event)
+        finally:
+            # The installer inherits this FD; a worker exit cannot release its lease early.
+            lease.__exit__(None, None, None)
+            publish(None)
+    task = asyncio.create_task(run())
+    _update_jobs.add(task)
+    task.add_done_callback(_update_jobs.discard)
+    async def events():
+        while True:
+            event = await queue.get()
+            if event is None:
+                return
+            yield event
+    return events()

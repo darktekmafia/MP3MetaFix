@@ -320,7 +320,7 @@
               }
             } else if (payload.type === 'complete') {
               if (statusEl) {
-                statusEl.textContent = payload.message || '✓ Update installed. Server is restarting…';
+                statusEl.textContent = payload.message || 'Update files installed. Restart the backend service locally to activate them.';
                 statusEl.style.color = 'var(--clr-success, #4ade80)';
                 statusEl.classList.remove('hidden');
               }
@@ -384,8 +384,9 @@
       const data = await res.json();
 
       if (res.ok) {
-        notify('Administrator password updated successfully', 'success');
+        notify('Password updated. Sign in again on each device.', 'success');
         form.reset();
+        await window.MP3MetaFixAuth?.checkAuthStatus();
       } else {
         notify(data.detail || 'Failed to update password', 'error');
       }
