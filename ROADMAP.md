@@ -44,6 +44,11 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - High-contrast footers, readable links, and glassmorphic telemetry cards across all screen resolutions (320px–4K).
 
 ### Active Backlog & Future Vision 📋
+- [ ] **Display installed version publicly; check for updates only in `/admin`**:
+  - Keep the installed application version visible in the header for guests and signed-in users, using a read-only local version/health response. Displaying or clicking it must not trigger a remote update check.
+  - Remove automatic and manual update checks, update prompts, and update-check controls from `/app`, `/manager`, and the public hub. Keep update discovery and installation controls in `/admin`, gated by administrator authentication and the deployment's update policy.
+  - Verify guest startup, refresh, session restore, and version-display interactions never request `/api/updates/check`; verify authorized administrator checks still work. Preserve backend endpoint authorization.
+  - This removes the guest update-check `401` trigger; it does not establish that all demo upload/authentication failures are resolved.
 - [ ] **Multi-User Role & Quota Policies**:
   - Granular per-user storage quotas, tenant directories, and role management (Editor, Viewer, Admin).
 - [ ] **Service Daemon Maintenance Triggers**:
@@ -205,6 +210,11 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
   - Applied and verified user-service containment. Local dedicated-account migration subsequently completed; the old user service is disabled and retained for recovery.
 - [x] **Local dedicated service-account migration**:
   - Corrected retry completed on Fedora; verified dedicated process identity, healthy v0.5.1 backend, private data ownership, effective sandbox restrictions, and disabled/inactive old user service.
+- [ ] **Strict installer release-branch enforcement**:
+  - Keep release updates explicitly sourced from `origin main`; remove the plain `git pull` fallback that can use another configured upstream when the main pull fails.
+  - Detect a checkout on `development` or another branch and stop with clear guidance before merging release code into it. Preserve local changes and avoid automatic branch switching or resets.
+  - Fail clearly on fetch/pull errors. Test main and development checkouts, differing upstreams, local changes, and failed downloads; ensure no fallback consumes an unintended branch.
+  - Remote development pushes target `development`; promotion to `main` requires an explicit user request to merge `development` → `main` after testing and feedback. Development test installation instructions must distinguish checkout-based testing from the main-only release updater.
 - [ ] **General service-account migration and installer integration**:
   - Added a scoped [local migration/rollback helper](docs/ACCOUNT_MIGRATION.md); the first Fedora cutover hit a namespace failure and recovered the user backend. Corrected retry adds a real dedicated-account system sandbox probe before cutover; local live success is verified. General system-service conversion remains planned.
   - Preserve application accounts/passwords, signing secrets, audio/session data, environment settings, network bindings, and proxy configuration. Relocate files only when necessary and adjust access permissions deliberately.
@@ -217,6 +227,10 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
   - Finish with the working access URL and clear success/recovery guidance. Make reruns safe and provide explicit unattended options for experienced operators.
   - Integrate hardening and account migration into upgrades while preserving existing customizations. Plan a narrowly scoped, authorized restart mechanism so routine updates do not ultimately require users to type service commands; do not grant the web backend general administrative access.
   - **Current limitation:** existing v0.5.1 upgrades preserve the service identity and sandbox configuration; automatic account migration and guided account creation are not implemented; the new explicit helper supports only the standard local developer user service.
+- [ ] **Investigate intermittent demo-LXC upload/authentication behavior** — [verified comparison and remaining tests](DEMO_LXC_UPLOAD_INVESTIGATION_2026-09-21.md):
+  - Both fresh and upgraded v0.5.1 installations have matching application source, relevant audio dependencies, guest settings, and equivalent NPM host directives. Their service sandbox settings differ; no fresh-install audio-code defect has been demonstrated.
+  - Demo logs show proxy-layer upload 401 responses following application update-check 401 responses. Both hosts can recover from proxy challenges and complete uploads. An isolated Chrome test reproduced an application 401 clearing cached Basic authentication credentials; differing live recovery behavior remains unresolved.
+  - Move guest update checks to `/admin`, then compare repeated upload/edit/download flows in clean browser contexts through the same public proxy path. Preserve backend authorization and record sanitized request timing; do not infer failure from progress percentages alone.
 - [ ] **Apply stored quota/TTL settings to runtime policy**: settings persist today, while runtime enforcement reads environment-derived configuration.
 
 - [ ] **Multi-Arch Docker & OCI Container Images**:

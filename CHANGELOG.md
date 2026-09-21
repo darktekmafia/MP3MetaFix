@@ -23,7 +23,10 @@ Historical release entries describe what was recorded at the time. Security comp
 - Deployment policy `MP3METAFIX_ALLOW_WEB_UPDATES` to disable in-app installation for read-only code deployments, with an explanatory admin UI label.
 
 ### Documentation
-- Corrected remaining README service-management references and refreshed the historical session handoff with the completed migration, active data location, local-only work, and remaining verification limits.
+- Synchronize development with the tested account-migration work and current documentation; main remains limited to explicitly approved release updates.
+- Record the read-only LXC/NPM comparison and remaining browser authentication uncertainty.
+- Plan admin-only update discovery and strict installer release-branch enforcement.
+- Corrected README service-management references; replaced the public historical handoff with a documentation notice and retained detailed continuation notes locally.
 - Expanded the roadmap with local service-account migration, a guided upgrade/rollback path, and one-shot installation that offers account selection or creation with minimal CLI administration.
 - Added Ubuntu 24.04 LXC v0.4.0 upgrade coverage and explicit preservation, hardening, dependency, and health-check requirements to the planned installer work.
 

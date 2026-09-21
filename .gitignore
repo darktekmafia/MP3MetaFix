@@ -130,6 +130,10 @@ desktop.ini
 .agents/
 AGENTS.md
 GEMINI.md
+SESSION_HANDOFF*.md
+session_handoff*.md
+# Keep only the short public documentation notice
+!SESSION_HANDOFF_2026-09-20.md
 .cursor/
 .windsurf/
 
