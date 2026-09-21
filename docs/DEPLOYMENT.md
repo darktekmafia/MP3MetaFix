@@ -305,7 +305,7 @@ sudo systemctl restart mp3metafix.service
 ```
 
 > [!NOTE]
-> In-app web updater execution (`POST /api/updates/apply`) is enabled and requires administrator authorization plus CSRF checks. A process-shared lock and inherited installer descriptor prevent overlapping web updates; a background task survives stream disconnects and only fixed messages reach the browser. Web updates install files/dependencies and explicitly require a local restart (using the appropriate user/system service for that installation). They do not invoke service managers or unit migration. Modification requires the project’s maintainer-approval checkpoint.
+> In-app web updater execution (`POST /api/updates/apply`) is enabled by default and requires administrator authorization plus CSRF checks. It is disabled on the migrated workstation by `MP3METAFIX_ALLOW_WEB_UPDATES=false`. A process-shared lock and inherited installer descriptor prevent overlapping web updates; a background task survives stream disconnects and only fixed messages reach the browser. Web updates install files/dependencies and explicitly require a local restart (using the appropriate user/system service for that installation). They do not invoke service managers or unit migration. Modification requires the project’s maintainer-approval checkpoint.
 
 ---
 

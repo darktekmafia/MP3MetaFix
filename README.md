@@ -66,7 +66,7 @@ The editor’s version dialog supports update checks without a header update bad
   - **CSRF & Safe DOM Rendering**: Fetch-site/origin checks and safe metadata text rendering; embedded artwork is normalized before serving.
   - **Uploaded Image Checks**: hard 10-million-pixel and 4096px dimension checks, including embedded artwork previews.
   - **Exception Masking**: Generic errors on normal editing paths; the updater emits fixed status text instead of raw logs or exception details.
-  - **Service Templates**: Include resource restrictions; inspect the installed unit. The current user service has verified filesystem and resource restrictions; it still uses the desktop Unix account.
+  - **Service Templates**: Include resource restrictions; inspect the installed unit. The migrated workstation system service runs under the dedicated `mp3metafix` account with verified filesystem and resource restrictions.
 - 🐧 **Smart Universal Linux Installer (`install.sh`)**:
   - Automatically detects your distro (`dnf`, `apt`, `pacman`).
   - Installs and enables a **systemd background service** (`mp3metafix.service`) to start automatically on system boot.
@@ -94,7 +94,7 @@ Once installed, MP3MetaFix runs as a native systemd background service:
 - **Web Interface**: Open `http://127.0.0.1:8844` (or your server's IP)
 - **Desktop Launcher**: Available in your Application Menu (GNOME/KDE/XFCE)
 
-The current development workstation uses a **user service**: use `systemctl --user status/restart/stop mp3metafix.service` and `journalctl --user -u mp3metafix.service`. The commands below apply to system-wide installations. See [deployment notes](docs/DEPLOYMENT.md) for the duplicate-unit issue.
+The current development workstation uses a **system service** under the dedicated `mp3metafix` account. Use `sudo systemctl status/restart/stop mp3metafix.service` and `journalctl -u mp3metafix.service`. The former user service is disabled and retained for recovery; see [deployment notes](docs/DEPLOYMENT.md).
 
 #### Service Management Commands
 ```bash
