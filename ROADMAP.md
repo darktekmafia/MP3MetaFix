@@ -175,7 +175,10 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 - [ ] **Batch ZIP Archive Download & In-Place Writeback**:
   - Download all modified tracks as a structured `.zip` archive or save modified tags directly back to the original files on disk.
 - [ ] **Audio Fingerprinting & Duplicate Detection**:
-  - Chromaprint / AcoustID audio fingerprinting to identify identical takes and duplicate audio renders.
+  - **Mandatory read-only operation:** compute and compare Chromaprint / AcoustID fingerprints solely to identify identical takes and duplicate audio renders. Store analysis results separately from source files.
+  - Never modify, replace, remove, obscure, or spoof an existing fingerprint, watermark, or provenance marker. Never alter or re-encode audio to change its fingerprint or evade duplicate detection. This applies to Suno and any future supported service.
+  - Detection must not write to source audio or metadata, or automatically delete, merge, or replace duplicates; present findings for review only. Verify source files remain byte-for-byte unchanged after analysis.
+  - Treat preservation as a project requirement independent of provider terms; review applicable service terms before integrating fingerprinting or external lookup services.
 
 ---
 
