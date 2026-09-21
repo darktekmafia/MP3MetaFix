@@ -44,6 +44,8 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - High-contrast footers, readable links, and glassmorphic telemetry cards across all screen resolutions (320px–4K).
 
 ### Active Backlog & Future Vision 📋
+- [ ] **Public installed-version display; update checks only in `/admin`**: Use local version information in public headers. Remove automatic/manual update discovery from the hub, `/app`, and `/manager`; retain administrator authorization in `/admin`. Verify guests never request `/api/updates/check`. This removes a guest 401 trigger; proxy upload recovery still requires testing.
+- [ ] **Strict installer release-branch enforcement**: Keep release updates sourced from `origin main`; remove the fallback to plain `git pull`. Stop safely on non-main checkouts, local changes, and fetch/pull failures without merging unintended branches, resetting files, or switching branches automatically. Test differing upstreams and failure recovery. Development testing must remain distinct from release updates.
 - [ ] **Multi-User Role & Quota Policies**:
   - Granular per-user storage quotas, tenant directories, and role management (Editor, Viewer, Admin).
 - [ ] **Service Daemon Maintenance Triggers**:

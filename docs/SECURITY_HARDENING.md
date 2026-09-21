@@ -52,3 +52,5 @@ The [original audit](SECURITY_AUDIT_2026-09-20.md) is historical evidence. The [
 The final isolated regression run passed **104 tests**, with four warnings. New regressions verify rejection of active artwork, pre-auth spooling protection, token revocation, fail-closed account storage, update lifetime locking, outbound restrictions, and Opus preservation. Tests use temporary data and mock privileged/network effects, not live accounts.
 
 No CVE/dependency advisory scan, destructive stress test, external penetration test, live updater execution, or complete browser exploit test was performed. See [the audit](SECURITY_AUDIT_2026-09-20.md). Fixes must add regression coverage and follow [development_workflow.md](development_workflow.md), including local-only commits until explicit remote approval.
+
+Release governance requires remote development pushes to target `development` and an explicit maintainer request for promotion to `main` after testing and feedback. This process is not an additional runtime security control. Admin-only frontend update discovery and strict installer branch enforcement remain planned; backend authorization must be preserved.

@@ -345,3 +345,5 @@ The server reads environment variables. Configure them in the service environmen
 | `MP3METAFIX_SECRET_KEY` | *(auto-generated)* | Cryptographic HMAC secret key (persisted to `data/.secret_key`) |
 
 For comprehensive vulnerability analysis, attack surfaces, and defense mechanisms, consult [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md).
+
+The release source remains `origin main`; development testing uses the `development` branch separately. The current installer can fall back to plain `git pull` after a main pull fails, so do not assume strict branch isolation or run its release updater on a development checkout. Removing this fallback and adding checkout guards are planned in the [roadmap](../ROADMAP.md).
