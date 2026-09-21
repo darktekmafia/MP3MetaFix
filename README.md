@@ -235,4 +235,4 @@ Declared project license: MIT © 2026 MP3MetaFix Contributors. A standalone LICE
 
 ### Local service-account migration (unreleased)
 
-A scoped [local migration helper](docs/ACCOUNT_MIGRATION.md) can move the standard developer user service to a dedicated non-login account while preserving data. It requires administrator authentication and keeps the checkout read-only for the backend. General guided account selection/creation and existing system-service migration remain roadmap work.
+A scoped [local migration helper](docs/ACCOUNT_MIGRATION.md) can move the standard developer user service to a dedicated non-login account while preserving data. It requires administrator authentication and keeps the checkout read-only for the backend. A recovered failed attempt can use the documented retry action, which probes the real system sandbox before stopping the working backend. General guided account selection/creation and existing system-service migration remain roadmap work.

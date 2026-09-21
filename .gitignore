@@ -137,4 +137,4 @@ GEMINI.md
 
 # Retained local account-migration recovery data
 /data.migration-restore/
-/data.before-account-rollback/
+/data.before-account-rollback*/

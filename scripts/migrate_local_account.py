@@ -132,7 +132,8 @@ ProtectSystem=strict
 ProtectHome=tmpfs
 {binds}
 ReadWritePaths={data}
-InaccessiblePaths=-/run/user -/run/dbus/system_bus_socket
+InaccessiblePaths=-/run/user
+TemporaryFileSystem=/run/dbus:ro
 PrivateTmp=true
 NoNewPrivileges=true
 CapabilityBoundingSet=
@@ -159,20 +160,24 @@ def wait_health(port, attempts=40):
     raise RuntimeError('Backend health check failed.')
 
 
-def preflight(user):
+def preflight(user, retry=False):
     import shlex
     safe_path(SOURCE)
     account = pwd.getpwnam(user)
     if account.pw_uid == 0:
         raise ValueError('Run from the desktop account using sudo, not a root login.')
-    if STATE.exists() or DATA.exists() or RUNTIME.exists():
+    if not retry and (STATE.exists() or DATA.exists() or RUNTIME.exists()):
         raise ValueError('A migration/destination already exists. Inspect it or use --rollback; nothing overwritten.')
     try:
         pwd.getpwnam(NAME)
     except KeyError:
         pass
     else:
-        raise ValueError('The target account already exists; refusing to repurpose it.')
+        if not retry:
+            raise ValueError('The target account already exists; refusing to repurpose it.')
+        service = pwd.getpwnam(NAME)
+        if service.pw_uid == 0 or service.pw_dir != str(DATA) or service.pw_shell != '/usr/sbin/nologin':
+            raise ValueError('Existing service account no longer matches the migration.')
     if Path(str(UNIT) + '.d').exists():
         raise ValueError('Existing system-service drop-ins need separate review.')
     if command(['systemctl', 'is-active', NAME + '.service'], check=False) == 'active':
@@ -216,9 +221,16 @@ def save_state(info):
     atomic_write(STATE / 'state.json', json.dumps(info, indent=2) + '\n')
 
 
+def stop_system_service():
+    # An auto-restarting unit reports 'activating', not 'active'. Stop its queued job too.
+    command(['systemctl', 'stop', NAME + '.service'], check=False)
+    state = command(['systemctl', 'show', NAME + '.service', '-p', 'ActiveState', '--value'], check=False)
+    if state not in ('inactive', 'failed', ''):
+        raise RuntimeError('System service did not stop; refusing to replace its configuration.')
+
+
 def restore_service(info):
-    if command(['systemctl', 'is-active', NAME + '.service'], check=False) == 'active':
-        command(['systemctl', 'stop', NAME + '.service'])
+    stop_system_service()
     command(['systemctl', 'disable', NAME + '.service'], check=False)
     if (STATE / 'original-system.service').exists():
         atomic_write(UNIT, (STATE / 'original-system.service').read_text(), 0o644)
@@ -234,10 +246,11 @@ def restore_service(info):
 def rollback(info):
     staging = SOURCE / 'data.migration-restore'
     backup = SOURCE / 'data.before-account-rollback'
-    if info.get('data_copied') and (staging.exists() or backup.exists()):
-        raise RuntimeError('Restore staging/backup already exists; services left unchanged.')
-    if command(['systemctl', 'is-active', NAME + '.service'], check=False) == 'active':
-        command(['systemctl', 'stop', NAME + '.service'])
+    if info.get('data_copied') and staging.exists():
+        raise RuntimeError('Restore staging already exists; services left unchanged.')
+    if backup.exists():
+        backup = SOURCE / ('data.before-account-rollback-' + str(time.time_ns()))
+    stop_system_service()
     userctl(info['user'], 'stop', NAME + '.service')
     # Preserve edits made after cutover when rolling back; retain both data copies.
     if info.get('data_copied'):
@@ -249,31 +262,76 @@ def rollback(info):
     save_state(info)
 
 
-def apply(info):
-    STATE.mkdir(mode=0o700)
+def sandbox_probe():
+    """Check the real system-manager/account boundary before stopping the user service."""
+    service = pwd.getpwnam(NAME)
+    probe_data = Path(tempfile.mkdtemp(prefix='mp3metafix-probe-', dir='/var/lib'))
+    os.chown(probe_data, service.pw_uid, service.pw_gid)
+    probe_env = STATE / 'probe.env'
+    atomic_write(probe_env, environment_lines([
+        f'MP3METAFIX_DATA_DIR={probe_data}', 'MP3METAFIX_ALLOW_WEB_UPDATES=false']))
+    code = (
+        'import os; from pathlib import Path; '
+        'from backend.main import app; from backend.config import DATA_DIR, ALLOW_WEB_UPDATES; '
+        f'assert os.getuid()=={service.pw_uid}; '
+        'assert not ALLOW_WEB_UPDATES; '
+        "assert not Path('/run/dbus/system_bus_socket').exists(); "
+        "(DATA_DIR/'write-test').write_text('test'); "
+        "assert os.statvfs('VERSION').f_flag & os.ST_RDONLY; "
+        "print('Dedicated-account sandbox probe passed.')"
+    )
+    args = ['systemd-run', '--unit=mp3metafix-migration-probe', '--wait', '--pipe', '--collect',
+            '-p', 'RuntimeMaxSec=30s']
+    inside = False
+    for line in unit_text(SOURCE, RUNTIME, probe_data).splitlines():
+        if line.startswith('['):
+            inside = line == '[Service]'
+        elif inside and '=' in line:
+            key = line.split('=', 1)[0]
+            if key in ('Type', 'ExecStart', 'Restart', 'RestartSec'):
+                continue
+            if key == 'EnvironmentFile':
+                line = f'EnvironmentFile={probe_env}'
+            args.extend(['-p', line])
+    args.extend(['/usr/bin/env', str(RUNTIME / '.venv/bin/python'), '-c', code])
+    try:
+        command(args)
+    finally:
+        shutil.rmtree(probe_data)
+        probe_env.unlink(missing_ok=True)
+
+
+def apply(info, retry=False):
+    if not retry:
+        STATE.mkdir(mode=0o700)
     env = info.pop('environment')
     info.update(source=str(SOURCE), phase='preparing', data_copied=False)
-    if UNIT.exists():
+    if UNIT.exists() and not retry:
         if UNIT.is_symlink() or not UNIT.is_file():
             raise ValueError('System unit must be an ordinary file.')
         atomic_write(STATE / 'original-system.service', UNIT.read_text())
     save_state(info)
     atomic_write(STATE / 'service.env', environment_lines([f'{k}={v}' for k, v in env.items()]))
     try:
-        command(['useradd', '--system', '--user-group', '--home-dir', str(DATA), '--no-create-home',
-                 '--shell', '/usr/sbin/nologin', NAME])
+        if not retry:
+            command(['useradd', '--system', '--user-group', '--home-dir', str(DATA), '--no-create-home',
+                     '--shell', '/usr/sbin/nologin', NAME])
         service = pwd.getpwnam(NAME)
-        RUNTIME.mkdir(mode=0o755)
+        RUNTIME.mkdir(mode=0o755, exist_ok=retry)
+        os.chmod(RUNTIME, 0o755)
         for part in PARTS:
             target = RUNTIME / part
             if (SOURCE / part).is_dir():
-                target.mkdir(mode=0o755)
+                target.mkdir(mode=0o755, exist_ok=retry)
             else:
                 target.touch(mode=0o644)
+        sandbox_probe()
         # Stop the source before snapshotting any mutable account/session data.
         userctl(info['user'], 'stop', NAME + '.service')
         info['phase'] = 'source-stopped'
         save_state(info)
+        if retry and DATA.exists():
+            DATA.rename(STATE / ('previous-attempt-data-' + str(time.time_ns())))
         private_copy(SOURCE / 'data', DATA, service.pw_uid, service.pw_gid)
         info['data_copied'] = True
         save_state(info)
@@ -306,6 +364,7 @@ def main():
     action.add_argument('--check', action='store_true')
     action.add_argument('--apply', action='store_true')
     action.add_argument('--rollback', action='store_true')
+    action.add_argument('--retry', action='store_true')
     args = parser.parse_args()
     if not args.check and os.geteuid() != 0:
         parser.error('Apply/rollback require sudo administrator authentication.')
@@ -317,14 +376,20 @@ def main():
         print('Original user service restored, including current migrated data.')
         return
     user = os.environ.get('SUDO_USER') or pwd.getpwuid(os.getuid()).pw_name
-    info = preflight(user)
+    if args.retry:
+        previous = json.loads((STATE / 'state.json').read_text())
+        if previous.get('phase') != 'failed-restored' or previous.get('source') != str(SOURCE) or previous.get('user') != user:
+            raise ValueError('Retry requires a recovered failure for this checkout and desktop account.')
+        stop_system_service()
+        command(['systemctl', 'disable', NAME + '.service'])
+    info = preflight(user, retry=args.retry)
     if args.check:
         print(f'Preflight passed. Plan: {user} user service -> {NAME} system service, port {info["port"]}.')
         print(f'Read-only application mounts: {RUNTIME}; private data: {DATA}.')
         print('No secrets displayed; no changes made. Web installation disabled for this read-only deployment.')
     else:
         signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
-        apply(info)
+        apply(info, retry=args.retry)
 
 
 if __name__ == '__main__':

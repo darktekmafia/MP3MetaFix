@@ -349,6 +349,6 @@ For comprehensive vulnerability analysis, attack surfaces, and defense mechanism
 
 ## Local account migration (unreleased)
 
-The [local migration procedure](ACCOUNT_MIGRATION.md) adds explicit `--migrate-account` and `--rollback-account` installer actions for the standard developer user service. This is not an automatic upgrade change. Root cutover requires local administrator authentication; retain the working user service until verification succeeds. General existing-system-service migration and installer account selection/creation remain planned.
+The [local migration procedure](ACCOUNT_MIGRATION.md) adds explicit `--migrate-account`, `--retry-account`, and `--rollback-account` installer actions for the standard developer user service. This is not an automatic upgrade change. Root cutover requires local administrator authentication; retain the working user service until verification succeeds. General existing-system-service migration and installer account selection/creation remain planned.
 
 The Ubuntu 24.04 testing LXC upgrade from v0.4.0 to v0.5.1 was reported successful. No pre-upgrade snapshot was taken, so that original baseline is not available for a repeat test. Account migration in that LXC has not been tested. Duplicate workstation system-unit disablement was reported completed after the v0.5.1 audit.

@@ -204,7 +204,7 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
   - Validate outbound redirect destinations and bound Suno response reads (medium).
   - Applied and verified user-service containment. Dedicated-account migration remains planned; duplicate system-unit disablement was subsequently reported completed.
 - [ ] **Dedicated service-account migration — local implementation first (in progress)**:
-  - Added a scoped [local migration/rollback helper](docs/ACCOUNT_MIGRATION.md); automated and disposable mount verification precedes privileged live cutover. General system-service conversion remains planned.
+  - Added a scoped [local migration/rollback helper](docs/ACCOUNT_MIGRATION.md); the first Fedora cutover hit a namespace failure and recovered the user backend. Corrected retry adds a real dedicated-account system sandbox probe before cutover; live success remains pending. General system-service conversion remains planned.
   - Complete and verify migration of the existing local installation from the desktop Linux identity to a dedicated, unprivileged service account; keep the current sandbox until migration succeeds.
   - Preserve application accounts/passwords, signing secrets, audio/session data, environment settings, network bindings, and proxy configuration. Relocate files only when necessary and adjust access permissions deliberately.
   - Provide a guided upgrade path for existing installations, with an explicit migration choice, preflight checks, backups, service handoff, health verification, and rollback on failure. Detect duplicate units without disabling unrelated services.

@@ -52,6 +52,7 @@ show_help() {
     echo "  --install               Install MP3MetaFix & systemd service (default action)"
     echo "  --update                Pull latest updates and rebuild dependencies"
     echo "  --migrate-account       Migrate the supported local user service to a dedicated account"
+    echo "  --retry-account         Retry a recovered local migration with fresh sandbox checks"
     echo "  --rollback-account      Restore that user service with the latest migrated data"
     echo "  --uninstall             Remove MP3MetaFix service, desktop launcher, and configs"
     echo "  --status                Check installation and service status"
@@ -1027,6 +1028,7 @@ while [[ $# -gt 0 ]]; do
         --install) ACTION="install"; shift ;;
         --update) ACTION="update"; shift ;;
         --migrate-account) ACTION="migrate-account"; shift ;;
+        --retry-account) ACTION="retry-account"; shift ;;
         --rollback-account) ACTION="rollback-account"; shift ;;
         --uninstall) ACTION="uninstall"; shift ;;
         --status) ACTION="status"; shift ;;
@@ -1115,6 +1117,7 @@ case "$ACTION" in
     update) do_update ;;
     migrate-account) do_account_migration --apply ;;
     rollback-account) do_account_migration --rollback ;;
+    retry-account) do_account_migration --retry ;;
     status) do_status ;;
     access) do_access_config "$TARGET_BIND_HOST" "$TARGET_PORT_ARG" "$TARGET_TRUST_PROXIES" "$TARGET_TRUSTED_PROXIES" "$TARGET_PROXY_HOST" ;;
     uninstall) do_uninstall ;;

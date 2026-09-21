@@ -9,6 +9,12 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ## [Unreleased]
 
+### Fixed
+- Verified the corrected migration/retry implementation with 122 passing tests; four existing/expected warnings remain.
+- Corrected local account-migration recovery to stop auto-restarting system units before restoring configuration.
+- Replaced socket masking with a read-only temporary bus directory and added a dedicated-account system-service probe before stopping the working backend.
+- Added explicit recovery retry that archives earlier destination data, migrates current source data, and preserves repeated rollback backups. The first Fedora live attempt recovered to the working user service after a namespace failure; corrected live cutover remains pending.
+
 ### Added
 - Explicit local service-account migration/rollback commands with read-only application mounts, verified private data copying, and failed-start recovery. Privileged live cutover requires local administrator authentication; general system-service migration remains planned.
 - Deployment policy `MP3METAFIX_ALLOW_WEB_UPDATES` to disable in-app installation for read-only code deployments, with an explanatory admin UI label.

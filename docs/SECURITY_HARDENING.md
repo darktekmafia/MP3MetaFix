@@ -56,3 +56,5 @@ No CVE/dependency advisory scan, destructive stress test, external penetration t
 ## Local migration follow-up (unreleased)
 
 Duplicate system-unit disablement was reported completed. The dedicated-account [migration helper](ACCOUNT_MIGRATION.md) is prepared with private verified data copying, selective read-only code mounts, and rollback. The migrated service denies web updates without granting service-manager privileges. Automated and disposable mount tests precede the privileged cutover; do not infer that the live account has changed until system-service identity is verified. General installer integration and LXC account-migration testing remain outstanding.
+
+The first Fedora system-service migration attempt failed at namespace setup while masking the system bus socket; the user backend recovered. The corrected profile hides the bus directory using a read-only temporary filesystem and probes the actual dedicated-account/system-manager boundary before any retry stops the working backend. Retry/recovery preserves previous data and stops queued system-service restarts. Live migration remains pending; SELinux enforcement is not disabled.

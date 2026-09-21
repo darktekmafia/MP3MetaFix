@@ -78,11 +78,12 @@ def prepared(tmp_path, monkeypatch):
     calls = []
     def command(args, check=True):
         calls.append(args)
-        return 'mp3metafix' if args[:2] == ['systemctl', 'show'] else ''
+        return 'mp3metafix' if args[:2] == ['systemctl', 'show'] and 'User' in args else ''
     monkeypatch.setattr(migration, 'command', command)
     monkeypatch.setattr(migration, 'userctl', lambda user, *args: calls.append(['userctl', *args]))
     monkeypatch.setattr(migration.pwd, 'getpwnam', lambda _: SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid()))
     monkeypatch.setattr(migration, 'wait_health', lambda _: None)
+    monkeypatch.setattr(migration, 'sandbox_probe', lambda: None)
     info = {'user':'desktop', 'uid':os.getuid(), 'gid':os.getgid(), 'port':8844,
             'user_enabled':True, 'environment':{'MP3METAFIX_PORT':'8844'}}
     return info, calls
@@ -146,3 +147,80 @@ def test_failed_health_retains_new_data_before_automatic_recovery(prepared, monk
         migration.apply(info)
     assert (migration.SOURCE / 'data/record').read_text() == 'new data before failure'
     assert (migration.SOURCE / 'data.before-account-rollback/record').read_text() == 'original'
+
+
+def test_recovery_stops_restarting_system_unit_before_replacing_file(prepared, monkeypatch):
+    info, calls = prepared
+    state = {'value': 'activating'}
+    def command(args, check=True):
+        calls.append(args)
+        if args[:2] == ['systemctl', 'stop']:
+            state['value'] = 'inactive'
+        if 'ActiveState' in args:
+            return state['value']
+        return ''
+    monkeypatch.setattr(migration, 'command', command)
+    migration.STATE.mkdir()
+    (migration.STATE / 'original-system.service').write_text('original')
+    migration.restore_service(info)
+    assert calls[0] == ['systemctl', 'stop', 'mp3metafix.service']
+    assert migration.UNIT.read_text() == 'original'
+    assert state['value'] == 'inactive'
+
+
+def test_sandbox_failure_leaves_source_data_and_user_service_intact(prepared, monkeypatch):
+    info, calls = prepared
+    def fail():
+        raise RuntimeError('probe failed')
+    monkeypatch.setattr(migration, 'sandbox_probe', fail)
+    with pytest.raises(RuntimeError, match='probe failed'):
+        migration.apply(info)
+    assert ['userctl', 'stop', 'mp3metafix.service'] not in calls
+    assert (migration.SOURCE / 'data/record').read_text() == 'original'
+    assert not migration.DATA.exists()
+    assert info['phase'] == 'failed-restored'
+
+
+def test_retry_archives_stale_data_and_uses_current_source(prepared, monkeypatch):
+    info, calls = prepared
+    checks = []
+    def health(_):
+        checks.append(1)
+        if len(checks) == 1:
+            raise RuntimeError('first attempt fails')
+    monkeypatch.setattr(migration, 'wait_health', health)
+    with pytest.raises(RuntimeError):
+        migration.apply(info)
+    (migration.SOURCE / 'data/record').write_text('edited after recovery')
+    info['environment'] = {'MP3METAFIX_PORT': '8844'}
+    migration.apply(info, retry=True)
+    assert (migration.DATA / 'record').read_text() == 'edited after recovery'
+    archives = list(migration.STATE.glob('previous-attempt-data-*'))
+    assert len(archives) == 1
+    assert (archives[0] / 'record').read_text() == 'original'
+    migration.rollback(info)
+    assert (migration.SOURCE / 'data/record').read_text() == 'edited after recovery'
+    assert len(list(migration.SOURCE.glob('data.before-account-rollback*'))) == 2
+
+
+def test_probe_command_checks_real_identity_and_readonly_mount_without_writing_source(prepared, monkeypatch):
+    # Undo only the fixture's sandbox stub; build the real command without running systemd.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('probe_module', migration.__file__)
+    probe_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe_module)
+    monkeypatch.setattr(probe_module, 'STATE', migration.STATE)
+    migration.STATE.mkdir()
+    probe_dir = migration.SOURCE / 'probe-data'
+    probe_dir.mkdir()
+    monkeypatch.setattr(probe_module.tempfile, 'mkdtemp', lambda **kwargs: str(probe_dir))
+    captured = []
+    monkeypatch.setattr(probe_module, 'command', lambda args: captured.append(args))
+    probe_module.sandbox_probe()
+    args = captured[0]
+    compile(args[-1], '<probe>', 'exec')
+    assert 'TemporaryFileSystem=/run/dbus:ro' in args
+    assert 'User=mp3metafix' in args
+    assert 'os.statvfs' in args[-1]
+    assert "open('VERSION'" not in args[-1]
+    assert not probe_dir.exists()

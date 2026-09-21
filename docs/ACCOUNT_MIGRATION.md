@@ -25,7 +25,7 @@ From the checkout, perform the migration with one command. Sudo requests the des
 ./install.sh --migrate-account
 ```
 
-The helper refuses existing destinations/accounts, active or enabled system services, unsupported customized launch commands, external environment files, custom data locations, ambiguous paths, and symlink/special-file data. It downloads no packages and makes no remote Git changes. The existing virtual environment must use a system Python interpreter. Account selection and general deployment conversion remain planned.
+The initial apply refuses existing destinations/accounts, active or enabled system services, unsupported customized launch commands, external environment files, custom data locations, ambiguous paths, and symlink/special-file data. It downloads no packages and makes no remote Git changes. The existing virtual environment must use a system Python interpreter. Account selection and general deployment conversion remain planned.
 
 Once migration succeeds, manage the **system** service:
 
@@ -38,6 +38,20 @@ Do not start the old user service alongside it. The old checkout `data/` is a re
 
 ## Recovery
 
+### Retrying the recovered Fedora attempt
+
+The first live attempt failed before Python started: systemd reported 226/NAMESPACE while masking `/run/dbus/system_bus_socket`. The original user backend recovered and served a healthy v0.5.1 response. A recovery bug missed the system unit's `activating` restart state, leaving the restored duplicate unit restarting; the corrected helper unconditionally stops its job before restoring configuration.
+
+The updated profile hides the entire `/run/dbus` directory with a read-only temporary filesystem instead of mounting an inaccessible socket over the bus socket. Before stopping the working user backend, it now runs a disposable **system-manager** probe under the actual dedicated account. That probe checks imports, private data writes, read-only application mounts, and hidden bus access. The earlier user-manager smoke test did not cover this system-manager boundary.
+
+Retry the recorded, recovered failure with:
+
+```bash
+./install.sh --retry-account
+```
+
+Retry first stops the duplicate restart loop, validates the recorded checkout/account, then runs the new sandbox probe. If the probe fails, the working user service remains available. If it passes, retry copies the latest source data; earlier destination data is archived privately rather than reused or deleted. Root sandbox compatibility and live cutover must still be verified on this machine. It does not disable SELinux or remove bus isolation.
+
 On a handled migration failure the helper attempts to restore and start the original service. It retains new files/account for inspection rather than deleting them. Automatic recovery cannot run during a power loss or SIGKILL. An interrupted run has private state for explicit recovery.
 
 To roll back a completed migration, or a recorded interrupted preparation/cutover:
@@ -46,10 +60,10 @@ To roll back a completed migration, or a recorded interrupted preparation/cutove
 ./install.sh --rollback-account
 ```
 
-Rollback stops the system service, copies its current data back (including edits after migration), verifies the copy, preserves the earlier checkout data as `data.before-account-rollback`, restores the prior system-unit file, and starts the original user service. New data and migration state remain available. Rollback refuses to overwrite existing recovery directories. Do not invoke rollback after an automatically recovered failure: the original service may have newer data already.
+Rollback stops the system service, copies its current data back (including edits after migration), verifies the copy, preserves the earlier checkout data as `data.before-account-rollback`, restores the prior system-unit file, and starts the original user service. New data and migration state remain available. Rollback refuses existing restore staging and chooses a new timestamped backup name when an earlier completed rollback backup exists. Do not invoke rollback after an automatically recovered failure: the original service may have newer data already.
 
-Do not delete migration backups until the running service, login, audio editing, and download have been checked. Repeated apply requests stop without changing an existing migration; this first local utility does not automatically clean up or retry a failed migration.
+Do not delete migration backups until the running service, login, audio editing, and download have been checked. Repeated apply requests stop without changing an existing migration; the explicit retry action only accepts a recorded recovered failure and does not delete prior data.
 
 ## Verification status
 
-Read-only preflight passed on the workstation. A disposable user namespace verified the same selective mounts, relocated Python imports, isolated data, and read-only application files. Automated tests cover private byte-preserving copies, special-file rejection, environment escaping, unit scope, failed startup recovery, and rollback preserving post-migration edits. The full isolated regression suite passed **118 tests** (four existing/expected warnings); shell/JavaScript syntax and whitespace checks passed. Root account creation and final system-service cutover still require local administrator authentication and must be verified after execution. These checks do not establish Ubuntu LXC compatibility for account migration.
+Read-only preflight passed on the workstation. A disposable user namespace verified the same selective mounts, relocated Python imports, isolated data, and read-only application files. Automated tests cover private byte-preserving copies, special-file rejection, environment escaping, unit scope, failed startup recovery, and rollback preserving post-migration edits. The corrected helper and full isolated regression suite passed **122 tests** with four existing/expected warnings. shell/JavaScript syntax and whitespace checks passed. Root account creation and final system-service cutover still require local administrator authentication and must be verified after execution. These checks do not establish Ubuntu LXC compatibility for account migration.
