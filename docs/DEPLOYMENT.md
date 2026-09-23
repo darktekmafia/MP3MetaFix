@@ -309,6 +309,13 @@ MP3MetaFix enforces strict security-by-design and least-privilege containment:
 > **Why `--update` Does Not Silently Change User Identity**:
 > To ensure stability and zero unexpected downtime or file permission lockouts, `./install.sh --update` **never silently changes service user identities or relocates data**. Existing services continue running safely under their prior account until the administrator explicitly executes `--migrate-account`.
 
+> [!WARNING]
+> **Preserving Existing Configurations on Upgrades (`--update`)**:
+> Always use `./install.sh --update` (or `./install.sh --update --dev`) when upgrading an existing installation.
+>
+> Running a plain `./install.sh` without the `--update` flag is treated as a **fresh setup** and will regenerate the systemd unit and environment configuration from default templates, which will overwrite custom reverse proxy domains, listening interfaces, and trusted proxy settings back to default `127.0.0.1:8844`.
+> *(An automated preflight guard is planned for an upcoming release to detect existing installations and prevent accidental configuration resets).*
+
 ---
 
 ### Upgrading Older Versions: Step-by-Step Service-Account Migration

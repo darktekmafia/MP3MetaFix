@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Historical release entries describe what was recorded at the time. Security completion claims in older entries are superseded by the [2026-09-20 audit](docs/SECURITY_AUDIT_2026-09-20.md); see the [v0.5.1 remediation status](docs/SECURITY_REMEDIATION_2026-09-21.md) for subsequent fixes and deployment exceptions.
 
+## [Unreleased]
+
+### Planned
+- **Existing Installation Guard in `install.sh`**: Preflight detection when `install.sh` is executed without `--update` on hosts with an existing service/environment file. Will prompt to preserve custom network bindings, reverse proxy domains, and trusted proxy configurations instead of overwriting with default template settings.
+
 ## [0.5.2] - 2026-09-23
 
 ### Deployment
