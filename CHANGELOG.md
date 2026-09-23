@@ -21,6 +21,9 @@ Historical release entries describe what was recorded at the time. Security comp
 - Replaced socket masking with a read-only temporary bus directory and added a dedicated-account system-service probe before stopping the working backend.
 - Added explicit recovery retry that archives earlier destination data, migrates current source data, and preserves repeated rollback backups. The first Fedora live attempt recovered to the working user service after a namespace failure; the corrected retry subsequently completed and was verified.
 
+### Changed
+- Renamed user dropdown and popup modal item "Settings & Security" to "Quick Settings" to prepare for customizable quick-setting toggles pinned from the Admin Dashboard.
+
 ### Added
 - Generalized service-account migration and preflight checks in `scripts/migrate_local_account.py` and `install.sh` (`--check-account`, `--migrate-account`, `--retry-account`, `--rollback-account`) supporting both desktop user services and existing system services.
 - Hardened service creation in `install.sh` to automatically create and bind to dedicated non-login `mp3metafix` system account with `0700` data isolation.
