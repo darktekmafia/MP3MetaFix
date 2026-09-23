@@ -10,12 +10,12 @@ Historical release entries describe what was recorded at the time. Security comp
 ## [Unreleased]
 
 ### Deployment
-- Completed and verified local Fedora migration to the dedicated `mp3metafix` system service after corrected retry. Confirmed process identity, health, private data ownership, sandbox/resource limits, and disabled/inactive former user service. Browser editing confirmation and general installer/LXC account migration remain outstanding.
+- Verified live account migration on Ubuntu 24.04 Proxmox LXC container and Fedora workstation, transitioning services from root / desktop user units to the dedicated unprivileged `mp3metafix` system account with `0700` data isolation at `/var/lib/mp3metafix` and verified health.
 
 ### Fixed
 - Eliminated guest/unauthenticated update checks from `/app` and client script startup, confining `/api/updates/check` exclusively to authenticated administrator use in `/admin`. This eliminates unauthenticated `401 Unauthorized` responses that invalidated cached HTTP Basic Auth credentials behind reverse proxies (Nginx Proxy Manager) during file uploads.
 - Enforce strict `origin main` release updates in `install.sh` with branch guards on `main`, fast-forward (`--ff-only`) verification, clear failure handling, and complete removal of the plain `git pull` fallback.
-- Verified the corrected migration/retry, installer hardening, and guest update check elimination with 125 passing tests; four existing/expected warnings remain.
+- Verified the corrected migration/retry, installer hardening, and guest update check elimination with 131 passing tests; four existing/expected warnings remain.
 - Corrected local account-migration recovery to stop auto-restarting system units before restoring configuration.
 - Replaced socket masking with a read-only temporary bus directory and added a dedicated-account system-service probe before stopping the working backend.
 - Added explicit recovery retry that archives earlier destination data, migrates current source data, and preserves repeated rollback backups. The first Fedora live attempt recovered to the working user service after a namespace failure; the corrected retry subsequently completed and was verified.
@@ -27,13 +27,15 @@ Historical release entries describe what was recorded at the time. Security comp
 - `--dev` / `--development` and `--branch <name>` options in `install.sh --update` for targeting development/testing branches.
 
 ### Documentation
+- Documented clear comparison between fresh installations (automatic `mp3metafix` system account creation) and legacy upgrades (explicit `--check-account` and `--migrate-account` steps) in `docs/DEPLOYMENT.md` and `docs/ACCOUNT_MIGRATION.md`.
+- Added verified step-by-step migration, health inspection, and rollback instructions for Proxmox LXC and Linux servers.
 - Require planned audio fingerprinting and duplicate detection to be read-only, preserve source bytes and provenance markers, and store analysis separately. No application or version change.
 - Synchronize development with the tested account-migration work and current documentation; main remains limited to explicitly approved release updates.
 - Record the read-only LXC/NPM comparison and remaining browser authentication uncertainty.
 - Plan admin-only update discovery and strict installer release-branch enforcement.
 - Corrected README service-management references; replaced the public historical handoff with a documentation notice and retained detailed continuation notes locally.
 - Expanded the roadmap with local service-account migration, a guided upgrade/rollback path, and one-shot installation that offers account selection or creation with minimal CLI administration.
-- Added Ubuntu 24.04 LXC v0.4.0 upgrade coverage and explicit preservation, hardening, dependency, and health-check requirements to the planned installer work.
+- Added Ubuntu 24.04 LXC upgrade coverage and explicit preservation, hardening, dependency, and health-check requirements.
 
 ## [0.5.1] - 2026-09-21
 

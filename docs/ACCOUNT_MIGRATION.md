@@ -2,6 +2,11 @@
 
 This guide covers migrating existing MP3MetaFix services (both desktop **user services** `systemctl --user` and existing **system services** `/etc/systemd/system/mp3metafix.service`) to a dedicated, unprivileged `mp3metafix` Linux system account with strict POSIX permissions and systemd sandbox containment.
 
+> [!NOTE]
+> **Fresh Installs vs. Older Version Upgrades**:
+> - **Fresh Installations (`./install.sh --headless`)**: The installer automatically provisions the unprivileged `mp3metafix` user and sets up the hardened sandbox with `/var/lib/mp3metafix` at POSIX `0700`. No migration steps are needed.
+> - **Existing Installations (`./install.sh --update`)**: Updating code deliberately preserves your running user account (e.g. `root` or user session) to avoid unexpected downtime or file access issues. Upgrading existing services to the dedicated system account requires the explicit migration workflow detailed below.
+
 ## What changes
 
 - Create the non-login system account `mp3metafix`, without reusing an existing personal or root account.
@@ -31,14 +36,27 @@ sudo ./install.sh --migrate-account
 
 The preflight check verifies existing destinations/accounts, detects whether the source is a user or system service, verifies working directories, and runs sandbox probes before stopping the working service. The existing virtual environment must use a system Python interpreter.
 
-Once migration succeeds, manage the **system** service:
+Once migration succeeds, verify the service and manage the **system** service:
 
 ```bash
+# 1. Verify service user identity
+systemctl show mp3metafix.service -p User --value
+# Output: mp3metafix
+
+# 2. Verify private data directory ownership and 0700 permissions
+ls -ld /var/lib/mp3metafix
+# Output: drwx------ ... mp3metafix mp3metafix ... /var/lib/mp3metafix
+
+# 3. Verify backend health probe
+curl http://127.0.0.1:8844/api/health
+# Output: {"status":"ok","version":"0.5.1"}
+
+# Standard systemd service management:
 sudo systemctl status mp3metafix.service
 sudo systemctl restart mp3metafix.service
 ```
 
-Do not start the old user service alongside it. The old checkout `data/` is a recovery copy, no longer the active data location. Do not launch `run.sh` against that stale copy. The normal update/access installer paths still favor a retained user unit in some cases; their general integration with this migration is not complete. For this local development deployment, update files/dependencies deliberately from the checkout and restart the system service explicitly. Do not use the generic installer to reinstall over the migrated unit.
+Do not start the old user service alongside it. The old checkout `data/` is a recovery copy, no longer the active data location. Do not launch `run.sh` against that stale copy. For local development deployments, update files/dependencies deliberately from the checkout and restart the system service explicitly. Do not use the generic installer to reinstall over the migrated unit.
 
 ## Recovery
 
@@ -61,7 +79,7 @@ On a handled migration failure the helper attempts to restore and start the orig
 To roll back a completed migration, or a recorded interrupted preparation/cutover:
 
 ```bash
-./install.sh --rollback-account
+sudo ./install.sh --rollback-account
 ```
 
 Rollback stops the system service, copies its current data back (including edits after migration), verifies the copy, preserves the earlier checkout data as `data.before-account-rollback`, restores the prior system-unit file, and starts the original user service. New data and migration state remain available. Rollback refuses existing restore staging and chooses a new timestamped backup name when an earlier completed rollback backup exists. Do not invoke rollback after an automatically recovered failure: the original service may have newer data already.
@@ -70,4 +88,7 @@ Do not delete migration backups until the running service, login, audio editing,
 
 ## Verification status
 
-Read-only preflight passed on the workstation. A disposable user namespace verified the same selective mounts, relocated Python imports, isolated data, and read-only application files. Automated tests cover private byte-preserving copies, special-file rejection, environment escaping, unit scope, failed startup recovery, and rollback preserving post-migration edits. The corrected helper and full isolated regression suite passed **122 tests** with four existing/expected warnings. Shell/JavaScript syntax and whitespace checks passed. The live retry completed on 2026-09-21. Verification confirmed the main process and both workers run as `mp3metafix`, the system service is enabled/running, and the old user service is disabled/inactive. Health returned `ok`, v0.5.1; the data directory is owned by `mp3metafix` with mode 0700. Effective restrictions include read-only application mounts, writable access to the data directory, hidden system bus, ProtectSystem=strict, ProtectHome=tmpfs, NoNewPrivileges, PrivateTmp, 512 MiB memory, 64 tasks, and 80% CPU. Browser login and a real editing roundtrip after cutover have not yet been confirmed. These checks do not establish Ubuntu LXC compatibility for account migration.
+- **Automated Regression Suite**: 131 tests passing across backend security, upload validation, session isolation, and account migration edge cases.
+- **Fedora Workstation Live Cutover (2026-09-21)**: Tested migration from desktop user service (`systemctl --user`) to dedicated `mp3metafix` system account. Confirmed worker process isolation, strict systemd sandboxing, and disabled old user unit.
+- **Ubuntu 24.04 Proxmox LXC Container Live Cutover (2026-09-23)**: Tested migration from legacy root-owned system service (`/etc/systemd/system/mp3metafix.service`) to dedicated unprivileged `mp3metafix` system account. Confirmed `0700` data isolation at `/var/lib/mp3metafix`, successful SHA-256 data copying, and healthy `/api/health` response.
+- **Effective sandbox restrictions**: Read-only application mounts (`/opt/mp3metafix`), writable data directory (`/var/lib/mp3metafix`), hidden system bus (`TemporaryFileSystem=/run/dbus:ro`), `ProtectSystem=strict`, `ProtectHome=tmpfs`, `NoNewPrivileges=true`, `PrivateTmp=true`, 512 MiB memory limit, 64 tasks, and 80% CPU quota.

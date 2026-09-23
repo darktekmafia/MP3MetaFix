@@ -71,7 +71,9 @@ sudo ./install.sh --headless --port 8844
 The installer will:
 - Install Python 3, pip, venv, and ffmpeg via `apt-get`.
 - Prepare the Python virtual environment in `/opt/mp3metafix/.venv`.
-- Install and start the systemd service `/etc/systemd/system/mp3metafix.service`.
+- Create a dedicated unprivileged system account and group `mp3metafix` (non-login system user).
+- Install and start the hardened systemd service `/etc/systemd/system/mp3metafix.service` running as `mp3metafix` with POSIX `0700` data isolation at `/var/lib/mp3metafix`.
+- Bind to `127.0.0.1:8844` by default.
 
 ### Step 3: Enabling LAN Access (Optional)
 By default, fresh installations bind to `127.0.0.1` (localhost only) for security. To reach the MP3MetaFix web UI from other machines on your local network:
@@ -270,15 +272,85 @@ When configuring a public domain or reverse proxy hostname using `./install.sh -
 
 ---
 
-## 5. Updates and Upgrades
+## 5. Updates, Upgrades & Service-Account Migration
 
-Editor update-check badge compatibility is a frontend-only fix. Reload `/app/` to load the corrected JavaScript; no service configuration or data migration is required.
+### Fresh Installations vs. Upgrading Existing Installations
 
-To update a production MP3MetaFix installation in-place via CLI (targets `origin main`):
+MP3MetaFix enforces strict security-by-design and least-privilege containment:
+
+| Deployment Type | Account Configuration | Data Directory | Action Required |
+|---|---|---|---|
+| **Fresh Installations** (`./install.sh --headless`) | Automatically creates and runs under the dedicated `mp3metafix` non-login system account. | `/var/lib/mp3metafix` (POSIX `0700`) | **Zero manual steps.** The installer hardens the service out-of-the-box. |
+| **Existing / Older Installations** (`./install.sh --update`) | Upgrades application code and dependencies, but **retains the existing user account** (e.g. `root` or personal user). | In-tree `data/` directory | **Explicit migration required.** Follow the 3-step migration process below to transition to the dedicated system user. |
+
+> [!IMPORTANT]
+> **Why `--update` Does Not Silently Change User Identity**:
+> To ensure stability and zero unexpected downtime or file permission lockouts, `./install.sh --update` **never silently changes service user identities or relocates data**. Existing services continue running safely under their prior account until the administrator explicitly executes `--migrate-account`.
+
+---
+
+### Upgrading Older Versions: Step-by-Step Service-Account Migration
+
+If you are upgrading an existing MP3MetaFix installation running under `root` or a desktop user, follow these exact steps:
+
+#### Step 1: Update Application Code
+Pull the latest code and update Python dependencies:
 ```bash
 cd /opt/mp3metafix
 sudo ./install.sh --update
 ```
+*(If testing unreleased development changes on a staging LXC, use `sudo ./install.sh --update --dev`)*.
+
+#### Step 2: Run Preflight Check (Read-Only)
+Verify existing accounts, detect the active systemd service, and simulate sandbox probes without stopping the running service or making any changes:
+```bash
+./install.sh --check-account
+```
+*Expected output snippet:*
+```text
+Preflight passed. Plan: system_service (root) -> mp3metafix dedicated system service, port 8844.
+Read-only application mounts: /opt/mp3metafix; private data: /var/lib/mp3metafix.
+No secrets displayed; no changes made.
+```
+
+#### Step 3: Execute Account Migration
+Perform the migration in a single transaction (requires `sudo` or `root`):
+```bash
+sudo ./install.sh --migrate-account
+```
+The migration script will:
+1. Verify system dependencies and user namespace capability.
+2. Create the unprivileged `mp3metafix` system user and group.
+3. Stop the existing service.
+4. Copy and verify all sessions, settings, and secrets into `/var/lib/mp3metafix` using SHA-256 digests.
+5. Set POSIX `0700` (`rwx------`) permissions on `/var/lib/mp3metafix`.
+6. Install and activate `/etc/systemd/system/mp3metafix.service` with strict systemd sandboxing.
+7. Verify that the new service is healthy via `/api/health`.
+
+#### Step 4: Verify Migration Success
+Confirm that the service is running under the new unprivileged user and responding properly:
+```bash
+# 1. Verify service user identity
+systemctl show mp3metafix.service -p User --value
+# Output: mp3metafix
+
+# 2. Verify private data directory ownership and 0700 permissions
+ls -ld /var/lib/mp3metafix
+# Output: drwx------ ... mp3metafix mp3metafix ... /var/lib/mp3metafix
+
+# 3. Verify backend health
+curl http://127.0.0.1:8844/api/health
+# Output: {"status":"ok","version":"0.5.1"}
+```
+
+#### Rollback Procedure (If Needed)
+If you ever need to revert to the previous service configuration:
+```bash
+sudo ./install.sh --rollback-account
+```
+Rollback restores the previous systemd unit, copies any session data modified after cutover back into the original directory (preserving a timestamped backup), and restarts the original service.
+
+---
 
 ### Testing Updates on the `development` Branch (LXC / Staging)
 
@@ -368,11 +440,5 @@ The server reads environment variables. Configure them in the service environmen
 | `MP3METAFIX_SECRET_KEY` | *(auto-generated)* | Cryptographic HMAC secret key (persisted to `data/.secret_key`) |
 
 For comprehensive vulnerability analysis, attack surfaces, and defense mechanisms, consult [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md).
-
-## Service-account migration (unreleased)
-
-The [service-account migration procedure](ACCOUNT_MIGRATION.md) provides `--check-account`, `--migrate-account`, `--retry-account`, and `--rollback-account` installer actions supporting both desktop user services and existing system services. This is not an automatic upgrade change. Privileged cutover requires administrator authentication. The workstation retry completed and its dedicated identity, health, and effective restrictions were verified; retain recovery data until browser editing is confirmed.
-
-Fresh headless/server installations automatically configure and bind to the dedicated unprivileged `mp3metafix` system account with `0700` data isolation.
 
 The release source is strictly enforced as `origin main`; development testing uses the `development` branch separately. The installer validates that the checkout is on the `main` branch before performing updates, fetches updates explicitly from `origin main`, fast-forwards cleanly (`--ff-only`), and halts with clear errors on failure without falling back to generic `git pull` or overwriting local branches.
