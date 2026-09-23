@@ -614,7 +614,7 @@
         if (statusText) statusText.textContent = `New update available: v${data.latest_version}`;
         notify(`New MP3MetaFix version available: v${data.latest_version}`, 'info');
       } else {
-        if (statusText) statusText.textContent = `MP3MetaFix is up to date (v${data.current_version || '0.5.1'})`;
+        if (statusText) statusText.textContent = `MP3MetaFix is up to date (v${data.current_version || '0.5.2-dev'})`;
         notify('MP3MetaFix is up to date', 'success');
       }
     } catch (err) {
