@@ -274,13 +274,21 @@ When configuring a public domain or reverse proxy hostname using `./install.sh -
 
 Editor update-check badge compatibility is a frontend-only fix. Reload `/app/` to load the corrected JavaScript; no service configuration or data migration is required.
 
-To update MP3MetaFix in-place via CLI:
+To update a production MP3MetaFix installation in-place via CLI (targets `origin main`):
 ```bash
 cd /opt/mp3metafix
 sudo ./install.sh --update
 ```
+
+To update a staging/testing installation (such as a developer LXC container) tracking the `development` branch:
+```bash
+cd /opt/mp3metafix
+sudo ./install.sh --update --dev
+```
+*(Or specify any arbitrary testing branch with `./install.sh --update --branch <BRANCH_NAME>`)*.
+
 This automatically:
-1. Pulls repository updates from the configured remote branch, seamlessly re-executes the updated installer in-place, and reloads `VERSION`.
+1. Validates the local Git branch against the target, fetches tags and updates strictly with `--ff-only`, seamlessly re-executes the updated installer in-place, and reloads `VERSION`.
 2. Updates Python virtual environment dependencies.
 3. Automatically and safely migrates existing systemd units (`/etc/systemd/system/mp3metafix.service` or `~/.config/systemd/user/mp3metafix.service`) using `scripts/migrate_service.py` to upgrade legacy launch commands to use `--no-proxy-headers` and `$MP3METAFIX_HOST` / `$MP3METAFIX_PORT` without overwriting administrator environment variables, workers, or cgroups.
 4. Executes `systemctl daemon-reload` and restarts the service.
