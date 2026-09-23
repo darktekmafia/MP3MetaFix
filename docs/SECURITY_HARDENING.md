@@ -38,7 +38,7 @@ The [original audit](SECURITY_AUDIT_2026-09-20.md) is historical evidence. The [
 - CSRF middleware checks Fetch-Site and Origin on mutating methods. SameSite cookies provide additional protection. Localhost development exceptions remain in Origin handling.
 - CSP, nosniff, and SAMEORIGIN headers exist, but CSP permits inline scripts. Embedded HTML is now rejected, and artwork has a separate sandboxed deny-all policy. The backend does not emit HSTS; configure HTTPS/HSTS at the proxy as appropriate.
 - Forwarded headers are resolved only when proxy trust is enabled and the peer matches configured proxies. Default binding is loopback. Reverse-proxy reachability was not audited.
-- Suno fetches start from constructed song URLs or allowlisted artwork hosts, with HTTPS/public-IP validation, pinned DNS addresses, no redirects, and bounded responses. HTML and artwork fetches run off the event loop.
+- Suno fetches start from constructed song URLs or allowlisted artwork hosts, with HTTPS/public-IP validation, pinned DNS addresses, no redirects, and bounded responses. In addition, Suno extraction and artwork endpoints require `suno_integration_enabled=True` in system settings and return HTTP 403 Forbidden when disabled by administrator policy. HTML and artwork fetches run off the event loop.
 
 ### Updates and deployment
 
@@ -49,7 +49,7 @@ The [original audit](SECURITY_AUDIT_2026-09-20.md) is historical evidence. The [
 
 ## Verification
 
-The final isolated regression run passed **104 tests**, with four warnings. New regressions verify rejection of active artwork, pre-auth spooling protection, token revocation, fail-closed account storage, update lifetime locking, outbound restrictions, and Opus preservation. Tests use temporary data and mock privileged/network effects, not live accounts.
+The isolated regression test suite passes **134 tests**, with four warnings. Regressions verify rejection of active artwork, pre-auth spooling protection, token revocation, fail-closed account storage, update lifetime locking, outbound restrictions, Opus preservation, account migration/rollback, network environment file configuration, and Suno policy gating. Tests use temporary data and mock privileged/network effects, not live accounts.
 
 No CVE/dependency advisory scan, destructive stress test, external penetration test, live updater execution, or complete browser exploit test was performed. See [the audit](SECURITY_AUDIT_2026-09-20.md). Fixes must add regression coverage and follow [development_workflow.md](development_workflow.md), including local-only commits until explicit remote approval.
 

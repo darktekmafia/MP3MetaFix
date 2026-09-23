@@ -93,6 +93,12 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 - [x] **Embedded Suno Tag Auto-Detection & Selective Merge Modal**:
   - Automatic UUID recognition from uploaded MP3 comment tags (`made with suno; ... id=...`).
   - Mobile-first, non-disruptive detection pill (`✨ Suno Detected`) and interactive per-field selective merge table with `Apply Selected`, `Fill Blank Only`, and `Apply All` presets (zero blind overwrites).
+- [x] **Configurable AI Metadata Extractors & Gating Policy**:
+  - Administrator policy toggle in `/admin` (under "AI Services & Metadata Extractors") and Quick Settings modal with `suno_integration_enabled` defaulting to `False` (disabled) for a clean default state.
+  - Automatic tag detection in `/app`, the `✨ Suno Detected` status pill, and the `✨ Suno Sync` button are hidden/gated when disabled.
+  - Backend API routes (`/api/suno/extract` and `/api/suno/apply-artwork`) enforce `HTTP 403 Forbidden` protection when disabled.
+- [x] **Dynamic Quick Settings Pinning**:
+  - Surfaced configurable system settings (`guest_mode_enabled`, `suno_integration_enabled`, `max_sessions`, `max_global_storage_mb`, `session_ttl_minutes`, `max_upload_size_mb`) in the Quick Settings modal across all views with instant real-time toggling and auto-save.
 
 - [x] **Diagnosed and resolved M4A parsing failure**: The affected Suno download contained Opus-in-MP4; added Opus to the codec allowlist. Verified working with a real Suno download.
 
