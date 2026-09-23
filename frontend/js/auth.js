@@ -434,28 +434,33 @@
         const maxStorageBlock = document.getElementById('settingBlock_max_global_storage_mb');
         const sessionTtlBlock = document.getElementById('settingBlock_session_ttl_minutes');
         const maxUploadBlock = document.getElementById('settingBlock_max_upload_size_mb');
+        const updatesBlock = document.getElementById('settingBlock_software_updates');
 
-        const hasGuest = pinned.includes('guest_mode_enabled');
+        const hasGuest = pinned.includes('guest_mode_enabled') || pinned.includes('guest_mode');
         const hasSessions = pinned.includes('max_sessions');
-        const hasStorage = pinned.includes('max_global_storage_mb');
+        const hasStorage = pinned.includes('max_global_storage_mb') || pinned.includes('max_temp_storage_mb');
         const hasTtl = pinned.includes('session_ttl_minutes');
         const hasUpload = pinned.includes('max_upload_size_mb');
         const hasUpdates = pinned.includes('software_updates');
         const hasAnyLimit = hasSessions || hasStorage || hasTtl || hasUpload;
 
-        const updatesBlock = document.getElementById('settingBlock_software_updates');
+        const setVisibility = (el, isVisible) => {
+          if (!el) return;
+          el.classList.toggle('hidden', !isVisible);
+          el.style.display = isVisible ? '' : 'none';
+        };
 
-        if (guestBlock) guestBlock.classList.toggle('hidden', !hasGuest);
-        if (maxSessionsBlock) maxSessionsBlock.classList.toggle('hidden', !hasSessions);
-        if (maxStorageBlock) maxStorageBlock.classList.toggle('hidden', !hasStorage);
-        if (sessionTtlBlock) sessionTtlBlock.classList.toggle('hidden', !hasTtl);
-        if (maxUploadBlock) maxUploadBlock.classList.toggle('hidden', !hasUpload);
-        if (limitsBlock) limitsBlock.classList.toggle('hidden', !hasAnyLimit);
-        if (updatesBlock) updatesBlock.classList.toggle('hidden', !hasUpdates);
+        setVisibility(guestBlock, hasGuest);
+        setVisibility(maxSessionsBlock, hasSessions);
+        setVisibility(maxStorageBlock, hasStorage);
+        setVisibility(sessionTtlBlock, hasTtl);
+        setVisibility(maxUploadBlock, hasUpload);
+        setVisibility(limitsBlock, hasAnyLimit);
+        setVisibility(updatesBlock, hasUpdates);
 
         const hasAnyPinned = hasGuest || hasAnyLimit || hasUpdates;
-        if (emptyNotice) emptyNotice.classList.toggle('hidden', hasAnyPinned);
-        if (formSystemSettings) formSystemSettings.classList.toggle('hidden', !hasAnyPinned);
+        setVisibility(emptyNotice, !hasAnyPinned);
+        setVisibility(formSystemSettings, hasAnyPinned);
 
         if (adminSection) {
           if (AuthState.role === 'admin') {

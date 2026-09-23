@@ -452,6 +452,14 @@
 
   // --- Initialization & Event Listeners ---
   document.addEventListener('DOMContentLoaded', () => {
+    // Pin Checkbox Instant Toggles
+    document.querySelectorAll('.pin-checkbox').forEach((cb) => {
+      if (!cb.dataset.bound) {
+        cb.dataset.bound = 'true';
+        cb.addEventListener('change', handlePinToggle);
+      }
+    });
+
     // Form handlers
     const formSettings = document.getElementById('formAdminSettings');
     if (formSettings) {

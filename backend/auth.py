@@ -418,8 +418,9 @@ class AuthManager:
         if "quick_settings_pinned" in updates and updates["quick_settings_pinned"] is not None:
             sanitized_pins = []
             for item in updates["quick_settings_pinned"]:
-                if isinstance(item, str) and item in ALLOWED_PINNABLE_SETTINGS and item not in sanitized_pins:
-                    sanitized_pins.append(item)
+                norm_item = "guest_mode_enabled" if item == "guest_mode" else item
+                if isinstance(norm_item, str) and norm_item in ALLOWED_PINNABLE_SETTINGS and norm_item not in sanitized_pins:
+                    sanitized_pins.append(norm_item)
             updates["quick_settings_pinned"] = sanitized_pins
 
         for k, v in updates.items():
