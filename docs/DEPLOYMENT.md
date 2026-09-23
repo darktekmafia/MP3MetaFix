@@ -280,14 +280,35 @@ cd /opt/mp3metafix
 sudo ./install.sh --update
 ```
 
-To update a staging/testing installation (such as a developer LXC container) tracking the `development` branch:
-```bash
-cd /opt/mp3metafix
-sudo ./install.sh --update --dev
-```
-*(Or specify any arbitrary testing branch with `./install.sh --update --branch <BRANCH_NAME>`)*.
+### Testing Updates on the `development` Branch (LXC / Staging)
 
-This automatically:
+To switch a staging container or test environment to the `development` branch and test the latest unreleased changes:
+
+1. **Navigate to the application directory:**
+   ```bash
+   cd /opt/mp3metafix
+   ```
+2. **Fetch all remote branches from GitHub:**
+   ```bash
+   git fetch origin
+   ```
+3. **Switch (checkout) to the `development` branch:**
+   ```bash
+   git checkout development
+   ```
+4. **Run the update targeting the development branch:**
+   ```bash
+   sudo ./install.sh --update --dev
+   ```
+   *(Or specify any custom testing branch with `sudo ./install.sh --update --branch <BRANCH_NAME>`)*.
+
+To switch back to the stable release branch (`main`):
+```bash
+git checkout main
+sudo ./install.sh --update
+```
+
+### What the Update Command Does Automatically:
 1. Validates the local Git branch against the target, fetches tags and updates strictly with `--ff-only`, seamlessly re-executes the updated installer in-place, and reloads `VERSION`.
 2. Updates Python virtual environment dependencies.
 3. Automatically and safely migrates existing systemd units (`/etc/systemd/system/mp3metafix.service` or `~/.config/systemd/user/mp3metafix.service`) using `scripts/migrate_service.py` to upgrade legacy launch commands to use `--no-proxy-headers` and `$MP3METAFIX_HOST` / `$MP3METAFIX_PORT` without overwriting administrator environment variables, workers, or cgroups.
