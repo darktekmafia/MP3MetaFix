@@ -1861,6 +1861,85 @@ WantedBy=default.target
     assert "[!]" in res_set_stderr if (res_set_stderr := res_set.stderr) else res_set.stdout
 
 
+def test_configure_access_with_environment_file(tmp_path: Path):
+    """Verify that configure_access correctly reads and updates EnvironmentFile directives."""
+    import json
+    import stat
+    import subprocess
+    import sys
+    from scripts.configure_access import ConfigStatus, get_service_binding, update_service_file
+
+    env_file = tmp_path / "service.env"
+    env_file.write_text("""MP3METAFIX_HOST="0.0.0.0"
+MP3METAFIX_PORT="8844"
+MP3METAFIX_TRUST_PROXIES="true"
+MP3METAFIX_TRUSTED_PROXIES="192.168.0.0/16,10.0.0.0/8"
+MP3METAFIX_PROXY_HOST="mp3metafix.darktekmafia.com"
+""", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    svc_file = tmp_path / "mp3metafix.service"
+    svc_file.write_text(f"""[Unit]
+Description=MP3MetaFix dedicated service
+[Service]
+Type=simple
+User=mp3metafix
+EnvironmentFile={env_file}
+ExecStart=/opt/mp3metafix/.venv/bin/python -m uvicorn backend.main:app
+[Install]
+WantedBy=multi-user.target
+""", encoding="utf-8")
+
+    # 1. Test get_service_binding reading from EnvironmentFile
+    info = get_service_binding(svc_file.read_text(encoding="utf-8"), svc_file)
+    assert info["host"] == "0.0.0.0"
+    assert info["port"] == "8844"
+    assert info["trust_proxies"] == "true"
+    assert info["trusted_proxies"] == "192.168.0.0/16,10.0.0.0/8"
+    assert info["proxy_host"] == "mp3metafix.darktekmafia.com"
+    assert info["is_configured"] is True
+
+    # 2. Test update_service_file updating the domain in the EnvironmentFile
+    status, msg = update_service_file(
+        svc_file,
+        proxy_host="mp3metafixdemo.darktekmafia.com",
+    )
+    assert status == ConfigStatus.CHANGED
+    assert "Updated network configuration" in msg
+
+    # Verify EnvironmentFile content was updated
+    env_text = env_file.read_text(encoding="utf-8")
+    assert 'MP3METAFIX_PROXY_HOST="mp3metafixdemo.darktekmafia.com"' in env_text
+    assert 'MP3METAFIX_HOST="0.0.0.0"' in env_text
+    assert 'MP3METAFIX_TRUST_PROXIES="true"' in env_text
+
+    # Verify permissions on env file were preserved (0600)
+    mode = stat.S_IMODE(env_file.stat().st_mode)
+    assert mode == 0o600
+
+    # 3. Test CLI get command
+    script_path = Path(__file__).resolve().parent.parent / "scripts" / "configure_access.py"
+    res_get = subprocess.run(
+        [sys.executable, str(script_path), "get", str(svc_file)],
+        capture_output=True,
+        text=True,
+    )
+    assert res_get.returncode == 0
+    info2 = json.loads(res_get.stdout)
+    assert info2["proxy_host"] == "mp3metafixdemo.darktekmafia.com"
+    assert info2["host"] == "0.0.0.0"
+
+    # 4. Test clearing domain via CLI
+    res_set_clr = subprocess.run(
+        [sys.executable, str(script_path), "set", str(svc_file), "--no-domain"],
+        capture_output=True,
+        text=True,
+    )
+    assert res_set_clr.returncode == 0
+    env_text_clr = env_file.read_text(encoding="utf-8")
+    assert "MP3METAFIX_PROXY_HOST" not in env_text_clr
+
+
 def test_installer_access_and_binding_commands(tmp_path: Path):
     """Verify that install.sh --access, --lan, --local, --bind, --proxy, --domain, and --h operate correctly."""
     import os

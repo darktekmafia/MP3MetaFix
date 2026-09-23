@@ -158,13 +158,75 @@ def validate_proxy_host(domain_or_url: str) -> bool:
     return bool(hostname_regex.match(clean))
 
 
-def get_service_binding(content: str) -> Dict[str, Any]:
-    """Extract network binding configuration from a systemd unit content.
+def parse_env_file(content: str) -> Dict[str, str]:
+    """Parse standard systemd EnvironmentFile content into a dictionary of key-value pairs."""
+    env = {}
+    if not content:
+        return env
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith(";"):
+            continue
+        if "=" in stripped:
+            key, val = stripped.split("=", 1)
+            key = key.strip()
+            val = val.strip()
+            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                val = val[1:-1]
+                # Unescape standard escaped characters
+                val = val.replace('\\"', '"').replace("\\'", "'").replace("\\\\", "\\")
+            env[key] = val
+    return env
+
+
+def render_env_file(content: str, updates: Dict[str, Optional[str]]) -> str:
+    """Apply updates to an EnvironmentFile content, modifying existing keys or appending new ones.
+
+    If an update value is None, the key is left unchanged.
+    If an update value is "" (empty string) and key is MP3METAFIX_PROXY_HOST, the line is removed.
+    """
+    lines = content.splitlines() if content else []
+    remaining_updates = dict(updates)
+    new_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith(";"):
+            new_lines.append(line)
+            continue
+        if "=" in stripped:
+            key, _ = stripped.split("=", 1)
+            key = key.strip()
+            if key in remaining_updates:
+                val = remaining_updates.pop(key)
+                if val is not None:
+                    if val == "" and key == "MP3METAFIX_PROXY_HOST":
+                        # Omit/delete proxy host if cleared
+                        continue
+                    # Escape quotes and backslashes for env file
+                    escaped_val = val.replace("\\", "\\\\").replace('"', '\\"')
+                    new_lines.append(f'{key}="{escaped_val}"')
+                    continue
+        new_lines.append(line)
+
+    for key, val in remaining_updates.items():
+        if val is not None and (val != "" or key != "MP3METAFIX_PROXY_HOST"):
+            escaped_val = val.replace("\\", "\\\\").replace('"', '\\"')
+            new_lines.append(f'{key}="{escaped_val}"')
+
+    result = "\n".join(new_lines)
+    if not result.endswith("\n"):
+        result += "\n"
+    return result
+
+
+def get_service_binding(content: str, unit_file_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Extract network binding configuration from a systemd unit content and referenced EnvironmentFiles.
 
     Only parses within the [Service] section.
 
     Returns:
-        Dict with keys: host, port, trust_proxies, trusted_proxies, proxy_host, is_configured
+        Dict with keys: host, port, trust_proxies, trusted_proxies, proxy_host, is_configured, env_file
     """
     result = {
         "host": "127.0.0.1",
@@ -173,6 +235,7 @@ def get_service_binding(content: str) -> Dict[str, Any]:
         "trusted_proxies": "127.0.0.1,::1",
         "proxy_host": "",
         "is_configured": False,
+        "env_file": None,
     }
 
     if not content:
@@ -181,6 +244,7 @@ def get_service_binding(content: str) -> Dict[str, Any]:
     lines = content.splitlines()
     section_pattern = re.compile(r"^\s*\[([a-zA-Z0-9_\-]+)\]\s*$")
     current_section = None
+    env_files = []
 
     for line in lines:
         stripped = line.strip()
@@ -198,12 +262,47 @@ def get_service_binding(content: str) -> Dict[str, Any]:
                         result["is_configured"] = True
                     elif item.startswith("MP3METAFIX_PORT="):
                         result["port"] = item.split("=", 1)[1]
+                        result["is_configured"] = True
                     elif item.startswith("MP3METAFIX_TRUST_PROXIES="):
                         result["trust_proxies"] = item.split("=", 1)[1].lower()
+                        result["is_configured"] = True
                     elif item.startswith("MP3METAFIX_TRUSTED_PROXIES="):
                         result["trusted_proxies"] = item.split("=", 1)[1]
+                        result["is_configured"] = True
                     elif item.startswith("MP3METAFIX_PROXY_HOST="):
                         result["proxy_host"] = item.split("=", 1)[1]
+                        result["is_configured"] = True
+            elif stripped.startswith("EnvironmentFile="):
+                raw_path = stripped.split("EnvironmentFile=", 1)[1].strip().strip('"')
+                raw_path = raw_path.lstrip('-').strip()
+                if raw_path:
+                    env_files.append(raw_path)
+
+    for env_file_str in env_files:
+        env_p = Path(env_file_str)
+        if not env_p.is_absolute() and unit_file_path:
+            env_p = unit_file_path.parent / env_p
+        result["env_file"] = str(env_p)
+        if env_p.is_file():
+            try:
+                env_dict = parse_env_file(env_p.read_text(encoding="utf-8"))
+                if "MP3METAFIX_HOST" in env_dict:
+                    result["host"] = env_dict["MP3METAFIX_HOST"]
+                    result["is_configured"] = True
+                if "MP3METAFIX_PORT" in env_dict:
+                    result["port"] = env_dict["MP3METAFIX_PORT"]
+                    result["is_configured"] = True
+                if "MP3METAFIX_TRUST_PROXIES" in env_dict:
+                    result["trust_proxies"] = env_dict["MP3METAFIX_TRUST_PROXIES"].lower()
+                    result["is_configured"] = True
+                if "MP3METAFIX_TRUSTED_PROXIES" in env_dict:
+                    result["trusted_proxies"] = env_dict["MP3METAFIX_TRUSTED_PROXIES"]
+                    result["is_configured"] = True
+                if "MP3METAFIX_PROXY_HOST" in env_dict:
+                    result["proxy_host"] = env_dict["MP3METAFIX_PROXY_HOST"]
+                    result["is_configured"] = True
+            except Exception:
+                pass
 
     return result
 
@@ -413,7 +512,7 @@ def update_service_file(
     trusted_proxies: Optional[str] = None,
     proxy_host: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Safely update network binding in a service file on disk.
+    """Safely update network binding in a service file and/or its referenced EnvironmentFile on disk.
 
     Performs atomic file replacement and preserves file permissions.
     """
@@ -425,13 +524,175 @@ def update_service_file(
     except Exception as e:
         return ConfigStatus.FAILED, f"Could not read '{file_path}': {e}"
 
+    # First validate the requested settings
+    target_host = None
+    if host is not None:
+        norm_host = host.strip()
+        if norm_host.lower() == "lan":
+            norm_host = "0.0.0.0"
+        elif norm_host.lower() == "local":
+            norm_host = "127.0.0.1"
+        if not validate_bind_host(norm_host):
+            return ConfigStatus.FAILED, f"Configuration rejected: Invalid bind host: '{host}'"
+        target_host = norm_host
+
+    target_port = None
+    if port is not None:
+        norm_port = str(port).strip()
+        if not validate_bind_port(norm_port):
+            return ConfigStatus.FAILED, f"Configuration rejected: Invalid bind port: '{port}'"
+        target_port = norm_port
+
+    target_trust_proxies = None
+    if trust_proxies is not None:
+        if isinstance(trust_proxies, bool):
+            target_trust_proxies = "true" if trust_proxies else "false"
+        else:
+            norm_tp = str(trust_proxies).strip().lower()
+            if norm_tp in ("true", "1", "yes", "enable", "enabled"):
+                target_trust_proxies = "true"
+            elif norm_tp in ("false", "0", "no", "disable", "disabled"):
+                target_trust_proxies = "false"
+            else:
+                return ConfigStatus.FAILED, f"Configuration rejected: Invalid trust_proxies value: '{trust_proxies}' (use true or false)"
+
+    target_trusted_proxies = None
+    if trusted_proxies is not None:
+        norm_tps = str(trusted_proxies).strip()
+        if not validate_trusted_proxies(norm_tps):
+            return ConfigStatus.FAILED, f"Configuration rejected: Invalid trusted_proxies value: '{trusted_proxies}'"
+        target_trusted_proxies = ",".join(p.strip() for p in norm_tps.split(",") if p.strip())
+
+    target_proxy_host = None
+    if proxy_host is not None:
+        norm_ph = str(proxy_host).strip()
+        if norm_ph.lower() in ("", "none", "clear", "disable", "disabled", "false"):
+            target_proxy_host = ""
+        else:
+            if not validate_proxy_host(norm_ph):
+                return ConfigStatus.FAILED, f"Configuration rejected: Invalid proxy domain / hostname: '{proxy_host}'"
+            target_proxy_host = norm_ph
+
+    # Check for EnvironmentFile in unit
+    env_file_path = None
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("EnvironmentFile="):
+            raw_path = stripped.split("EnvironmentFile=", 1)[1].strip().strip('"').lstrip('-').strip()
+            if raw_path:
+                p = Path(raw_path)
+                if not p.is_absolute():
+                    p = file_path.parent / p
+                env_file_path = p
+                break
+
+    any_changed = False
+
+    # If EnvironmentFile exists, update it
+    if env_file_path and env_file_path.is_file():
+        try:
+            env_content = env_file_path.read_text(encoding="utf-8")
+        except Exception as e:
+            return ConfigStatus.FAILED, f"Could not read EnvironmentFile '{env_file_path}': {e}"
+
+        env_updates = {}
+        if target_host is not None:
+            env_updates["MP3METAFIX_HOST"] = target_host
+        if target_port is not None:
+            env_updates["MP3METAFIX_PORT"] = target_port
+        if target_trust_proxies is not None:
+            env_updates["MP3METAFIX_TRUST_PROXIES"] = target_trust_proxies
+        if target_trusted_proxies is not None:
+            env_updates["MP3METAFIX_TRUSTED_PROXIES"] = target_trusted_proxies
+        if target_proxy_host is not None:
+            env_updates["MP3METAFIX_PROXY_HOST"] = target_proxy_host
+
+        new_env_content = render_env_file(env_content, env_updates)
+        if new_env_content != env_content:
+            # Atomic write to env file
+            temp_fd = None
+            temp_path = None
+            try:
+                orig_stat = env_file_path.stat()
+                temp_fd, temp_path_str = tempfile.mkstemp(dir=env_file_path.parent, prefix=f".{env_file_path.name}.tmp.")
+                temp_path = Path(temp_path_str)
+                with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                    temp_fd = None
+                    f.write(new_env_content)
+                os.chmod(temp_path, orig_stat.st_mode)
+                try:
+                    os.chown(temp_path, orig_stat.st_uid, orig_stat.st_gid)
+                except (PermissionError, AttributeError):
+                    pass
+                os.replace(temp_path, env_file_path)
+                temp_path = None
+                any_changed = True
+            finally:
+                if temp_fd is not None:
+                    try:
+                        os.close(temp_fd)
+                    except OSError:
+                        pass
+                if temp_path is not None and temp_path.exists():
+                    try:
+                        temp_path.unlink()
+                    except OSError:
+                        pass
+
+        # If unit also has inline Environment= lines for MP3METAFIX_, update them too
+        if "MP3METAFIX_" in content:
+            new_content, status, err_msg = set_service_binding(
+                content,
+                host=target_host,
+                port=target_port,
+                trust_proxies=target_trust_proxies,
+                trusted_proxies=target_trusted_proxies,
+                proxy_host=target_proxy_host,
+            )
+            if status == ConfigStatus.CHANGED:
+                # write unit file atomically
+                temp_fd = None
+                temp_path = None
+                try:
+                    orig_stat = file_path.stat()
+                    temp_fd, temp_path_str = tempfile.mkstemp(dir=file_path.parent, prefix=f".{file_path.name}.tmp.")
+                    temp_path = Path(temp_path_str)
+                    with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                        temp_fd = None
+                        f.write(new_content)
+                    os.chmod(temp_path, orig_stat.st_mode)
+                    try:
+                        os.chown(temp_path, orig_stat.st_uid, orig_stat.st_gid)
+                    except (PermissionError, AttributeError):
+                        pass
+                    os.replace(temp_path, file_path)
+                    temp_path = None
+                    any_changed = True
+                finally:
+                    if temp_fd is not None:
+                        try:
+                            os.close(temp_fd)
+                        except OSError:
+                            pass
+                    if temp_path is not None and temp_path.exists():
+                        try:
+                            temp_path.unlink()
+                        except OSError:
+                            pass
+
+        if any_changed:
+            return ConfigStatus.CHANGED, f"Updated network configuration in '{env_file_path}'."
+        else:
+            return ConfigStatus.UNCHANGED, f"Service '{file_path}' is already configured as requested."
+
+    # Otherwise, standard unit file update
     new_content, status, err_msg = set_service_binding(
         content,
-        host=host,
-        port=port,
-        trust_proxies=trust_proxies,
-        trusted_proxies=trusted_proxies,
-        proxy_host=proxy_host,
+        host=target_host,
+        port=target_port,
+        trust_proxies=target_trust_proxies,
+        trusted_proxies=target_trusted_proxies,
+        proxy_host=target_proxy_host,
     )
     if status == ConfigStatus.FAILED:
         return ConfigStatus.FAILED, f"Configuration rejected: {err_msg}"
@@ -496,7 +757,7 @@ def main():
             sys.exit(1)
         try:
             content = target_path.read_text(encoding="utf-8")
-            info = get_service_binding(content)
+            info = get_service_binding(content, target_path)
             print(json.dumps(info))
             sys.exit(0)
         except Exception as e:
