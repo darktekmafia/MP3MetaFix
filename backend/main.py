@@ -248,6 +248,7 @@ async def get_auth_status(request: Request):
         "user": {"id": user["id"], "username": user["username"], "role": user["role"]} if user else None,
         "guest_mode": auth_manager.is_guest_mode_enabled(),
         "is_guest": user is None and auth_manager.is_guest_mode_enabled(),
+        "suno_integration_enabled": auth_manager.is_suno_enabled(),
     }
 
 
@@ -341,6 +342,7 @@ async def get_settings(user: Dict[str, Any] = Depends(require_authenticated_user
     return {
         "guest_mode_enabled": guest_enabled,
         "guest_mode": guest_enabled,
+        "suno_integration_enabled": auth_manager.is_suno_enabled(),
         "session_ttl_minutes": settings.get("session_ttl_minutes", SESSION_TTL_MINUTES),
         "max_upload_size_mb": settings.get("max_upload_size_mb", MAX_UPLOAD_SIZE_MB),
         "max_global_storage_mb": storage_quota,
@@ -693,6 +695,11 @@ async def api_suno_extract(
     _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
     """Extract metadata and artwork information from a Suno Clip UUID or song URL."""
+    if not auth_manager.is_suno_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Suno integration is disabled in system settings.",
+        )
     try:
         meta = await asyncio.to_thread(fetch_suno_metadata, req.query)
         return {
@@ -716,6 +723,11 @@ async def api_suno_apply_artwork(
     _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
 ):
     """Fetches high-res artwork from Suno CDN and stages it in the current editing session."""
+    if not auth_manager.is_suno_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Suno integration is disabled in system settings.",
+        )
     sdir = storage_manager.get_session_dir(session_id)
     if not sdir:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")

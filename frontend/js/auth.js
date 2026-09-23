@@ -13,6 +13,7 @@
     role: '',
     guestMode: false,
     isGuest: false,
+    sunoIntegrationEnabled: false,
   };
 
   // Safe toast notifier fallback
@@ -241,6 +242,7 @@
       AuthState.role = data.role || '';
       AuthState.guestMode = !!data.guest_mode;
       AuthState.isGuest = !!data.is_guest;
+      AuthState.sunoIntegrationEnabled = !!data.suno_integration_enabled;
 
       renderHeaderAuth();
 
@@ -409,6 +411,7 @@
       if (res.ok) {
         const settings = await res.json();
         const toggleGuest = document.getElementById('settingGuestMode');
+        const toggleSuno = document.getElementById('settingSunoIntegration');
         const inputMaxSessions = document.getElementById('settingMaxSessions');
         const inputMaxStorage = document.getElementById('settingMaxStorage');
         const inputSessionTtl = document.getElementById('settingSessionTtl');
@@ -419,6 +422,7 @@
         const adminLink = document.getElementById('quickSettingsAdminLink');
 
         if (toggleGuest) toggleGuest.checked = !!(settings.guest_mode_enabled ?? settings.guest_mode);
+        if (toggleSuno) toggleSuno.checked = !!settings.suno_integration_enabled;
         if (inputMaxSessions) inputMaxSessions.value = settings.max_sessions || 10;
         if (inputMaxStorage) inputMaxStorage.value = settings.max_global_storage_mb || settings.max_temp_storage_mb || 2048;
         if (inputSessionTtl) inputSessionTtl.value = settings.session_ttl_minutes || 60;
@@ -434,6 +438,7 @@
         const maxStorageBlock = document.getElementById('settingBlock_max_global_storage_mb');
         const sessionTtlBlock = document.getElementById('settingBlock_session_ttl_minutes');
         const maxUploadBlock = document.getElementById('settingBlock_max_upload_size_mb');
+        const sunoBlock = document.getElementById('settingBlock_suno_integration_enabled');
         const updatesBlock = document.getElementById('settingBlock_software_updates');
 
         const hasGuest = pinned.includes('guest_mode_enabled') || pinned.includes('guest_mode');
@@ -441,6 +446,7 @@
         const hasStorage = pinned.includes('max_global_storage_mb') || pinned.includes('max_temp_storage_mb');
         const hasTtl = pinned.includes('session_ttl_minutes');
         const hasUpload = pinned.includes('max_upload_size_mb');
+        const hasSuno = pinned.includes('suno_integration_enabled') || pinned.includes('suno_enabled');
         const hasUpdates = pinned.includes('software_updates');
         const hasAnyLimit = hasSessions || hasStorage || hasTtl || hasUpload;
 
@@ -456,9 +462,10 @@
         setVisibility(sessionTtlBlock, hasTtl);
         setVisibility(maxUploadBlock, hasUpload);
         setVisibility(limitsBlock, hasAnyLimit);
+        setVisibility(sunoBlock, hasSuno);
         setVisibility(updatesBlock, hasUpdates);
 
-        const hasAnyPinned = hasGuest || hasAnyLimit || hasUpdates;
+        const hasAnyPinned = hasGuest || hasAnyLimit || hasSuno || hasUpdates;
         setVisibility(emptyNotice, !hasAnyPinned);
         setVisibility(formSystemSettings, hasAnyPinned);
 
@@ -493,6 +500,7 @@
     }
 
     const toggleGuest = document.getElementById('settingGuestMode');
+    const toggleSuno = document.getElementById('settingSunoIntegration');
     const inputMaxSessions = document.getElementById('settingMaxSessions');
     const inputMaxStorage = document.getElementById('settingMaxStorage');
     const inputSessionTtl = document.getElementById('settingSessionTtl');
@@ -500,6 +508,7 @@
     const submitBtn = document.getElementById('btnSaveSettings');
 
     const isGuest = toggleGuest ? toggleGuest.checked : false;
+    const isSuno = toggleSuno ? toggleSuno.checked : false;
     const maxStorage = inputMaxStorage ? parseInt(inputMaxStorage.value, 10) : 2048;
     const maxSessions = inputMaxSessions ? parseInt(inputMaxSessions.value, 10) : 10;
     const sessionTtl = inputSessionTtl ? parseInt(inputSessionTtl.value, 10) : 60;
@@ -508,6 +517,7 @@
     const payload = {
       guest_mode_enabled: isGuest,
       guest_mode: isGuest,
+      suno_integration_enabled: isSuno,
       max_global_storage_mb: maxStorage,
       max_temp_storage_mb: maxStorage,
       max_sessions: maxSessions,

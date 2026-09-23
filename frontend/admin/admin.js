@@ -176,12 +176,14 @@
       const settings = await res.json();
 
       const toggleGuest = document.getElementById('adminGuestMode');
+      const toggleSuno = document.getElementById('adminSunoIntegration');
       const inputMaxSessions = document.getElementById('adminMaxSessions');
       const inputMaxStorage = document.getElementById('adminMaxStorage');
       const inputSessionTtl = document.getElementById('adminSessionTtl');
       const inputMaxUploadSize = document.getElementById('adminMaxUploadSize');
 
       if (toggleGuest) toggleGuest.checked = !!(settings.guest_mode ?? settings.guest_mode_enabled);
+      if (toggleSuno) toggleSuno.checked = !!settings.suno_integration_enabled;
       if (inputMaxSessions) inputMaxSessions.value = settings.max_sessions || 10;
       if (inputMaxStorage) inputMaxStorage.value = settings.max_global_storage_mb || settings.max_temp_storage_mb || 2048;
       if (inputSessionTtl) inputSessionTtl.value = settings.session_ttl_minutes || 60;
@@ -201,9 +203,31 @@
     }
   }
 
+  async function handleSunoToggle(e) {
+    const isEnabled = e.target.checked;
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ suno_integration_enabled: isEnabled }),
+      });
+      if (res.ok) {
+        notify(isEnabled ? 'Suno metadata detection and sync enabled' : 'Suno metadata detection and sync disabled', 'success');
+      } else {
+        const data = await res.json();
+        notify(data.detail || 'Failed to update Suno setting', 'error');
+        e.target.checked = !isEnabled;
+      }
+    } catch (err) {
+      notify('Network error saving Suno setting', 'error');
+      e.target.checked = !isEnabled;
+    }
+  }
+
   async function handleSaveSettings(e) {
     if (e) e.preventDefault();
     const toggleGuest = document.getElementById('adminGuestMode');
+    const toggleSuno = document.getElementById('adminSunoIntegration');
     const inputMaxSessions = document.getElementById('adminMaxSessions');
     const inputMaxStorage = document.getElementById('adminMaxStorage');
     const inputSessionTtl = document.getElementById('adminSessionTtl');
@@ -211,6 +235,7 @@
     const submitBtn = document.getElementById('btnSaveAdminSettings');
 
     const isGuest = toggleGuest ? toggleGuest.checked : false;
+    const isSuno = toggleSuno ? toggleSuno.checked : false;
     const maxStorage = inputMaxStorage ? parseInt(inputMaxStorage.value, 10) : 2048;
     const maxSessions = inputMaxSessions ? parseInt(inputMaxSessions.value, 10) : 10;
     const sessionTtl = inputSessionTtl ? parseInt(inputSessionTtl.value, 10) : 60;
@@ -221,6 +246,7 @@
     const payload = {
       guest_mode_enabled: isGuest,
       guest_mode: isGuest,
+      suno_integration_enabled: isSuno,
       max_global_storage_mb: maxStorage,
       max_temp_storage_mb: maxStorage,
       max_sessions: maxSessions,
@@ -461,6 +487,11 @@
     });
 
     // Form handlers
+    const toggleSuno = document.getElementById('adminSunoIntegration');
+    if (toggleSuno) {
+      toggleSuno.addEventListener('change', handleSunoToggle);
+    }
+
     const formSettings = document.getElementById('formAdminSettings');
     if (formSettings) {
       formSettings.addEventListener('submit', handleSaveSettings);

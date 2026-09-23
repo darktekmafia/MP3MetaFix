@@ -175,6 +175,7 @@ ALLOWED_PINNABLE_SETTINGS = {
     "max_global_storage_mb",
     "session_ttl_minutes",
     "max_upload_size_mb",
+    "suno_integration_enabled",
     "software_updates",
 }
 
@@ -187,6 +188,8 @@ class SettingsUpdateRequest(BaseModel):
     max_global_storage_mb: Optional[int] = Field(default=None, ge=100, le=102400)
     max_temp_storage_mb: Optional[int] = Field(default=None, ge=100, le=102400)
     max_sessions: Optional[int] = Field(default=None, ge=1, le=1000)
+    suno_integration_enabled: Optional[bool] = None
+    suno_enabled: Optional[bool] = None
     quick_settings_pinned: Optional[List[str]] = None
 
 
@@ -227,6 +230,7 @@ class AuthManager:
                 "session_ttl_minutes": SESSION_TTL_MINUTES,
                 "max_upload_size_mb": MAX_UPLOAD_SIZE_MB,
                 "max_global_storage_mb": MAX_GLOBAL_TEMP_STORAGE_MB,
+                "suno_integration_enabled": False,
                 "quick_settings_pinned": list(DEFAULT_PINNED_SETTINGS),
                 "updated_at": int(time.time()),
             }
@@ -413,12 +417,17 @@ class AuthManager:
         # Normalize aliases
         if "guest_mode" in updates and updates["guest_mode"] is not None:
             updates["guest_mode_enabled"] = updates["guest_mode"]
+        if "suno_enabled" in updates and updates["suno_enabled"] is not None:
+            updates["suno_integration_enabled"] = updates["suno_enabled"]
+        if "suno_detection" in updates and updates["suno_detection"] is not None:
+            updates["suno_integration_enabled"] = updates["suno_detection"]
         if "max_temp_storage_mb" in updates and updates["max_temp_storage_mb"] is not None:
             updates["max_global_storage_mb"] = updates["max_temp_storage_mb"]
         if "quick_settings_pinned" in updates and updates["quick_settings_pinned"] is not None:
             sanitized_pins = []
             for item in updates["quick_settings_pinned"]:
                 norm_item = "guest_mode_enabled" if item == "guest_mode" else item
+                norm_item = "suno_integration_enabled" if item in ("suno_enabled", "suno_detection") else norm_item
                 if isinstance(norm_item, str) and norm_item in ALLOWED_PINNABLE_SETTINGS and norm_item not in sanitized_pins:
                     sanitized_pins.append(norm_item)
             updates["quick_settings_pinned"] = sanitized_pins
@@ -435,6 +444,11 @@ class AuthManager:
         """Check if unauthenticated guest access to /app is permitted."""
         settings = self._load_settings()
         return bool(settings.get("guest_mode_enabled", settings.get("guest_mode", False)))
+
+    def is_suno_enabled(self) -> bool:
+        """Check if Suno metadata detection and enrichment integration is enabled."""
+        settings = self._load_settings()
+        return bool(settings.get("suno_integration_enabled", False))
 
 
 auth_manager = AuthManager()

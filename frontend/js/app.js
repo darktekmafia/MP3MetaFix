@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     artworkRemoved: false,
     audioDuration: 0,
     metadata: {},
+    sunoIntegrationEnabled: false,
     detectedSunoId: null,
     sunoExtractedData: null,
   };
@@ -343,13 +344,20 @@ document.addEventListener('DOMContentLoaded', () => {
     // Filename pattern setup
     updateFilenamePreview();
 
-    // Suno Auto-Detection
-    const sunoId = detectSunoId(data.metadata, data.original_filename);
-    if (sunoId) {
-      state.detectedSunoId = sunoId;
-      if (sunoDetectedPill) {
-        sunoDetectedPill.classList.remove('hidden');
-        sunoDetectedPill.title = `Suno Clip Detected (${sunoId}) - Click to sync metadata & artwork`;
+    // Suno Auto-Detection (only if enabled by policy)
+    if (state.sunoIntegrationEnabled) {
+      const sunoId = detectSunoId(data.metadata, data.original_filename);
+      if (sunoId) {
+        state.detectedSunoId = sunoId;
+        if (sunoDetectedPill) {
+          sunoDetectedPill.classList.remove('hidden');
+          sunoDetectedPill.title = `Suno Clip Detected (${sunoId}) - Click to sync metadata & artwork`;
+        }
+      } else {
+        state.detectedSunoId = null;
+        if (sunoDetectedPill) {
+          sunoDetectedPill.classList.add('hidden');
+        }
       }
     } else {
       state.detectedSunoId = null;
@@ -1531,6 +1539,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function openSunoModal(prefillQuery = '') {
     if (!sunoEnrichModal) return;
+    if (!state.sunoIntegrationEnabled) {
+      showToast('Suno metadata integration is disabled in system settings.', 'error');
+      return;
+    }
 
     if (sunoFetchError) sunoFetchError.classList.add('hidden');
     
@@ -1955,12 +1967,48 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  async function syncSunoIntegrationPolicy() {
+    try {
+      const res = await fetch('/api/auth/status');
+      if (res.ok) {
+        const data = await res.json();
+        state.sunoIntegrationEnabled = !!data.suno_integration_enabled;
+      }
+    } catch (_) {
+      if (window.MP3MetaFixAuth && window.MP3MetaFixAuth.state) {
+        state.sunoIntegrationEnabled = !!window.MP3MetaFixAuth.state.sunoIntegrationEnabled;
+      }
+    }
+    updateSunoIntegrationUI();
+  }
+
+  function updateSunoIntegrationUI() {
+    if (btnSunoEnrich) {
+      if (state.sunoIntegrationEnabled) {
+        btnSunoEnrich.classList.remove('hidden');
+      } else {
+        btnSunoEnrich.classList.add('hidden');
+      }
+    }
+    if (!state.sunoIntegrationEnabled) {
+      if (sunoDetectedPill) sunoDetectedPill.classList.add('hidden');
+      state.detectedSunoId = null;
+    }
+  }
+
   // Initial setup
   renderCannedCommentDropdown();
   loadSystemInfo();
+  syncSunoIntegrationPolicy();
 
   // Restore session once auth is established
-  window.addEventListener('mp3metafix:auth-ready', () => {
+  window.addEventListener('mp3metafix:auth-ready', (e) => {
+    if (e.detail && typeof e.detail.sunoIntegrationEnabled !== 'undefined') {
+      state.sunoIntegrationEnabled = !!e.detail.sunoIntegrationEnabled;
+      updateSunoIntegrationUI();
+    } else {
+      syncSunoIntegrationPolicy();
+    }
     restoreSessionIfExists();
   });
 });

@@ -2186,12 +2186,23 @@ def test_parse_next_f_payload_unicode_encoding():
 
 
 def test_api_suno_extract_endpoints(client):
-    # 1. Invalid input returns HTTP 400
+    from backend.auth import auth_manager
+
+    # 1. When disabled by default (suno_integration_enabled=False), returns HTTP 403 Forbidden
+    auth_manager.update_settings({"suno_integration_enabled": False})
+    res_disabled = client.post("/api/suno/extract", json={"query": "a362dcef-6a63-423a-8f6b-8990ff370c06"})
+    assert res_disabled.status_code == 403
+    assert "Suno integration is disabled" in res_disabled.json().get("detail", "")
+
+    # Enable Suno integration for subsequent extraction tests
+    auth_manager.update_settings({"suno_integration_enabled": True})
+
+    # 2. Invalid input returns HTTP 400
     res_invalid = client.post("/api/suno/extract", json={"query": "not-a-uuid"})
     assert res_invalid.status_code == 400
     assert "Invalid Suno Clip UUID" in res_invalid.json().get("detail", "")
 
-    # 2. Valid input with mocked extraction
+    # 3. Valid input with mocked extraction
     from unittest.mock import patch
     mock_data = {
         "id": "a362dcef-6a63-423a-8f6b-8990ff370c06",
@@ -2223,7 +2234,9 @@ def test_api_suno_extract_endpoints(client):
 
 
 def test_api_suno_apply_artwork(client, sample_mp3_bytes, sample_image_bytes):
-    # 1. Unauthenticated request rejected
+    from backend.auth import auth_manager
+
+    # 1. Unauthenticated request rejected with 401
     res_unauth = client.post(
         "/api/suno/apply-artwork",
         json={"image_url": "https://cdn2.suno.ai/sample.jpeg"},
@@ -2237,7 +2250,19 @@ def test_api_suno_apply_artwork(client, sample_mp3_bytes, sample_image_bytes):
     )
     assert upload_res.status_code == 200
 
-    # 3. SSRF Defense: Non-Suno domain rejected with HTTP 400
+    # 3. When disabled in settings, rejected with HTTP 403
+    auth_manager.update_settings({"suno_integration_enabled": False})
+    res_disabled = client.post(
+        "/api/suno/apply-artwork",
+        json={"image_url": "https://cdn2.suno.ai/sample.jpeg"},
+    )
+    assert res_disabled.status_code == 403
+    assert "Suno integration is disabled" in res_disabled.json().get("detail", "")
+
+    # Enable Suno integration
+    auth_manager.update_settings({"suno_integration_enabled": True})
+
+    # 4. SSRF Defense: Non-Suno domain rejected with HTTP 400
     res_evil = client.post(
         "/api/suno/apply-artwork",
         json={"image_url": "https://evil-attacker.com/malicious.jpg"},
@@ -2245,7 +2270,7 @@ def test_api_suno_apply_artwork(client, sample_mp3_bytes, sample_image_bytes):
     assert res_evil.status_code == 400
     assert "Invalid artwork source domain" in res_evil.json().get("detail", "")
 
-    # 4. Valid Suno CDN domain with mocked image download
+    # 5. Valid Suno CDN domain with mocked image download
     from unittest.mock import patch, MagicMock
     mock_resp = MagicMock()
     mock_resp.status = 200
@@ -2262,6 +2287,45 @@ def test_api_suno_apply_artwork(client, sample_mp3_bytes, sample_image_bytes):
         assert body["success"] is True
         assert body["mime_type"] == "image/jpeg"
         assert "data:image/jpeg;base64," in body["preview_data_url"]
+
+
+def test_suno_integration_settings_and_quick_pinning(client):
+    from backend.auth import auth_manager
+
+    # 1. Reset to default
+    auth_manager.update_settings({"suno_integration_enabled": False, "quick_settings_pinned": ["guest_mode_enabled"]})
+    assert auth_manager.is_suno_enabled() is False
+
+    # 2. Check auth status endpoint exposes suno_integration_enabled
+    res_status = client.get("/api/auth/status")
+    assert res_status.status_code == 200
+    assert res_status.json()["suno_integration_enabled"] is False
+
+    # 3. Settings endpoint updates suno_integration_enabled and quick pin
+    res_update = client.post(
+        "/api/settings",
+        json={
+            "suno_integration_enabled": True,
+            "quick_settings_pinned": ["guest_mode_enabled", "suno_integration_enabled"],
+        },
+    )
+    assert res_update.status_code == 200
+    assert res_update.json()["settings"]["suno_integration_enabled"] is True
+    assert "suno_integration_enabled" in res_update.json()["settings"]["quick_settings_pinned"]
+    assert auth_manager.is_suno_enabled() is True
+
+    # 4. Check GET /api/settings
+    res_get = client.get("/api/settings")
+    assert res_get.status_code == 200
+    assert res_get.json()["suno_integration_enabled"] is True
+
+    # 5. Status reflects updated state
+    res_status_2 = client.get("/api/auth/status")
+    assert res_status_2.json()["suno_integration_enabled"] is True
+
+    # 6. Clean up
+    auth_manager.update_settings({"suno_integration_enabled": False})
+
 
 
 def test_api_get_session_lifecycle(client, sample_mp3_bytes, sample_image_bytes):
