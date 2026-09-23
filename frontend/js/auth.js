@@ -421,8 +421,20 @@
         const emptyNotice = document.getElementById('quickSettingsEmptyNotice');
         const adminLink = document.getElementById('quickSettingsAdminLink');
 
-        if (toggleGuest) toggleGuest.checked = !!(settings.guest_mode_enabled ?? settings.guest_mode);
-        if (toggleSuno) toggleSuno.checked = !!settings.suno_integration_enabled;
+        if (toggleGuest) {
+          toggleGuest.checked = !!(settings.guest_mode_enabled ?? settings.guest_mode);
+          if (!toggleGuest.dataset.bound) {
+            toggleGuest.dataset.bound = 'true';
+            toggleGuest.addEventListener('change', (e) => handleQuickToggle('guest_mode_enabled', e.target.checked, e.target));
+          }
+        }
+        if (toggleSuno) {
+          toggleSuno.checked = !!settings.suno_integration_enabled;
+          if (!toggleSuno.dataset.bound) {
+            toggleSuno.dataset.bound = 'true';
+            toggleSuno.addEventListener('change', (e) => handleQuickToggle('suno_integration_enabled', e.target.checked, e.target));
+          }
+        }
         if (inputMaxSessions) inputMaxSessions.value = settings.max_sessions || 10;
         if (inputMaxStorage) inputMaxStorage.value = settings.max_global_storage_mb || settings.max_temp_storage_mb || 2048;
         if (inputSessionTtl) inputSessionTtl.value = settings.session_ttl_minutes || 60;
@@ -492,6 +504,46 @@
     openModal('settingsModal');
   }
 
+  async function handleQuickToggle(settingKey, isEnabled, checkboxEl) {
+    if (AuthState.role !== 'admin') {
+      notify('Only administrators can modify system settings', 'error');
+      if (checkboxEl) checkboxEl.checked = !isEnabled;
+      return;
+    }
+    const payload = {};
+    payload[settingKey] = isEnabled;
+    if (settingKey === 'guest_mode_enabled') {
+      payload.guest_mode = isEnabled;
+    }
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        if (settingKey === 'suno_integration_enabled') {
+          AuthState.sunoIntegrationEnabled = isEnabled;
+          notify(isEnabled ? 'Suno metadata detection and sync enabled' : 'Suno metadata detection and sync disabled', 'success');
+        } else if (settingKey === 'guest_mode_enabled') {
+          AuthState.guestMode = isEnabled;
+          notify(isEnabled ? 'Guest mode enabled' : 'Guest mode disabled', 'success');
+        } else {
+          notify('Setting updated', 'success');
+        }
+        window.dispatchEvent(new CustomEvent('mp3metafix:auth-ready', { detail: { ...AuthState } }));
+        renderHeaderAuth();
+      } else {
+        notify(data.detail || 'Failed to update setting', 'error');
+        if (checkboxEl) checkboxEl.checked = !isEnabled;
+      }
+    } catch (err) {
+      notify('Network error saving setting', 'error');
+      if (checkboxEl) checkboxEl.checked = !isEnabled;
+    }
+  }
+
   async function handleSaveSettings(e) {
     e.preventDefault();
     if (AuthState.role !== 'admin') {
@@ -538,6 +590,8 @@
       if (res.ok) {
         notify('Quick Settings updated successfully', 'success');
         AuthState.guestMode = isGuest;
+        AuthState.sunoIntegrationEnabled = isSuno;
+        window.dispatchEvent(new CustomEvent('mp3metafix:auth-ready', { detail: { ...AuthState } }));
         renderHeaderAuth();
       } else {
         notify(data.detail || 'Failed to save settings', 'error');

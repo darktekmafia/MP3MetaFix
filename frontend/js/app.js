@@ -1990,7 +1990,18 @@ document.addEventListener('DOMContentLoaded', () => {
         btnSunoEnrich.classList.add('hidden');
       }
     }
-    if (!state.sunoIntegrationEnabled) {
+    if (state.sunoIntegrationEnabled) {
+      if (state.hasSession && state.metadata) {
+        const sunoId = detectSunoId(state.metadata, state.originalFilename);
+        if (sunoId) {
+          state.detectedSunoId = sunoId;
+          if (sunoDetectedPill) {
+            sunoDetectedPill.classList.remove('hidden');
+            sunoDetectedPill.title = `Suno Clip Detected (${sunoId}) - Click to sync metadata & artwork`;
+          }
+        }
+      }
+    } else {
       if (sunoDetectedPill) sunoDetectedPill.classList.add('hidden');
       state.detectedSunoId = null;
     }
