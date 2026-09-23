@@ -13,7 +13,9 @@ Historical release entries describe what was recorded at the time. Security comp
 - Completed and verified local Fedora migration to the dedicated `mp3metafix` system service after corrected retry. Confirmed process identity, health, private data ownership, sandbox/resource limits, and disabled/inactive former user service. Browser editing confirmation and general installer/LXC account migration remain outstanding.
 
 ### Fixed
-- Verified the corrected migration/retry implementation with 122 passing tests; four existing/expected warnings remain.
+- Eliminated guest/unauthenticated update checks from `/app` and client script startup, confining `/api/updates/check` exclusively to authenticated administrator use in `/admin`. This eliminates unauthenticated `401 Unauthorized` responses that invalidated cached HTTP Basic Auth credentials behind reverse proxies (Nginx Proxy Manager) during file uploads.
+- Enforce strict `origin main` release updates in `install.sh` with branch guards on `main`, fast-forward (`--ff-only`) verification, clear failure handling, and complete removal of the plain `git pull` fallback.
+- Verified the corrected migration/retry, installer hardening, and guest update check elimination with 125 passing tests; four existing/expected warnings remain.
 - Corrected local account-migration recovery to stop auto-restarting system units before restoring configuration.
 - Replaced socket masking with a read-only temporary bus directory and added a dedicated-account system-service probe before stopping the working backend.
 - Added explicit recovery retry that archives earlier destination data, migrates current source data, and preserves repeated rollback backups. The first Fedora live attempt recovered to the working user service after a namespace failure; the corrected retry subsequently completed and was verified.

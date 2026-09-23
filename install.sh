@@ -18,6 +18,7 @@ if [ -f "$VERSION_FILE" ]; then
 else
     VERSION="0.5.1"
 fi
+TARGET_BRANCH="main"
 
 # Colors for output
 RED='\033[0;31m'
@@ -51,6 +52,8 @@ show_help() {
     echo "Options:"
     echo "  --install               Install MP3MetaFix & systemd service (default action)"
     echo "  --update                Pull latest updates and rebuild dependencies"
+    echo "  --dev, --development    Target development branch during updates"
+    echo "  --branch <BRANCH>       Target a specific git branch during updates"
     echo "  --migrate-account       Migrate the supported local user service to a dedicated account"
     echo "  --retry-account         Retry a recovered local migration with fresh sandbox checks"
     echo "  --rollback-account      Restore that user service with the latest migrated data"
@@ -493,15 +496,31 @@ do_update() {
     if [ -d "${INSTALL_DIR}/.git" ]; then
         if [ "$_MP3METAFIX_REEXEC" != "1" ]; then
             log_info "Checking for git updates..."
-            PREV_COMMIT=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)
-            if [ "${MP3METAFIX_WEB_UPDATE:-0}" = "1" ]; then
-                # Never report a failed download/merge as a successful web update.
-                git -C "$INSTALL_DIR" fetch --tags || return 1
-                git -C "$INSTALL_DIR" pull --ff-only origin main || return 1
-            else
-                git -C "$INSTALL_DIR" fetch --tags || true
-                git -C "$INSTALL_DIR" pull origin main || git -C "$INSTALL_DIR" pull || true
+            if ! command -v git &> /dev/null; then
+                log_error "git command not found. Cannot perform update."
+                return 1
             fi
+
+            CURRENT_BRANCH=$(git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+            if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]; then
+                log_warn "Current git branch is '${CURRENT_BRANCH}', but update target is '${TARGET_BRANCH}'."
+                log_error "To update against '${TARGET_BRANCH}', switch branch first (e.g. 'git checkout ${TARGET_BRANCH}') or specify '--branch ${CURRENT_BRANCH}'."
+                return 1
+            fi
+
+            PREV_COMMIT=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)
+            log_info "Fetching release tags and updates from origin ${TARGET_BRANCH}..."
+            if ! git -C "$INSTALL_DIR" fetch origin "$TARGET_BRANCH" --tags; then
+                log_error "Failed to fetch updates from 'origin ${TARGET_BRANCH}'. Check network and remote configuration."
+                return 1
+            fi
+
+            if ! git -C "$INSTALL_DIR" pull --ff-only origin "$TARGET_BRANCH"; then
+                log_error "Failed to pull updates from 'origin ${TARGET_BRANCH}'. Local '${TARGET_BRANCH}' may have diverged or uncommitted changes exist."
+                log_error "Update aborted to prevent unintended changes."
+                return 1
+            fi
+
             NEW_COMMIT=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)
 
             if [ -n "$PREV_COMMIT" ] && [ -n "$NEW_COMMIT" ] && [ "$PREV_COMMIT" != "$NEW_COMMIT" ]; then
@@ -1094,6 +1113,19 @@ while [[ $# -gt 0 ]]; do
         --version|-v)
             echo "MP3MetaFix v${VERSION}"
             exit 0
+            ;;
+        --dev|--development)
+            TARGET_BRANCH="development"
+            shift 1
+            ;;
+        --branch)
+            if [[ $# -ge 2 && ! "$2" =~ ^-- ]]; then
+                TARGET_BRANCH="$2"
+                shift 2
+            else
+                log_error "--branch requires a branch name argument"
+                exit 1
+            fi
             ;;
         --no-service) SKIP_SERVICE=true; shift ;;
         --headless) FORCE_HEADLESS=true; shift ;;

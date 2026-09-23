@@ -4,7 +4,7 @@ These rules govern all agentic modifications, architecture, security, documentat
 
 ## Current implementation assessment
 
-These rules are engineering requirements, not proof that the application or installed service already satisfies them. Read the historical [SECURITY_AUDIT_2026-09-20.md](SECURITY_AUDIT_2026-09-20.md), current [remediation verification](SECURITY_REMEDIATION_2026-09-21.md), and [SECURITY_HARDENING.md](SECURITY_HARDENING.md) for implemented protections and remaining deployment tradeoffs. The authoritative workflow is this file; `.agents/rules/development_workflow.md` is a legacy copy and must not override it. Changes must remain in local Git until explicit approval to push remotely.
+These rules are engineering requirements, not proof that the application or installed service already satisfies them. Read the historical [SECURITY_AUDIT_2026-09-20.md](SECURITY_AUDIT_2026-09-20.md), current [remediation verification](SECURITY_REMEDIATION_2026-09-21.md), and [SECURITY_HARDENING.md](SECURITY_HARDENING.md) for implemented protections and remaining deployment tradeoffs. The authoritative workflow is this file. Changes must remain in local Git until explicit approval to push remotely.
 
 ---
 
@@ -77,18 +77,25 @@ Before implementing or modifying command execution, installers, service manageme
 
 ---
 
-## 📚 6. Documentation Synchronization (Mandatory Before Commit)
+## 📚 6. Documentation Synchronization & Release Gates
 
-Before any changes are committed to local Git:
+Before any changes are committed or merged:
 
-1. **CHANGELOG.md**:
-   - Every feature, security patch, bug fix, or dependency update must be documented in [CHANGELOG.md](../CHANGELOG.md) under the appropriate version section following [Keep a Changelog](https://keepachangelog.com/).
-2. **README.md & Docs**:
-   - Ensure [README.md](../README.md), [docs/ARCHITECTURE.md](ARCHITECTURE.md), [docs/DEPLOYMENT.md](DEPLOYMENT.md), and [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md) reflect current behavior, architecture diagrams, and configuration variables.
-3. **ROADMAP.md**:
-   - Keep [ROADMAP.md](../ROADMAP.md) updated when items are started, completed, or newly proposed.
-4. **Version Consistency**:
-   - Keep version strings synchronized across [VERSION](../VERSION), [backend/config.py](../backend/config.py), [frontend/index.html](../frontend/index.html), and [install.sh](../install.sh).
+1. **Incremental Updates during Development (`development` branch)**:
+   - Every feature, security patch, bug fix, or dependency update must be documented in [CHANGELOG.md](../CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/).
+   - Keep [README.md](../README.md), [docs/ARCHITECTURE.md](ARCHITECTURE.md), [docs/DEPLOYMENT.md](DEPLOYMENT.md), and [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md) current with any newly implemented behaviors, architecture changes, and installer options.
+2. **Public vs. Internal Documentation Boundary**:
+   - Treat documentation on every remote branch as public. Document installation, use, architecture, supported behavior, product plans, and relevant security/compatibility limitations. Exclude personal learning plans, environment-specific work logs, and agent/session handoffs.
+   - Keep [ROADMAP.md](../ROADMAP.md) focused on public product work.
+   - Keep internal planning and personal notes strictly in the ignored `internal/` directory ([internal/README.md](../internal/README.md)). Never force-add or link untracked internal notes from public documentation.
+3. **Mandatory Pre-Merge Release Gate (Before Merging `development` → `main`)**:
+   - When `development` is approved for a new release, the documentation MUST be finalized on `development` before merging into `main`:
+     - Convert `## [Unreleased]` in [CHANGELOG.md](../CHANGELOG.md) to the release heading: `## [X.Y.Z] - YYYY-MM-DD`.
+     - Synchronize version strings across [VERSION](../VERSION), [backend/config.py](../backend/config.py), [frontend/index.html](../frontend/index.html), and [install.sh](../install.sh).
+     - Audit all public docs to verify they accurately reflect the release-ready product state.
+     - Execute the test suite (`./.venv/bin/pytest`) with 0 failures.
+     - Commit the release preparation on `development` (`chore(release): prepare vX.Y.Z`).
+     - Only then execute the fast-forward merge into `main` and tag the release (`git tag vX.Y.Z`).
 
 ---
 
@@ -118,7 +125,8 @@ Follow a strict 4-stage validation pipeline:
 - Do not automatically push, tag, publish a release, or deploy to any environment without maintainer approval.
 - All future remote pushes must target `development`. Specify the destination explicitly; do not rely on an existing upstream or default push configuration that could target `main`.
 - Update `main` only through a `development` → `main` merge explicitly requested by the user after user testing and feedback confirm release readiness. Approval to push to `development` does not authorize merging to `main`, publishing a release, or deploying.
-- Keep `origin main` as the installer release source. The current plain `git pull` fallback means strict branch isolation is not yet guaranteed; removing it and adding checkout guards remain roadmap work. Development pushes do not authorize switching the release installer to `development`.
+- Apply the **Pre-Merge Release Gate** (Section 6) on `development` prior to executing the merge to `main`.
+- Keep `origin main` as the installer default release source. The installer enforces that standard updates are run only on a `main` checkout, fast-forwards strictly from `origin main`, and halts on fetch or branch errors without falling back to generic `git pull`. Development testing checkouts use `install.sh --update --dev`.
 - Validate installer and update changes in the designated disposable LXC before recommending wider deployment. Check service identity, listening ports, proxy behavior, data preservation, and recovery after failure.
 - Preserve user files, configuration, authentication secrets, and existing data unless an approved migration explicitly changes them.
 - Report the files changed, security risk addressed, exact tests run and results, remaining assumptions, and deployment/restart/rollback impact.

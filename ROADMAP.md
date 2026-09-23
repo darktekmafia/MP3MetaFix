@@ -44,11 +44,10 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - High-contrast footers, readable links, and glassmorphic telemetry cards across all screen resolutions (320px–4K).
 
 ### Active Backlog & Future Vision 📋
-- [ ] **Display installed version publicly; check for updates only in `/admin`**:
-  - Keep the installed application version visible in the header for guests and signed-in users, using a read-only local version/health response. Displaying or clicking it must not trigger a remote update check.
-  - Remove automatic and manual update checks, update prompts, and update-check controls from `/app`, `/manager`, and the public hub. Keep update discovery and installation controls in `/admin`, gated by administrator authentication and the deployment's update policy.
-  - Verify guest startup, refresh, session restore, and version-display interactions never request `/api/updates/check`; verify authorized administrator checks still work. Preserve backend endpoint authorization.
-  - This removes the guest update-check `401` trigger; it does not establish that all demo upload/authentication failures are resolved.
+- [x] **Display installed version publicly; check for updates only in `/admin`**:
+  - Keep the installed application version visible in the header for guests and signed-in users, using a read-only local version/health response. Displaying or clicking it does not trigger a remote update check.
+  - Removed automatic and manual update checks, update prompts, and update-check controls from `/app`, `/manager`, and the public hub. Confined update discovery and installation controls exclusively to `/admin`, gated by administrator authentication.
+  - Verified guest startup, refresh, session restore, and version-display interactions never request `/api/updates/check`, eliminating unauthenticated 401 triggers while preserving authorized administrator update management.
 - [ ] **Multi-User Role & Quota Policies**:
   - Granular per-user storage quotas, tenant directories, and role management (Editor, Viewer, Admin).
 - [ ] **Service Daemon Maintenance Triggers**:
@@ -210,19 +209,19 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
   - Revoke prior account tokens after password changes and define logout revocation (medium).
   - Serialize in-app updater processes across workers/disconnects and emit fixed status messages. Web updates require a local restart.
   - Validate outbound redirect destinations and bound Suno response reads (medium).
-  - Applied and verified user-service containment. Local dedicated-account migration subsequently completed; the old user service is disabled and retained for recovery.
-- [x] **Local dedicated service-account migration**:
-  - Corrected retry completed on Fedora; verified dedicated process identity, healthy v0.5.1 backend, private data ownership, effective sandbox restrictions, and disabled/inactive old user service.
-- [ ] **Strict installer release-branch enforcement**:
-  - Keep release updates explicitly sourced from `origin main`; remove the plain `git pull` fallback that can use another configured upstream when the main pull fails.
-  - Detect a checkout on `development` or another branch and stop with clear guidance before merging release code into it. Preserve local changes and avoid automatic branch switching or resets.
-  - Fail clearly on fetch/pull errors. Test main and development checkouts, differing upstreams, local changes, and failed downloads; ensure no fallback consumes an unintended branch.
-  - Remote development pushes target `development`; promotion to `main` requires an explicit user request to merge `development` → `main` after testing and feedback. Development test installation instructions must distinguish checkout-based testing from the main-only release updater.
+  - Added tested service containment; supported deployment profiles and remaining limitations are documented in the security and deployment guides.
+- [x] **Scoped dedicated service-account migration helper**:
+  - Implemented migration, retry, and rollback for the supported user-service deployment. General installer integration and LXC system-service conversion remain planned.
+- [x] **Strict installer release-branch enforcement**:
+  - Keep release updates explicitly sourced from `origin main`; removed the plain `git pull` fallback that could use another configured upstream or development branch on failure.
+  - Detect checkouts on `development` or other non-`main` branches and stop with clear guidance before attempting release merges.
+  - Require fast-forward merges (`--ff-only`) from `origin main` and fail clearly on fetch or divergence errors without touching or corrupting local files.
+  - Documented development testing separately from the main-only release updater.
 - [ ] **General service-account migration and installer integration**:
-  - Added a scoped [local migration/rollback helper](docs/ACCOUNT_MIGRATION.md); the first Fedora cutover hit a namespace failure and recovered the user backend. Corrected retry adds a real dedicated-account system sandbox probe before cutover; local live success is verified. General system-service conversion remains planned.
+  - Extend the scoped [migration/rollback helper](docs/ACCOUNT_MIGRATION.md) to general system-service deployments, retaining sandbox preflight checks and recovery before service cutover.
   - Preserve application accounts/passwords, signing secrets, audio/session data, environment settings, network bindings, and proxy configuration. Relocate files only when necessary and adjust access permissions deliberately.
   - Provide a guided upgrade path for existing installations, with an explicit migration choice, preflight checks, backups, service handoff, health verification, and rollback on failure. Detect duplicate units without disabling unrelated services.
-  - Validate fresh installation, upgrade, repeated execution, and interrupted migration; include Ubuntu 24.04 LXC and the local workstation. The LXC successfully upgraded from v0.4.0 to v0.5.1; no pre-upgrade snapshot was taken, and its account migration remains untested. Check actual sandbox support on each target.
+  - Validate fresh installation, upgrade, repeated execution, and interrupted migration on Ubuntu 24.04 LXC and supported workstation deployments. Check actual sandbox support on each target; upgrade compatibility does not establish account-migration compatibility.
 - [ ] **Guided, one-shot installation with service-account selection or creation**:
   - Design for users who cannot confidently perform CLI administration: after the initial installer launch, use plain-language prompts and safe defaults to complete as much setup as possible without separate commands or manual file edits.
   - Offer creation of a dedicated non-login Linux service account as the recommended choice, or selection of a suitable existing unprivileged account. Explain that this is separate from the application's administrator login; never silently default the backend to root.
@@ -230,10 +229,9 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
   - Finish with the working access URL and clear success/recovery guidance. Make reruns safe and provide explicit unattended options for experienced operators.
   - Integrate hardening and account migration into upgrades while preserving existing customizations. Plan a narrowly scoped, authorized restart mechanism so routine updates do not ultimately require users to type service commands; do not grant the web backend general administrative access.
   - **Current limitation:** existing v0.5.1 upgrades preserve the service identity and sandbox configuration; automatic account migration and guided account creation are not implemented; the new explicit helper supports only the standard local developer user service.
-- [ ] **Investigate intermittent demo-LXC upload/authentication behavior** — [verified comparison and remaining tests](DEMO_LXC_UPLOAD_INVESTIGATION_2026-09-21.md):
-  - Both fresh and upgraded v0.5.1 installations have matching application source, relevant audio dependencies, guest settings, and equivalent NPM host directives. Their service sandbox settings differ; no fresh-install audio-code defect has been demonstrated.
-  - Demo logs show proxy-layer upload 401 responses following application update-check 401 responses. Both hosts can recover from proxy challenges and complete uploads. An isolated Chrome test reproduced an application 401 clearing cached Basic authentication credentials; differing live recovery behavior remains unresolved.
-  - Move guest update checks to `/admin`, then compare repeated upload/edit/download flows in clean browser contexts through the same public proxy path. Preserve backend authorization and record sanitized request timing; do not infer failure from progress percentages alone.
+- [ ] **Reliable uploads behind authenticated reverse proxies**:
+  - Investigate intermittent upload authentication challenges with HTTP Basic Auth proxies. Preserve application authorization and validate repeated upload/edit/download flows through supported proxy configurations.
+  - Verify guest update-check removal and browser authentication recovery separately; do not mark the upload issue resolved until end-to-end testing confirms it.
 - [ ] **Apply stored quota/TTL settings to runtime policy**: settings persist today, while runtime enforcement reads environment-derived configuration.
 
 - [ ] **Multi-Arch Docker & OCI Container Images**:

@@ -116,8 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const sunoApplySpinner = document.getElementById('sunoApplySpinner');
   const sunoSelectedCount = document.getElementById('sunoSelectedCount');
 
-  // --- Version & Update Manager Elements ---
-  const updateBadge = document.getElementById('updateBadge');
+  // --- Version & System Details Elements ---
   const btnVersionModal = document.getElementById('btnVersionModal');
   const versionModal = document.getElementById('versionModal');
   const btnCloseVersionModal = document.getElementById('btnCloseVersionModal');
@@ -126,28 +125,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const sysGitBranch = document.getElementById('sysGitBranch');
   const sysRuntimeMode = document.getElementById('sysRuntimeMode');
   const sysRepoLink = document.getElementById('sysRepoLink');
-  const updateCheckedAt = document.getElementById('updateCheckedAt');
-  const btnCheckUpdatesNow = document.getElementById('btnCheckUpdatesNow');
-  const updateUpToDateCard = document.getElementById('updateUpToDateCard');
-  const upToDateMsg = document.getElementById('upToDateMsg');
-  const updateAvailableCard = document.getElementById('updateAvailableCard');
-  const availableVersionTag = document.getElementById('availableVersionTag');
-  const availableReleaseDate = document.getElementById('availableReleaseDate');
-  const availableReleaseTitle = document.getElementById('availableReleaseTitle');
-  const availableReleaseNotes = document.getElementById('availableReleaseNotes');
-  const btnLaunchUpdater = document.getElementById('btnLaunchUpdater');
-
-  // Terminal Modal Elements
-  const updaterModal = document.getElementById('updaterModal');
-  const terminalLogs = document.getElementById('terminalLogs');
-  const terminalLogContainer = document.getElementById('terminalLogContainer');
-  const terminalStatusBadge = document.getElementById('terminalStatusBadge');
-  const terminalSpinner = document.getElementById('terminalSpinner');
-  const terminalProgressText = document.getElementById('terminalProgressText');
-  const terminalActions = document.getElementById('terminalActions');
-  const btnReloadAfterUpdate = document.getElementById('btnReloadAfterUpdate');
-
-  let activeUpdateData = null;
 
   // --- Toast Notifications ---
   function showToast(message, type = 'info', duration = 3500) {
@@ -1157,7 +1134,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // =====================================================================
-  // Version Details & In-App Web Updater Controller
+  // Version & System Information Controller
   // =====================================================================
 
   async function loadSystemInfo() {
@@ -1167,108 +1144,38 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await res.json();
 
       if (data.version) {
-        versionBadge.textContent = `v${data.version}`;
-        sysVersion.textContent = `v${data.version}`;
+        if (versionBadge) versionBadge.textContent = `v${data.version}`;
+        if (sysVersion) sysVersion.textContent = `v${data.version}`;
       }
       if (data.git_commit) {
-        sysGitCommit.textContent = data.git_commit;
+        if (sysGitCommit) sysGitCommit.textContent = data.git_commit;
       } else {
-        sysGitCommit.textContent = 'Standalone';
+        if (sysGitCommit) sysGitCommit.textContent = 'Standalone';
       }
       if (data.git_branch) {
-        sysGitBranch.textContent = data.git_branch;
+        if (sysGitBranch) sysGitBranch.textContent = data.git_branch;
       }
       if (data.is_systemd_service) {
-        sysRuntimeMode.textContent = 'Systemd Service (Boot)';
+        if (sysRuntimeMode) sysRuntimeMode.textContent = 'Systemd Service (Boot)';
       } else {
-        sysRuntimeMode.textContent = 'Standalone / Local';
+        if (sysRuntimeMode) sysRuntimeMode.textContent = 'Standalone / Local';
       }
       if (data.github_repo) {
-        sysRepoLink.textContent = data.github_repo;
-        sysRepoLink.href = data.github_repo_url || `https://github.com/${data.github_repo}`;
+        if (sysRepoLink) {
+          sysRepoLink.textContent = data.github_repo;
+          sysRepoLink.href = data.github_repo_url || `https://github.com/${data.github_repo}`;
+        }
       }
     } catch (err) {
       console.warn('Could not load system info:', err);
-      serverStatus.innerHTML = '<span class="status-dot" style="background:#f43f5e;box-shadow:0 0 8px #f43f5e"></span> Offline';
-    }
-  }
-
-  async function checkForUpdates(force = false, silent = false) {
-    const spinner = btnCheckUpdatesNow ? btnCheckUpdatesNow.querySelector('.spin-on-load') : null;
-    if (spinner) spinner.classList.add('spinning');
-    if (btnCheckUpdatesNow) btnCheckUpdatesNow.disabled = true;
-
-    try {
-      const url = force ? '/api/updates/check?force=true' : '/api/updates/check';
-      const res = await fetch(url);
-      if (res.status === 401) {
-        // Unauthenticated - skip silently without logging errors
-        return;
+      if (serverStatus) {
+        serverStatus.innerHTML = '<span class="status-dot" style="background:#f43f5e;box-shadow:0 0 8px #f43f5e"></span> Offline';
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      activeUpdateData = data;
-
-      if (data.checked_at) {
-        updateCheckedAt.textContent = `Last checked: ${data.checked_at}`;
-      }
-
-      if (data.update_available) {
-        // Show notification badge in navbar
-        if (updateBadge) updateBadge.classList.remove('hidden');
-
-        // Populate update modal card
-        availableVersionTag.textContent = `v${data.latest_version}`;
-        availableReleaseTitle.textContent = data.release_name || `Release v${data.latest_version}`;
-        
-        if (data.published_at) {
-          const dateStr = new Date(data.published_at).toLocaleDateString(undefined, {
-            year: 'numeric', month: 'short', day: 'numeric'
-          });
-          availableReleaseDate.textContent = `Published: ${dateStr}`;
-        } else {
-          availableReleaseDate.textContent = '';
-        }
-
-        // Render release notes safely
-        availableReleaseNotes.textContent = data.release_notes || 'No release notes provided.';
-
-        updateAvailableCard.classList.remove('hidden');
-        updateUpToDateCard.classList.add('hidden');
-
-        if (!silent) {
-          showToast(`Update available: v${data.latest_version}!`, 'info', 4000);
-        }
-      } else {
-        // Up to date
-        if (updateBadge) updateBadge.classList.add('hidden');
-        updateAvailableCard.classList.add('hidden');
-        updateUpToDateCard.classList.remove('hidden');
-        
-        if (data.error) {
-          upToDateMsg.textContent = data.error;
-        } else {
-          upToDateMsg.textContent = `You are running the latest version (v${data.current_version}).`;
-        }
-
-        if (!silent) {
-          showToast('MP3MetaFix is up to date!', 'success', 3000);
-        }
-      }
-    } catch (err) {
-      console.warn('Update check failed:', err);
-      if (!silent) {
-        showToast('Could not check for updates. Check internet connection.', 'error', 3500);
-      }
-    } finally {
-      if (spinner) spinner.classList.remove('spinning');
-      if (btnCheckUpdatesNow) btnCheckUpdatesNow.disabled = false;
     }
   }
 
   function openVersionModal() {
     loadSystemInfo();
-    checkForUpdates(false, true);
     if (versionModal) {
       versionModal.classList.remove('hidden');
     }
@@ -1278,10 +1185,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (versionModal) {
       versionModal.classList.add('hidden');
     }
-  }
-
-  async function startInAppUpdate() {
-    showToast('In-app update installation is currently disabled. Please run ./install.sh --update in the server terminal.', 'info', 5000);
   }
 
   // --- Canned Comments & Quick Presets Controller ---
@@ -1988,24 +1891,15 @@ document.addEventListener('DOMContentLoaded', () => {
     btnSunoApplyAll.addEventListener('click', () => applySunoData('all'));
   }
 
-  // Event Listeners for Version & Updater
+  // Event Listeners for Version Modal
   if (versionBadge) {
     versionBadge.addEventListener('click', openVersionModal);
   }
   if (btnVersionModal) {
     btnVersionModal.addEventListener('click', openVersionModal);
   }
-  if (updateBadge) {
-    updateBadge.addEventListener('click', openVersionModal);
-  }
   if (btnCloseVersionModal) {
     btnCloseVersionModal.addEventListener('click', closeVersionModal);
-  }
-  if (btnCheckUpdatesNow) {
-    btnCheckUpdatesNow.addEventListener('click', () => checkForUpdates(true, false));
-  }
-  if (btnLaunchUpdater) {
-    btnLaunchUpdater.addEventListener('click', startInAppUpdate);
   }
 
   // Close modals on escape key or backdrop click
@@ -2065,11 +1959,8 @@ document.addEventListener('DOMContentLoaded', () => {
   renderCannedCommentDropdown();
   loadSystemInfo();
 
-  // Restore session and check updates once auth is established
+  // Restore session once auth is established
   window.addEventListener('mp3metafix:auth-ready', () => {
     restoreSessionIfExists();
-    setTimeout(() => {
-      checkForUpdates(false, true);
-    }, 1500);
   });
 });

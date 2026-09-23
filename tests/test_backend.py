@@ -1,6 +1,7 @@
 """Unit and Integration tests for MP3MetaFix backend and security layer."""
 
 import io
+import os
 import time
 import json
 import pytest
@@ -833,6 +834,21 @@ def test_api_updates_check_endpoint(client, monkeypatch):
     assert isinstance(data["update_available"], bool)
 
 
+def test_guest_pages_do_not_request_updates_check():
+    """Verify that public editor and non-admin client scripts do not contain requests to /api/updates/check."""
+    from backend.config import BASE_DIR
+    
+    app_js = (BASE_DIR / "frontend" / "js" / "app.js").read_text(encoding="utf-8")
+    assert "/api/updates/check" not in app_js, "app.js should not call /api/updates/check; updates belong in /admin"
+
+    hub_html = (BASE_DIR / "frontend" / "index.html").read_text(encoding="utf-8")
+    assert "/api/updates/check" not in hub_html
+
+    manager_html = (BASE_DIR / "frontend" / "manager" / "index.html").read_text(encoding="utf-8")
+    assert "/api/updates/check" not in manager_html
+
+
+
 @pytest.mark.anyio
 async def test_stream_install_update_generator(tmp_path, monkeypatch):
     """Exercise the SSE lifecycle without running the real installer or services."""
@@ -1421,6 +1437,122 @@ echo "V034_MIGRATION_EXECUTED"
     res2 = subprocess.run(["bash", str(repo_dir / "install.sh"), "--update"], capture_output=True, text=True)
     assert res2.returncode == 0
     assert "V034_MIGRATION_EXECUTED" in res2.stdout
+
+
+def test_installer_update_aborts_on_non_main_branch(tmp_path: Path):
+    """Verify that install.sh --update detects a non-main branch (e.g. development) and aborts without modifying files."""
+    import subprocess
+    import shutil
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "development", str(repo_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "TestUser"], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "test@example.com"], check=True)
+
+    install_src = Path(__file__).resolve().parent.parent / "install.sh"
+    shutil.copy2(install_src, repo_dir / "install.sh")
+    (repo_dir / "VERSION").write_text("0.5.1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "init dev"], check=True)
+
+    res = subprocess.run(["bash", str(repo_dir / "install.sh"), "--update"], capture_output=True, text=True)
+    assert res.returncode == 1
+    assert "Current git branch is 'development', but update target is 'main'" in res.stdout
+
+
+def test_installer_update_with_dev_flag_on_development_branch(tmp_path: Path):
+    """Verify that install.sh --update --dev correctly updates against origin development."""
+    import subprocess
+    import shutil
+
+    origin_dir = tmp_path / "origin"
+    origin_dir.mkdir()
+    subprocess.run(["git", "init", "--bare", "-b", "development", str(origin_dir)], check=True, capture_output=True)
+
+    init_dir = tmp_path / "init"
+    init_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "development", str(init_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(init_dir), "config", "user.name", "TestUser"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "config", "user.email", "test@example.com"], check=True)
+
+    install_src = Path(__file__).resolve().parent.parent / "install.sh"
+    shutil.copy2(install_src, init_dir / "install.sh")
+    (init_dir / "VERSION").write_text("0.5.1\n", encoding="utf-8")
+    (init_dir / "backend").mkdir()
+    (init_dir / "backend" / "requirements.txt").write_text("# test\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(init_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "commit", "-m", "init dev v0.5.1"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "remote", "add", "origin", str(origin_dir)], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "push", "origin", "development"], check=True)
+
+    repo_dir = tmp_path / "local"
+    subprocess.run(["git", "clone", "-b", "development", str(origin_dir), str(repo_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "TestUser"], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "test@example.com"], check=True)
+
+    # Push update to origin development
+    (init_dir / "VERSION").write_text("0.5.2-dev\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(init_dir), "commit", "-am", "bump dev version"], check=True)
+    subprocess.run(["git", "-C", str(init_dir), "push", "origin", "development"], check=True)
+
+    # Run update with --dev in web update mode (stops before service management)
+    res = subprocess.run(
+        ["bash", str(repo_dir / "install.sh"), "--update", "--dev", "--no-service", "--headless"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "MP3METAFIX_WEB_UPDATE": "1"},
+    )
+    assert res.returncode == 0
+    assert "Fetching release tags and updates from origin development" in res.stdout
+    assert (repo_dir / "VERSION").read_text(encoding="utf-8").strip() == "0.5.2-dev"
+
+
+def test_installer_update_with_dev_flag_mismatch_aborts(tmp_path: Path):
+    """Verify that install.sh --update --dev on a main checkout aborts with guidance."""
+    import subprocess
+    import shutil
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main", str(repo_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "TestUser"], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "test@example.com"], check=True)
+
+    install_src = Path(__file__).resolve().parent.parent / "install.sh"
+    shutil.copy2(install_src, repo_dir / "install.sh")
+    (repo_dir / "VERSION").write_text("0.5.1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "init main"], check=True)
+
+    res = subprocess.run(["bash", str(repo_dir / "install.sh"), "--update", "--dev"], capture_output=True, text=True)
+    assert res.returncode == 1
+    assert "Current git branch is 'main', but update target is 'development'" in res.stdout
+
+
+def test_installer_update_aborts_on_fetch_failure(tmp_path: Path):
+    """Verify that install.sh --update on main fails cleanly if fetching origin main fails, without silent fallback."""
+    import subprocess
+    import shutil
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main", str(repo_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "TestUser"], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "test@example.com"], check=True)
+
+    # Point origin to an invalid non-git path
+    subprocess.run(["git", "-C", str(repo_dir), "remote", "add", "origin", str(tmp_path / "nonexistent")], check=True)
+
+    install_src = Path(__file__).resolve().parent.parent / "install.sh"
+    shutil.copy2(install_src, repo_dir / "install.sh")
+    (repo_dir / "VERSION").write_text("0.5.1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "init main"], check=True)
+
+    res = subprocess.run(["bash", str(repo_dir / "install.sh"), "--update"], capture_output=True, text=True)
+    assert res.returncode == 1
+    assert "Failed to fetch updates from 'origin main'" in res.stdout
 
 
 def test_configure_access_validation():

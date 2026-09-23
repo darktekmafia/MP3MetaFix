@@ -125,7 +125,19 @@ desktop.ini
 *.bak
 
 # ---------------------------------------------------------------------
-# 10. Local Agent Customizations & Untracked Rules
+# 10. Archives & Compressed Packages
+# ---------------------------------------------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.bz2
+*.xz
+
+# ---------------------------------------------------------------------
+# 11. Local Agent Customizations, Internal Planning & Work Logs
 # ---------------------------------------------------------------------
 .agents/
 AGENTS.md
@@ -136,9 +148,30 @@ session_handoff*.md
 !SESSION_HANDOFF_2026-09-20.md
 .cursor/
 .windsurf/
-
-!tests/fixtures/opus.m4a
+scratch/
+*.scratch.*
 
 # Retained local account-migration recovery data
 /data.migration-restore/
 /data.before-account-rollback*/
+
+# Local internal developer documentation, planning, gap analyses & work logs (never public)
+internal/
+/internal/
+/INTERNAL_ROADMAP.md
+/CODEBASE_GAP_ANALYSIS.md
+*GAP_ANALYSIS*.md
+*gap_analysis*.md
+*INVESTIGATION*.md
+*investigation*.md
+DEMO_*
+
+# ---------------------------------------------------------------------
+# 12. Patch & Merge Backups
+# ---------------------------------------------------------------------
+*.orig
+*.rej
+*.patch
+
+!tests/fixtures/opus.m4a
+

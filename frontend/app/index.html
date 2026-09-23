@@ -482,68 +482,11 @@
           </div>
         </div>
 
-        <!-- Updates Status Section -->
-        <div class="update-check-section">
-          <div class="update-check-header">
-            <div>
-              <h3 class="section-heading">Software Updates</h3>
-              <p class="section-subheading" id="updateCheckedAt">Last checked: Just now</p>
-            </div>
-            <button class="btn btn-secondary btn-sm" id="btnCheckUpdatesNow">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" class="spin-on-load">
-                <path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path>
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-              </svg>
-              <span>Check for Updates</span>
-            </button>
-          </div>
-
-          <!-- State A: Up to date -->
-          <div id="updateUpToDateCard" class="update-result-card update-ok">
-            <div class="update-card-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-                <polyline points="22 4 12 14.01 9 11.01"></polyline>
-              </svg>
-            </div>
-            <div class="update-card-content">
-              <h4>MP3MetaFix is up to date</h4>
-              <p id="upToDateMsg">You are running the latest version available.</p>
-            </div>
-          </div>
-
-          <!-- State B: Update Available Card -->
-          <div id="updateAvailableCard" class="update-result-card update-found hidden">
-            <div class="update-found-header">
-              <div class="update-badge-row">
-                <span class="badge badge-pulse">Update Available</span>
-                <span class="v-new-tag" id="availableVersionTag">v0.3.0</span>
-                <span class="v-date" id="availableReleaseDate">--</span>
-              </div>
-              <h4 class="update-release-title" id="availableReleaseTitle">New Release</h4>
-            </div>
-
-            <!-- Scrollable Release Notes -->
-            <div class="release-notes-wrapper">
-              <div class="release-notes-label">Release Notes & Changelog:</div>
-              <div class="release-notes-content" id="availableReleaseNotes">
-                <!-- Injected formatted release notes -->
-              </div>
-            </div>
-
-            <div class="update-action-footer">
-              <p class="update-warning-note">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
-                In-app web updater is disabled. To upgrade, run <code>./install.sh --update</code> in the server terminal.
-              </p>
-              <button class="btn btn-secondary" id="btnLaunchUpdater" disabled style="opacity:0.75;cursor:not-allowed;">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-                  <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>
-                </svg>
-                <span>Run install.sh --update on Server</span>
-              </button>
-            </div>
-          </div>
+        <!-- Admin Management Link Section -->
+        <div class="version-admin-notice" style="margin-top: 1.25rem; padding: 1rem; border-radius: 8px; background: var(--bg-card-subtle, rgba(255,255,255,0.03)); border: 1px solid var(--border-subtle, rgba(255,255,255,0.08)); text-align: center;">
+          <p style="margin: 0; font-size: 0.875rem; color: var(--text-muted, #94a3b8);">
+            Software updates, release checks, and system policies are managed in the <a href="/admin" style="color: var(--clr-primary, #38bdf8); text-decoration: underline;">Admin Control Center</a>.
+          </p>
         </div>
       </div>
     </div>
