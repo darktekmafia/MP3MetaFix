@@ -440,7 +440,10 @@
         const hasStorage = pinned.includes('max_global_storage_mb');
         const hasTtl = pinned.includes('session_ttl_minutes');
         const hasUpload = pinned.includes('max_upload_size_mb');
+        const hasUpdates = pinned.includes('software_updates');
         const hasAnyLimit = hasSessions || hasStorage || hasTtl || hasUpload;
+
+        const updatesBlock = document.getElementById('settingBlock_software_updates');
 
         if (guestBlock) guestBlock.classList.toggle('hidden', !hasGuest);
         if (maxSessionsBlock) maxSessionsBlock.classList.toggle('hidden', !hasSessions);
@@ -448,8 +451,9 @@
         if (sessionTtlBlock) sessionTtlBlock.classList.toggle('hidden', !hasTtl);
         if (maxUploadBlock) maxUploadBlock.classList.toggle('hidden', !hasUpload);
         if (limitsBlock) limitsBlock.classList.toggle('hidden', !hasAnyLimit);
+        if (updatesBlock) updatesBlock.classList.toggle('hidden', !hasUpdates);
 
-        const hasAnyPinned = hasGuest || hasAnyLimit;
+        const hasAnyPinned = hasGuest || hasAnyLimit || hasUpdates;
         if (emptyNotice) emptyNotice.classList.toggle('hidden', hasAnyPinned);
         if (formSystemSettings) formSystemSettings.classList.toggle('hidden', !hasAnyPinned);
 
@@ -592,6 +596,30 @@
     }
   }
 
+  async function handleQuickCheckUpdates() {
+    const btn = document.getElementById('btnQuickCheckUpdates');
+    const statusText = document.getElementById('quickUpdateStatusText');
+    if (btn) btn.disabled = true;
+    if (statusText) statusText.textContent = 'Checking GitHub releases...';
+    try {
+      const res = await fetch('/api/updates/check?force=true');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.update_available) {
+        if (statusText) statusText.textContent = `New update available: v${data.latest_version}`;
+        notify(`New MP3MetaFix version available: v${data.latest_version}`, 'info');
+      } else {
+        if (statusText) statusText.textContent = `MP3MetaFix is up to date (v${data.current_version || '0.5.1'})`;
+        notify('MP3MetaFix is up to date', 'success');
+      }
+    } catch (err) {
+      if (statusText) statusText.textContent = 'Could not check for updates.';
+      notify('Failed to check for updates', 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   // --- Initialize Event Listeners on DOM Ready ---
   document.addEventListener('DOMContentLoaded', () => {
     // Setup Form
@@ -615,6 +643,11 @@
     const formPassword = document.getElementById('formChangePassword');
     if (formPassword) {
       formPassword.addEventListener('submit', handleChangePassword);
+    }
+
+    const btnQuickUpdates = document.getElementById('btnQuickCheckUpdates');
+    if (btnQuickUpdates) {
+      btnQuickUpdates.addEventListener('click', handleQuickCheckUpdates);
     }
 
     const btnCloseSettings = document.getElementById('btnCloseSettingsModal');

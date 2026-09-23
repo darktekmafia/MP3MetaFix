@@ -289,7 +289,7 @@
                     <input type="checkbox" class="pin-checkbox" data-setting="max_sessions" id="pin_max_sessions">
                     <span class="quick-pin-badge">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                      <span>Quick</span>
+                      <span>Quick Settings</span>
                     </span>
                   </label>
                 </div>
@@ -304,7 +304,7 @@
                     <input type="checkbox" class="pin-checkbox" data-setting="max_global_storage_mb" id="pin_max_global_storage_mb">
                     <span class="quick-pin-badge">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                      <span>Quick</span>
+                      <span>Quick Settings</span>
                     </span>
                   </label>
                 </div>
@@ -319,7 +319,7 @@
                     <input type="checkbox" class="pin-checkbox" data-setting="session_ttl_minutes" id="pin_session_ttl_minutes">
                     <span class="quick-pin-badge">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                      <span>Quick</span>
+                      <span>Quick Settings</span>
                     </span>
                   </label>
                 </div>
@@ -334,7 +334,7 @@
                     <input type="checkbox" class="pin-checkbox" data-setting="max_upload_size_mb" id="pin_max_upload_size_mb">
                     <span class="quick-pin-badge">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                      <span>Quick</span>
+                      <span>Quick Settings</span>
                     </span>
                   </label>
                 </div>
@@ -355,14 +355,23 @@
 
       <!-- Section 3: Software Updates & Release Management -->
       <section class="admin-section" id="sectionUpdates">
-        <div class="section-title-group">
-          <div class="section-icon-pill">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+        <div class="section-title-group" style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 0.75rem;">
+          <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <div class="section-icon-pill">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+            </div>
+            <div>
+              <h3 class="admin-section-heading">Software Updates & Release Inspector</h3>
+              <p class="admin-section-sub">Check for latest releases, view changelogs, and manage deployment status</p>
+            </div>
           </div>
-          <div>
-            <h3 class="admin-section-heading">Software Updates & Release Inspector</h3>
-            <p class="admin-section-sub">Check for latest releases, view changelogs, and manage deployment status</p>
-          </div>
+          <label class="quick-pin-toggle" title="Pin to Quick Settings modal">
+            <input type="checkbox" class="pin-checkbox" data-setting="software_updates" id="pin_software_updates">
+            <span class="quick-pin-badge">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+              <span>Quick Settings</span>
+            </span>
+          </label>
         </div>
 
         <div class="card admin-card">
@@ -602,31 +611,153 @@
     </div>
   </div>
 
-  <!-- Settings Modal (redirects to Admin sections on this page) -->
+  <!-- Quick Settings Modal -->
   <div id="settingsModal" class="modal-overlay hidden" role="dialog" aria-labelledby="settingsModalTitle" aria-modal="true">
-    <div class="modal-card auth-modal-card">
+    <div class="modal-card modal-lg">
       <div class="modal-header">
         <div class="modal-title-group">
           <div class="modal-icon-badge">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
           </div>
           <div>
-            <h2 id="settingsModalTitle" class="modal-title">Settings &amp; Security</h2>
-            <p class="modal-subtitle">Manage system settings directly in the Admin Control Center</p>
+            <h2 id="settingsModalTitle" class="modal-title">Quick Settings</h2>
+            <p class="modal-subtitle">Quick preferences, access control, and user credentials</p>
           </div>
         </div>
         <button class="btn-close" id="btnCloseSettingsModal" aria-label="Close modal">&times;</button>
       </div>
-      <div class="modal-body" style="text-align: center; padding: 2rem 1.5rem;">
-        <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">You are already on the Admin Control Center. All system policies, access controls, and credentials are managed directly on this page.</p>
-        <div style="display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap;">
-          <a href="#sectionAccess" class="btn btn-primary btn-sm" id="btnSettingsGoAccess" onclick="document.getElementById('settingsModal').classList.add('hidden')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-            <span>Access &amp; Guest Mode</span>
-          </a>
-          <a href="#sectionSecurity" class="btn btn-secondary btn-sm" id="btnSettingsGoSecurity" onclick="document.getElementById('settingsModal').classList.add('hidden')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+
+      <div class="modal-body">
+        <!-- Admin Settings Section -->
+        <div id="settingsAdminSection" class="settings-admin-wrapper">
+          <form id="formSystemSettings" class="settings-form">
+            <!-- Access & Guest Mode Card -->
+            <div id="settingBlock_guest_mode_enabled" class="settings-section-card">
+              <div class="settings-section-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                <span>Guest Mode & Public Access Policy</span>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label-group">
+                  <span class="settings-label">Enable Guest Mode for Public Access (/ and /app)</span>
+                  <span class="settings-subtext">When enabled, visitors can explore the Gateway Hub and use MP3MetaFix (/app) without logging in.</span>
+                </div>
+                <label class="toggle-switch" aria-label="Toggle Guest Mode">
+                  <input type="checkbox" id="settingGuestMode">
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Session & Storage Quota Card -->
+            <div id="settingBlock_limits" class="settings-section-card" style="margin-top: 1rem;">
+              <div class="settings-section-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                <span>Session & Storage Limits</span>
+              </div>
+              <div class="settings-inputs-grid">
+                <div id="settingBlock_max_sessions" class="form-group">
+                  <label for="settingMaxSessions" class="form-label">Max Active Sessions</label>
+                  <input type="number" id="settingMaxSessions" class="form-input" min="1" max="100" value="10">
+                  <span class="settings-subtext">Concurrency limit for active track sessions</span>
+                </div>
+                <div id="settingBlock_max_global_storage_mb" class="form-group">
+                  <label for="settingMaxStorage" class="form-label">Storage Quota (MB)</label>
+                  <input type="number" id="settingMaxStorage" class="form-input" min="100" max="20480" value="2048">
+                  <span class="settings-subtext">Total disk quota for audio caching</span>
+                </div>
+                <div id="settingBlock_session_ttl_minutes" class="form-group">
+                  <label for="settingSessionTtl" class="form-label">Session TTL (Min)</label>
+                  <input type="number" id="settingSessionTtl" class="form-input" min="5" max="1440" value="60">
+                  <span class="settings-subtext">Inactivity expiration duration</span>
+                </div>
+                <div id="settingBlock_max_upload_size_mb" class="form-group">
+                  <label for="settingMaxUploadSize" class="form-label">Max Upload (MB)</label>
+                  <input type="number" id="settingMaxUploadSize" class="form-input" min="10" max="2048" value="150">
+                  <span class="settings-subtext">Maximum single audio upload size</span>
+                </div>
+              </div>
+
+              <div id="settingBlock_saveBtn" style="display: flex; justify-content: flex-end; margin-top: 0.5rem;">
+                <button type="submit" class="btn btn-primary btn-sm" id="btnSaveSettings">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                  <span>Save Quick Settings</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Software Updates Card -->
+            <div id="settingBlock_software_updates" class="settings-section-card" style="margin-top: 1rem;">
+              <div class="settings-section-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                <span>Software Updates & Releases</span>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label-group">
+                  <span class="settings-label" id="quickUpdateVersionText">MP3MetaFix Updates</span>
+                  <span class="settings-subtext" id="quickUpdateStatusText">Inspect GitHub releases or trigger an update check</span>
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnQuickCheckUpdates">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                  <span>Check Updates</span>
+                </button>
+              </div>
+            </div>
+          </form>
+
+          <div id="quickSettingsEmptyNotice" class="quick-settings-empty hidden">
+            No system settings are currently pinned to Quick Settings. You can pin settings from the <a href="/admin">Admin Dashboard</a>.
+          </div>
+        </div>
+
+        <!-- Password Change Card -->
+        <div class="settings-section-card" style="margin-top: 1rem;">
+          <div class="settings-section-header">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
             <span>Change Password</span>
+          </div>
+
+          <div id="pwdErrorBanner" class="auth-error-banner hidden" role="alert">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+            <span id="pwdErrorText">Could not update password.</span>
+          </div>
+
+          <form id="formChangePassword" class="auth-form" style="margin-top: 0.5rem;">
+            <!-- Hidden username field for browser accessibility & password manager compatibility -->
+            <input type="text" name="username" class="visually-hidden" autocomplete="username" tabindex="-1" aria-hidden="true" value="admin">
+
+            <div class="form-group">
+              <label for="pwdCurrent" class="form-label">Current Password</label>
+              <input type="password" id="pwdCurrent" name="pwdCurrent" class="form-input" placeholder="Current password" required autocomplete="current-password">
+            </div>
+
+            <div class="settings-inputs-grid">
+              <div class="form-group">
+                <label for="pwdNew" class="form-label">New Password</label>
+                <input type="password" id="pwdNew" name="pwdNew" class="form-input" placeholder="Min 8 characters" required minlength="8" autocomplete="new-password">
+              </div>
+              <div class="form-group">
+                <label for="pwdConfirm" class="form-label">Confirm New Password</label>
+                <input type="password" id="pwdConfirm" name="pwdConfirm" class="form-input" placeholder="Re-type new password" required minlength="8" autocomplete="new-password">
+              </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; margin-top: 0.5rem;">
+              <button type="submit" class="btn btn-secondary btn-sm" id="btnChangePassword">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Update Password</span>
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <div class="quick-settings-footer-link" id="quickSettingsAdminLink">
+          <a href="/admin">
+            <span>Manage all settings in Admin Dashboard</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14"></path><polyline points="12 5 19 12 12 19"></polyline></svg>
           </a>
         </div>
       </div>

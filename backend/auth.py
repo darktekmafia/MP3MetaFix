@@ -169,7 +169,14 @@ class ChangePasswordRequest(BaseModel):
 
 
 DEFAULT_PINNED_SETTINGS = ["guest_mode_enabled", "max_sessions", "max_global_storage_mb"]
-ALLOWED_PINNABLE_SETTINGS = {"guest_mode_enabled", "max_sessions", "max_global_storage_mb", "session_ttl_minutes", "max_upload_size_mb"}
+ALLOWED_PINNABLE_SETTINGS = {
+    "guest_mode_enabled",
+    "max_sessions",
+    "max_global_storage_mb",
+    "session_ttl_minutes",
+    "max_upload_size_mb",
+    "software_updates",
+}
 
 
 class SettingsUpdateRequest(BaseModel):

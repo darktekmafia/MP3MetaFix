@@ -2416,7 +2416,7 @@ def test_quick_settings_pinned_persistence(auth_client, unauth_client):
     assert "guest_mode_enabled" in data["quick_settings_pinned"]
 
     # 2. Update pinned settings as admin
-    new_pins = ["session_ttl_minutes", "max_upload_size_mb", "invalid_key"]
+    new_pins = ["session_ttl_minutes", "max_upload_size_mb", "software_updates", "invalid_key"]
     res_up = auth_client.post("/api/settings", json={"quick_settings_pinned": new_pins})
     assert res_up.status_code == 200
 
@@ -2426,6 +2426,7 @@ def test_quick_settings_pinned_persistence(auth_client, unauth_client):
     pinned = res_get.json()["quick_settings_pinned"]
     assert "session_ttl_minutes" in pinned
     assert "max_upload_size_mb" in pinned
+    assert "software_updates" in pinned
     assert "invalid_key" not in pinned
 
     # 4. Unauthenticated client cannot update

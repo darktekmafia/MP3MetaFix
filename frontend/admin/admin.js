@@ -145,6 +145,30 @@
   }
 
   // --- 2. System Settings & Quota Management ---
+  async function handlePinToggle(e) {
+    const cb = e.target;
+    const isPinned = cb.checked;
+    const pinnedList = Array.from(document.querySelectorAll('.pin-checkbox:checked')).map((el) => el.dataset.setting);
+
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quick_settings_pinned: pinnedList }),
+      });
+      if (res.ok) {
+        notify(isPinned ? 'Pinned to Quick Settings' : 'Unpinned from Quick Settings', 'info');
+      } else {
+        const data = await res.json();
+        notify(data.detail || 'Failed to update Quick Settings pin', 'error');
+        cb.checked = !isPinned; // Revert checkbox state
+      }
+    } catch (err) {
+      notify('Network error updating Quick Settings pin', 'error');
+      cb.checked = !isPinned; // Revert checkbox state
+    }
+  }
+
   async function loadSettings() {
     try {
       const res = await fetch('/api/settings');
@@ -167,6 +191,10 @@
       const pinned = Array.isArray(settings.quick_settings_pinned) ? settings.quick_settings_pinned : [];
       document.querySelectorAll('.pin-checkbox').forEach((cb) => {
         cb.checked = pinned.includes(cb.dataset.setting);
+        if (!cb.dataset.bound) {
+          cb.dataset.bound = 'true';
+          cb.addEventListener('change', handlePinToggle);
+        }
       });
     } catch (err) {
       console.warn('Could not load admin settings:', err);
