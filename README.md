@@ -179,8 +179,8 @@ Detailed deployment instructions are documented in [docs/DEPLOYMENT.md](docs/DEP
 ## 🏗️ Architecture
 
 ```mermaid
-graph TD
-    Client(["Browser / Desktop Launcher"]) <-->|HTTPS| RP["Reverse Proxy (Nginx / Caddy)"]
+flowchart TD
+    Client["Browser / Desktop Launcher"] <-->|HTTPS| RP["Reverse Proxy (Nginx / Caddy)"]
     RP <-->|HTTP Stream| Backend["FastAPI Backend"]
 
     subgraph SecurityDefense["Security Defense Stack"]
@@ -196,13 +196,13 @@ graph TD
 
     subgraph AudioEngine["Audio Engine"]
         direction TB
-        Mutagen["Mutagen MP3/M4A/WAV Engine"]
+        Mutagen["Mutagen MP3 / M4A / WAV Engine"]
         Pillow["Uploaded Image Normalization"]
     end
 
     Backend --> CSRF
     Backend --> Mutagen
-    Quota --> Storage[("Decoupled Hashed Storage (POSIX 0700)")]
+    Quota --> Storage[("Decoupled Hashed Storage POSIX 0700")]
 ```
 
 For in-depth technical documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md), and [docs/SUNO_TOS_COMPLIANCE.md](docs/SUNO_TOS_COMPLIANCE.md).
