@@ -272,6 +272,28 @@ When configuring a public domain or reverse proxy hostname using `./install.sh -
 
 ---
 
+### Reverse Proxy Access Lists & HTTP Basic Auth (Known Issue in Older Versions)
+
+If you run MP3MetaFix behind a reverse proxy configured with an **Access List** or **HTTP Basic Auth** (such as Nginx Proxy Manager Access Lists):
+
+> [!WARNING]
+> **Upload Stalling in Versions $\le$ 0.5.1**:
+> In versions `0.5.1` and earlier, the web editor in `/app` attempted an unauthenticated background update check (`GET /api/updates/check`) on page load. Because software update checks are restricted to administrators, the backend responded with `HTTP 401 Unauthorized`.
+>
+> In certain browser and reverse proxy configurations (particularly when proxy-level HTTP Basic Auth is enabled), receiving a `401 Unauthorized` on this background API call could cause the browser to invalidate its cached proxy authentication credentials or stall subsequent multipart audio uploads.
+
+#### Resolution & Upcoming Fix
+- **Fixed in Development / Upcoming Release**: The unauthenticated background update check has been completely removed from `/app` and isolated exclusively to authenticated administrators visiting `/admin`.
+- **For Older Installations**: If you experience stalled audio uploads when protected by a reverse proxy access list:
+  1. **Option A (Recommended)**: Upgrade to the latest development build via CLI:
+     ```bash
+     cd /opt/mp3metafix
+     sudo ./install.sh --update --dev
+     ```
+  2. **Option B**: Temporarily disable the proxy-level Access List for the MP3MetaFix domain (or configure internal IP bypass) until upgrading to the next stable release.
+
+---
+
 ## 5. Updates, Upgrades & Service-Account Migration
 
 ### Fresh Installations vs. Upgrading Existing Installations

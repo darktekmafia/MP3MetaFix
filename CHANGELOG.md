@@ -29,6 +29,7 @@ Historical release entries describe what was recorded at the time. Security comp
 ### Documentation
 - Documented clear comparison between fresh installations (automatic `mp3metafix` system account creation) and legacy upgrades (explicit `--check-account` and `--migrate-account` steps) in `docs/DEPLOYMENT.md` and `docs/ACCOUNT_MIGRATION.md`.
 - Added verified step-by-step migration, health inspection, and rollback instructions for Proxmox LXC and Linux servers.
+- Documented troubleshooting and theoretical root cause for upload stalling behind reverse proxy access lists (HTTP Basic Auth) on versions $\le$ 0.5.1 along with workarounds and upcoming release fixes in `docs/DEPLOYMENT.md`.
 - Require planned audio fingerprinting and duplicate detection to be read-only, preserve source bytes and provenance markers, and store analysis separately. No application or version change.
 - Synchronize development with the tested account-migration work and current documentation; main remains limited to explicitly approved release updates.
 - Record the read-only LXC/NPM comparison and remaining browser authentication uncertainty.
