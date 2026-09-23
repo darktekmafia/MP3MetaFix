@@ -13,6 +13,7 @@ Historical release entries describe what was recorded at the time. Security comp
 - Verified live account migration on Ubuntu 24.04 Proxmox LXC container and Fedora workstation, transitioning services from root / desktop user units to the dedicated unprivileged `mp3metafix` system account with `0700` data isolation at `/var/lib/mp3metafix` and verified health.
 
 ### Fixed
+- Fixed authenticated user dropdown menu rendering behind editor toolbar and main content by establishing explicit stacking contexts (`position: relative; z-index: 50;`) on `.app-header` and `.hub-header` with elevated z-index on `.header-auth-container`.
 - Eliminated guest/unauthenticated update checks from `/app` and client script startup, confining `/api/updates/check` exclusively to authenticated administrator use in `/admin`. This eliminates unauthenticated `401 Unauthorized` responses that invalidated cached HTTP Basic Auth credentials behind reverse proxies (Nginx Proxy Manager) during file uploads.
 - Enforce strict `origin main` release updates in `install.sh` with branch guards on `main`, fast-forward (`--ff-only`) verification, clear failure handling, and complete removal of the plain `git pull` fallback.
 - Verified the corrected migration/retry, installer hardening, and guest update check elimination with 131 passing tests; four existing/expected warnings remain.

@@ -129,6 +129,8 @@ button {
 
 /* App Header */
 .app-header {
+  position: relative;
+  z-index: 50;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -2114,7 +2116,7 @@ button {
 
 .hub-header {
   position: relative;
-  z-index: 10;
+  z-index: 50;
   margin-bottom: 2.5rem;
 }
 
@@ -3651,6 +3653,7 @@ button {
 /* Header Auth Widget */
 .header-auth-container {
   position: relative;
+  z-index: 55;
   display: inline-flex;
   align-items: center;
 }
@@ -3743,6 +3746,7 @@ button {
   top: calc(100% + 8px);
   right: 0;
   min-width: 210px;
+  max-width: calc(100vw - 24px);
   background: rgba(15, 23, 42, 0.95);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
