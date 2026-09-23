@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Historical release entries describe what was recorded at the time. Security completion claims in older entries are superseded by the [2026-09-20 audit](docs/SECURITY_AUDIT_2026-09-20.md); see the [v0.5.1 remediation status](docs/SECURITY_REMEDIATION_2026-09-21.md) for subsequent fixes and deployment exceptions.
 
-## [Unreleased]
+## [0.5.2] - 2026-09-23
 
 ### Deployment
 - Verified live account migration on Ubuntu 24.04 Proxmox LXC container and Fedora workstation, transitioning services from root / desktop user units to the dedicated unprivileged `mp3metafix` system account with `0700` data isolation at `/var/lib/mp3metafix` and verified health.

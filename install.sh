@@ -16,7 +16,7 @@ VERSION_FILE="${INSTALL_DIR}/VERSION"
 if [ -f "$VERSION_FILE" ]; then
     VERSION="$(cat "$VERSION_FILE" | tr -d '[:space:]')"
 else
-    VERSION="0.5.2-dev"
+    VERSION="0.5.2"
 fi
 TARGET_BRANCH="main"
 

@@ -1,6 +1,6 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.5.1-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.5.2-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 
@@ -8,11 +8,9 @@
 
 ---
 
-## Current status — v0.5.1
+## Current status — v0.5.2
 
-The editor supports MP3, M4A (AAC/ALAC/Opus), and WAV. MP3/WAV and synthetic AAC M4A checks pass; the reported real Suno M4A failure was resolved by accepting Opus-in-MP4. See the [roadmap](ROADMAP.md) for planned features.
-
-The [v0.5.1 security remediation report](docs/SECURITY_REMEDIATION_2026-09-21.md) records verified fixes for artwork serving, upload admission, account recovery/revocation, updater locking, and outbound fetching. The local workstation now runs a verified dedicated-account system service with read-only application mounts; general installer account migration remains planned. Sign in again after upgrading. Where enabled, web updates install files and require a local service restart. They are disabled on the migrated read-only workstation deployment.
+The editor supports MP3, M4A (AAC/ALAC/Opus), and WAV with full ID3 and RIFF INFO tag preservation. The v0.5.2 release introduces configurable Suno AI detection and metadata sync, customizable Quick Settings modal pinning from the Admin Dashboard, dedicated systemd unprivileged service account migration (`mp3metafix`), and automated reverse proxy configuration support. See the [roadmap](ROADMAP.md) for planned features.
 
 ## ✨ Features
 
