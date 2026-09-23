@@ -2405,6 +2405,33 @@ def test_guest_mode_vs_protected_mode_enforcement(unauth_client, auth_client, sa
     assert auth_manager.is_guest_mode_enabled() is False
 
 
+def test_quick_settings_pinned_persistence(auth_client, unauth_client):
+    """Verify quick_settings_pinned default retrieval, update, sanitization, and role guards."""
+    # 1. Default pinned settings
+    res = auth_client.get("/api/settings")
+    assert res.status_code == 200
+    data = res.json()
+    assert "quick_settings_pinned" in data
+    assert isinstance(data["quick_settings_pinned"], list)
+    assert "guest_mode_enabled" in data["quick_settings_pinned"]
+
+    # 2. Update pinned settings as admin
+    new_pins = ["session_ttl_minutes", "max_upload_size_mb", "invalid_key"]
+    res_up = auth_client.post("/api/settings", json={"quick_settings_pinned": new_pins})
+    assert res_up.status_code == 200
+
+    # 3. Verify updated and sanitized
+    res_get = auth_client.get("/api/settings")
+    assert res_get.status_code == 200
+    pinned = res_get.json()["quick_settings_pinned"]
+    assert "session_ttl_minutes" in pinned
+    assert "max_upload_size_mb" in pinned
+    assert "invalid_key" not in pinned
+
+    # 4. Unauthenticated client cannot update
+    assert unauth_client.post("/api/settings", json={"quick_settings_pinned": ["guest_mode_enabled"]}).status_code == 401
+
+
 
 
 

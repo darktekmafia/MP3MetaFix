@@ -346,6 +346,7 @@ async def get_settings(user: Dict[str, Any] = Depends(require_authenticated_user
         "max_global_storage_mb": storage_quota,
         "max_temp_storage_mb": storage_quota,
         "max_sessions": settings.get("max_sessions", 10),
+        "quick_settings_pinned": settings.get("quick_settings_pinned", ["guest_mode_enabled", "max_sessions", "max_global_storage_mb"]),
         "version": VERSION,
         "is_admin": user.get("role") == "admin",
     }

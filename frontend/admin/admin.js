@@ -154,25 +154,41 @@
       const toggleGuest = document.getElementById('adminGuestMode');
       const inputMaxSessions = document.getElementById('adminMaxSessions');
       const inputMaxStorage = document.getElementById('adminMaxStorage');
+      const inputSessionTtl = document.getElementById('adminSessionTtl');
+      const inputMaxUploadSize = document.getElementById('adminMaxUploadSize');
 
       if (toggleGuest) toggleGuest.checked = !!(settings.guest_mode ?? settings.guest_mode_enabled);
       if (inputMaxSessions) inputMaxSessions.value = settings.max_sessions || 10;
       if (inputMaxStorage) inputMaxStorage.value = settings.max_global_storage_mb || settings.max_temp_storage_mb || 2048;
+      if (inputSessionTtl) inputSessionTtl.value = settings.session_ttl_minutes || 60;
+      if (inputMaxUploadSize) inputMaxUploadSize.value = settings.max_upload_size_mb || 150;
+
+      // Populate Quick Settings pin checkboxes
+      const pinned = Array.isArray(settings.quick_settings_pinned) ? settings.quick_settings_pinned : [];
+      document.querySelectorAll('.pin-checkbox').forEach((cb) => {
+        cb.checked = pinned.includes(cb.dataset.setting);
+      });
     } catch (err) {
       console.warn('Could not load admin settings:', err);
     }
   }
 
   async function handleSaveSettings(e) {
-    e.preventDefault();
+    if (e) e.preventDefault();
     const toggleGuest = document.getElementById('adminGuestMode');
     const inputMaxSessions = document.getElementById('adminMaxSessions');
     const inputMaxStorage = document.getElementById('adminMaxStorage');
+    const inputSessionTtl = document.getElementById('adminSessionTtl');
+    const inputMaxUploadSize = document.getElementById('adminMaxUploadSize');
     const submitBtn = document.getElementById('btnSaveAdminSettings');
 
     const isGuest = toggleGuest ? toggleGuest.checked : false;
     const maxStorage = inputMaxStorage ? parseInt(inputMaxStorage.value, 10) : 2048;
     const maxSessions = inputMaxSessions ? parseInt(inputMaxSessions.value, 10) : 10;
+    const sessionTtl = inputSessionTtl ? parseInt(inputSessionTtl.value, 10) : 60;
+    const maxUploadSize = inputMaxUploadSize ? parseInt(inputMaxUploadSize.value, 10) : 150;
+
+    const pinnedList = Array.from(document.querySelectorAll('.pin-checkbox:checked')).map((cb) => cb.dataset.setting);
 
     const payload = {
       guest_mode_enabled: isGuest,
@@ -180,6 +196,9 @@
       max_global_storage_mb: maxStorage,
       max_temp_storage_mb: maxStorage,
       max_sessions: maxSessions,
+      session_ttl_minutes: sessionTtl,
+      max_upload_size_mb: maxUploadSize,
+      quick_settings_pinned: pinnedList,
     };
 
     if (submitBtn) submitBtn.disabled = true;
@@ -193,7 +212,7 @@
       const data = await res.json();
 
       if (res.ok) {
-        notify('System policies and quotas updated successfully', 'success');
+        notify('System policies and quick settings updated successfully', 'success');
       } else {
         notify(data.detail || 'Failed to update system policies', 'error');
       }

@@ -3970,6 +3970,109 @@ input:focus-visible + .switch-slider {
   gap: 0.9rem;
 }
 
+/* Quick Settings Pin Toggle Badge */
+.quick-pin-toggle {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.quick-pin-toggle input.pin-checkbox {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.quick-pin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: all var(--transition-fast);
+}
+
+.quick-pin-toggle input.pin-checkbox:checked + .quick-pin-badge {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #a5b4fc;
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.25);
+}
+
+.quick-pin-toggle:hover .quick-pin-badge {
+  border-color: rgba(255, 255, 255, 0.25);
+  color: var(--text-main);
+}
+
+.quick-pin-toggle input.pin-checkbox:checked:hover + .quick-pin-badge {
+  background: rgba(99, 102, 241, 0.3);
+  color: #fff;
+}
+
+.quick-pin-badge svg {
+  color: var(--accent-cyan);
+}
+
+.form-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+
+.form-group-header .form-label {
+  margin-bottom: 0;
+}
+
+.quick-settings-footer-link {
+  display: flex;
+  justify-content: center;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.quick-settings-footer-link a {
+  color: var(--accent-cyan);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: color var(--transition-fast);
+}
+
+.quick-settings-footer-link a:hover {
+  color: #fff;
+  text-decoration: underline;
+}
+
+.quick-settings-empty {
+  padding: 1.25rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+  line-height: 1.5;
+}
+
+.quick-settings-empty a {
+  color: var(--accent-cyan);
+  text-decoration: underline;
+}
+
 @media (max-width: 480px) {
   .auth-username {
     max-width: 70px;

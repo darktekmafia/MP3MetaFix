@@ -411,17 +411,61 @@
         const toggleGuest = document.getElementById('settingGuestMode');
         const inputMaxSessions = document.getElementById('settingMaxSessions');
         const inputMaxStorage = document.getElementById('settingMaxStorage');
+        const inputSessionTtl = document.getElementById('settingSessionTtl');
+        const inputMaxUploadSize = document.getElementById('settingMaxUploadSize');
         const adminSection = document.getElementById('settingsAdminSection');
+        const formSystemSettings = document.getElementById('formSystemSettings');
+        const emptyNotice = document.getElementById('quickSettingsEmptyNotice');
+        const adminLink = document.getElementById('quickSettingsAdminLink');
 
-        if (toggleGuest) toggleGuest.checked = !!(settings.guest_mode ?? settings.guest_mode_enabled);
+        if (toggleGuest) toggleGuest.checked = !!(settings.guest_mode_enabled ?? settings.guest_mode);
         if (inputMaxSessions) inputMaxSessions.value = settings.max_sessions || 10;
         if (inputMaxStorage) inputMaxStorage.value = settings.max_global_storage_mb || settings.max_temp_storage_mb || 2048;
+        if (inputSessionTtl) inputSessionTtl.value = settings.session_ttl_minutes || 60;
+        if (inputMaxUploadSize) inputMaxUploadSize.value = settings.max_upload_size_mb || 150;
+
+        const pinned = Array.isArray(settings.quick_settings_pinned)
+          ? settings.quick_settings_pinned
+          : ['guest_mode_enabled', 'max_sessions', 'max_global_storage_mb'];
+
+        const guestBlock = document.getElementById('settingBlock_guest_mode_enabled');
+        const limitsBlock = document.getElementById('settingBlock_limits');
+        const maxSessionsBlock = document.getElementById('settingBlock_max_sessions');
+        const maxStorageBlock = document.getElementById('settingBlock_max_global_storage_mb');
+        const sessionTtlBlock = document.getElementById('settingBlock_session_ttl_minutes');
+        const maxUploadBlock = document.getElementById('settingBlock_max_upload_size_mb');
+
+        const hasGuest = pinned.includes('guest_mode_enabled');
+        const hasSessions = pinned.includes('max_sessions');
+        const hasStorage = pinned.includes('max_global_storage_mb');
+        const hasTtl = pinned.includes('session_ttl_minutes');
+        const hasUpload = pinned.includes('max_upload_size_mb');
+        const hasAnyLimit = hasSessions || hasStorage || hasTtl || hasUpload;
+
+        if (guestBlock) guestBlock.classList.toggle('hidden', !hasGuest);
+        if (maxSessionsBlock) maxSessionsBlock.classList.toggle('hidden', !hasSessions);
+        if (maxStorageBlock) maxStorageBlock.classList.toggle('hidden', !hasStorage);
+        if (sessionTtlBlock) sessionTtlBlock.classList.toggle('hidden', !hasTtl);
+        if (maxUploadBlock) maxUploadBlock.classList.toggle('hidden', !hasUpload);
+        if (limitsBlock) limitsBlock.classList.toggle('hidden', !hasAnyLimit);
+
+        const hasAnyPinned = hasGuest || hasAnyLimit;
+        if (emptyNotice) emptyNotice.classList.toggle('hidden', hasAnyPinned);
+        if (formSystemSettings) formSystemSettings.classList.toggle('hidden', !hasAnyPinned);
 
         if (adminSection) {
           if (AuthState.role === 'admin') {
             adminSection.classList.remove('hidden');
           } else {
             adminSection.classList.add('hidden');
+          }
+        }
+
+        if (adminLink) {
+          if (AuthState.role === 'admin') {
+            adminLink.classList.remove('hidden');
+          } else {
+            adminLink.classList.add('hidden');
           }
         }
       }
@@ -442,11 +486,15 @@
     const toggleGuest = document.getElementById('settingGuestMode');
     const inputMaxSessions = document.getElementById('settingMaxSessions');
     const inputMaxStorage = document.getElementById('settingMaxStorage');
+    const inputSessionTtl = document.getElementById('settingSessionTtl');
+    const inputMaxUpload = document.getElementById('settingMaxUploadSize');
     const submitBtn = document.getElementById('btnSaveSettings');
 
     const isGuest = toggleGuest ? toggleGuest.checked : false;
     const maxStorage = inputMaxStorage ? parseInt(inputMaxStorage.value, 10) : 2048;
     const maxSessions = inputMaxSessions ? parseInt(inputMaxSessions.value, 10) : 10;
+    const sessionTtl = inputSessionTtl ? parseInt(inputSessionTtl.value, 10) : 60;
+    const maxUpload = inputMaxUpload ? parseInt(inputMaxUpload.value, 10) : 150;
 
     const payload = {
       guest_mode_enabled: isGuest,
@@ -454,6 +502,8 @@
       max_global_storage_mb: maxStorage,
       max_temp_storage_mb: maxStorage,
       max_sessions: maxSessions,
+      session_ttl_minutes: sessionTtl,
+      max_upload_size_mb: maxUpload,
     };
 
     if (submitBtn) submitBtn.disabled = true;
@@ -467,7 +517,7 @@
       const data = await res.json();
 
       if (res.ok) {
-        notify('System settings updated successfully', 'success');
+        notify('Quick Settings updated successfully', 'success');
         AuthState.guestMode = isGuest;
         renderHeaderAuth();
       } else {

@@ -25,6 +25,7 @@ Historical release entries describe what was recorded at the time. Security comp
 - Renamed user dropdown and popup modal item "Settings & Security" to "Quick Settings" to prepare for customizable quick-setting toggles pinned from the Admin Dashboard.
 
 ### Added
+- Dynamic "Quick Settings" customization system: administrators can pin/unpin individual configuration settings (`guest_mode_enabled`, `max_sessions`, `max_global_storage_mb`, `session_ttl_minutes`, `max_upload_size_mb`) directly from the Admin Dashboard via "⚡ Quick Settings" pin toggles, dynamically surfacing them in the Quick Settings modal across all app pages.
 - Generalized service-account migration and preflight checks in `scripts/migrate_local_account.py` and `install.sh` (`--check-account`, `--migrate-account`, `--retry-account`, `--rollback-account`) supporting both desktop user services and existing system services.
 - Hardened service creation in `install.sh` to automatically create and bind to dedicated non-login `mp3metafix` system account with `0700` data isolation.
 - Deployment policy `MP3METAFIX_ALLOW_WEB_UPDATES` to disable in-app installation for read-only code deployments, with an explanatory admin UI label.

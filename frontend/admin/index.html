@@ -262,7 +262,16 @@
             <!-- Guest Mode Switch -->
             <div class="settings-row" style="padding-bottom: 1.25rem; border-bottom: 1px solid var(--border-subtle);">
               <div class="settings-label-group">
-                <span class="settings-label" style="font-size: 1.05rem; font-weight: 600;">Enable Guest Mode for Public Access (/ and /app)</span>
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;">
+                  <span class="settings-label" style="font-size: 1.05rem; font-weight: 600;">Enable Guest Mode for Public Access (/ and /app)</span>
+                  <label class="quick-pin-toggle" title="Pin to Quick Settings modal">
+                    <input type="checkbox" class="pin-checkbox" data-setting="guest_mode_enabled" id="pin_guest_mode_enabled">
+                    <span class="quick-pin-badge">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                      <span>Quick Settings</span>
+                    </span>
+                  </label>
+                </div>
                 <span class="settings-subtext">When enabled, visitors can explore the Gateway Hub (/) and use MP3MetaFix (/app) without logging in. MP3MetaManager (/manager), Live Telemetry, and Admin settings remain protected.</span>
               </div>
               <label class="toggle-switch" aria-label="Toggle Guest Mode">
@@ -274,14 +283,63 @@
             <!-- Concurrency & Quota Grid -->
             <div class="settings-inputs-grid" style="margin-top: 1.25rem;">
               <div class="form-group">
-                <label for="adminMaxSessions" class="form-label">Max Active File Sessions</label>
+                <div class="form-group-header">
+                  <label for="adminMaxSessions" class="form-label">Max Active File Sessions</label>
+                  <label class="quick-pin-toggle" title="Pin to Quick Settings modal">
+                    <input type="checkbox" class="pin-checkbox" data-setting="max_sessions" id="pin_max_sessions">
+                    <span class="quick-pin-badge">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                      <span>Quick</span>
+                    </span>
+                  </label>
+                </div>
                 <input type="number" id="adminMaxSessions" class="form-input" min="1" max="100" value="10">
                 <span class="settings-subtext">Concurrency limit for simultaneous audio editing sessions</span>
               </div>
+
               <div class="form-group">
-                <label for="adminMaxStorage" class="form-label">Global Temp Storage Quota (MB)</label>
+                <div class="form-group-header">
+                  <label for="adminMaxStorage" class="form-label">Global Storage Quota (MB)</label>
+                  <label class="quick-pin-toggle" title="Pin to Quick Settings modal">
+                    <input type="checkbox" class="pin-checkbox" data-setting="max_global_storage_mb" id="pin_max_global_storage_mb">
+                    <span class="quick-pin-badge">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                      <span>Quick</span>
+                    </span>
+                  </label>
+                </div>
                 <input type="number" id="adminMaxStorage" class="form-input" min="100" max="20480" value="2048">
                 <span class="settings-subtext">Maximum disk allocation for cached audio before LRU pruning</span>
+              </div>
+
+              <div class="form-group">
+                <div class="form-group-header">
+                  <label for="adminSessionTtl" class="form-label">Inactivity Session TTL (Min)</label>
+                  <label class="quick-pin-toggle" title="Pin to Quick Settings modal">
+                    <input type="checkbox" class="pin-checkbox" data-setting="session_ttl_minutes" id="pin_session_ttl_minutes">
+                    <span class="quick-pin-badge">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                      <span>Quick</span>
+                    </span>
+                  </label>
+                </div>
+                <input type="number" id="adminSessionTtl" class="form-input" min="5" max="1440" value="60">
+                <span class="settings-subtext">Duration before idle editing sessions expire automatically</span>
+              </div>
+
+              <div class="form-group">
+                <div class="form-group-header">
+                  <label for="adminMaxUploadSize" class="form-label">Max Upload Size (MB)</label>
+                  <label class="quick-pin-toggle" title="Pin to Quick Settings modal">
+                    <input type="checkbox" class="pin-checkbox" data-setting="max_upload_size_mb" id="pin_max_upload_size_mb">
+                    <span class="quick-pin-badge">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                      <span>Quick</span>
+                    </span>
+                  </label>
+                </div>
+                <input type="number" id="adminMaxUploadSize" class="form-input" min="10" max="2048" value="150">
+                <span class="settings-subtext">Maximum single upload limit for audio files</span>
               </div>
             </div>
 

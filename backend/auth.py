@@ -168,6 +168,10 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
+DEFAULT_PINNED_SETTINGS = ["guest_mode_enabled", "max_sessions", "max_global_storage_mb"]
+ALLOWED_PINNABLE_SETTINGS = {"guest_mode_enabled", "max_sessions", "max_global_storage_mb", "session_ttl_minutes", "max_upload_size_mb"}
+
+
 class SettingsUpdateRequest(BaseModel):
     guest_mode_enabled: Optional[bool] = None
     guest_mode: Optional[bool] = None
@@ -176,6 +180,7 @@ class SettingsUpdateRequest(BaseModel):
     max_global_storage_mb: Optional[int] = Field(default=None, ge=100, le=102400)
     max_temp_storage_mb: Optional[int] = Field(default=None, ge=100, le=102400)
     max_sessions: Optional[int] = Field(default=None, ge=1, le=1000)
+    quick_settings_pinned: Optional[List[str]] = None
 
 
 # --- Authentication & Settings Manager ---
@@ -215,6 +220,7 @@ class AuthManager:
                 "session_ttl_minutes": SESSION_TTL_MINUTES,
                 "max_upload_size_mb": MAX_UPLOAD_SIZE_MB,
                 "max_global_storage_mb": MAX_GLOBAL_TEMP_STORAGE_MB,
+                "quick_settings_pinned": list(DEFAULT_PINNED_SETTINGS),
                 "updated_at": int(time.time()),
             }
             self._save_settings(default_settings)
@@ -281,24 +287,24 @@ class AuthManager:
                 return
 
     def _load_settings(self) -> Dict[str, Any]:
+        default_res = {
+            "guest_mode_enabled": False,
+            "session_ttl_minutes": SESSION_TTL_MINUTES,
+            "max_upload_size_mb": MAX_UPLOAD_SIZE_MB,
+            "max_global_storage_mb": MAX_GLOBAL_TEMP_STORAGE_MB,
+            "quick_settings_pinned": list(DEFAULT_PINNED_SETTINGS),
+        }
         if not self.settings_file.exists():
-            return {
-                "guest_mode_enabled": False,
-                "session_ttl_minutes": SESSION_TTL_MINUTES,
-                "max_upload_size_mb": MAX_UPLOAD_SIZE_MB,
-                "max_global_storage_mb": MAX_GLOBAL_TEMP_STORAGE_MB,
-            }
+            return default_res
         try:
             with open(self.settings_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if not isinstance(data.get("quick_settings_pinned"), list):
+                    data["quick_settings_pinned"] = list(DEFAULT_PINNED_SETTINGS)
+                return data
         except Exception as e:
             logger.error(f"Error reading settings file: {e}")
-            return {
-                "guest_mode_enabled": False,
-                "session_ttl_minutes": SESSION_TTL_MINUTES,
-                "max_upload_size_mb": MAX_UPLOAD_SIZE_MB,
-                "max_global_storage_mb": MAX_GLOBAL_TEMP_STORAGE_MB,
-            }
+            return default_res
 
     def _save_settings(self, settings: Dict[str, Any]):
         atomic_json(self.settings_file, settings)
@@ -402,6 +408,12 @@ class AuthManager:
             updates["guest_mode_enabled"] = updates["guest_mode"]
         if "max_temp_storage_mb" in updates and updates["max_temp_storage_mb"] is not None:
             updates["max_global_storage_mb"] = updates["max_temp_storage_mb"]
+        if "quick_settings_pinned" in updates and updates["quick_settings_pinned"] is not None:
+            sanitized_pins = []
+            for item in updates["quick_settings_pinned"]:
+                if isinstance(item, str) and item in ALLOWED_PINNABLE_SETTINGS and item not in sanitized_pins:
+                    sanitized_pins.append(item)
+            updates["quick_settings_pinned"] = sanitized_pins
 
         for k, v in updates.items():
             if v is not None:

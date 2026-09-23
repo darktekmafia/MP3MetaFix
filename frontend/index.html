@@ -290,7 +290,7 @@
         <div id="settingsAdminSection" class="settings-admin-wrapper">
           <form id="formSystemSettings" class="settings-form">
             <!-- Access & Guest Mode Card -->
-            <div class="settings-section-card">
+            <div id="settingBlock_guest_mode_enabled" class="settings-section-card">
               <div class="settings-section-header">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
                 <span>Guest Mode & Public Access Policy</span>
@@ -298,7 +298,7 @@
               <div class="settings-row">
                 <div class="settings-label-group">
                   <span class="settings-label">Enable Guest Mode for Public Access (/ and /app)</span>
-                  <span class="settings-subtext">When enabled, visitors can explore the Gateway Hub and use MP3MetaFix (/app) without logging in. MP3MetaManager (/manager) and Administrative Diagnostics/Settings remain restricted to logged-in accounts.</span>
+                  <span class="settings-subtext">When enabled, visitors can explore the Gateway Hub and use MP3MetaFix (/app) without logging in.</span>
                 </div>
                 <label class="toggle-switch" aria-label="Toggle Guest Mode">
                   <input type="checkbox" id="settingGuestMode">
@@ -308,32 +308,46 @@
             </div>
 
             <!-- Session & Storage Quota Card -->
-            <div class="settings-section-card" style="margin-top: 1rem;">
+            <div id="settingBlock_limits" class="settings-section-card" style="margin-top: 1rem;">
               <div class="settings-section-header">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
                 <span>Session & Storage Limits</span>
               </div>
               <div class="settings-inputs-grid">
-                <div class="form-group">
+                <div id="settingBlock_max_sessions" class="form-group">
                   <label for="settingMaxSessions" class="form-label">Max Active Sessions</label>
                   <input type="number" id="settingMaxSessions" class="form-input" min="1" max="100" value="10">
                   <span class="settings-subtext">Concurrency limit for active track sessions</span>
                 </div>
-                <div class="form-group">
-                  <label for="settingMaxStorage" class="form-label">Max Temp Storage Quota (MB)</label>
+                <div id="settingBlock_max_global_storage_mb" class="form-group">
+                  <label for="settingMaxStorage" class="form-label">Storage Quota (MB)</label>
                   <input type="number" id="settingMaxStorage" class="form-input" min="100" max="20480" value="2048">
                   <span class="settings-subtext">Total disk quota for audio caching</span>
                 </div>
+                <div id="settingBlock_session_ttl_minutes" class="form-group">
+                  <label for="settingSessionTtl" class="form-label">Session TTL (Min)</label>
+                  <input type="number" id="settingSessionTtl" class="form-input" min="5" max="1440" value="60">
+                  <span class="settings-subtext">Inactivity expiration duration</span>
+                </div>
+                <div id="settingBlock_max_upload_size_mb" class="form-group">
+                  <label for="settingMaxUploadSize" class="form-label">Max Upload (MB)</label>
+                  <input type="number" id="settingMaxUploadSize" class="form-input" min="10" max="2048" value="150">
+                  <span class="settings-subtext">Maximum single audio upload size</span>
+                </div>
               </div>
 
-              <div style="display: flex; justify-content: flex-end; margin-top: 0.5rem;">
+              <div id="settingBlock_saveBtn" style="display: flex; justify-content: flex-end; margin-top: 0.5rem;">
                 <button type="submit" class="btn btn-primary btn-sm" id="btnSaveSettings">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
-                  <span>Save System Settings</span>
+                  <span>Save Quick Settings</span>
                 </button>
               </div>
             </div>
           </form>
+
+          <div id="quickSettingsEmptyNotice" class="quick-settings-empty hidden">
+            No system settings are currently pinned to Quick Settings. You can pin settings from the <a href="/admin">Admin Dashboard</a>.
+          </div>
         </div>
 
         <!-- Password Change Card -->
@@ -375,6 +389,13 @@
               </button>
             </div>
           </form>
+        </div>
+
+        <div class="quick-settings-footer-link" id="quickSettingsAdminLink">
+          <a href="/admin">
+            <span>Manage all settings in Admin Dashboard</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M5 12h14"></path><polyline points="12 5 19 12 12 19"></polyline></svg>
+          </a>
         </div>
       </div>
     </div>
