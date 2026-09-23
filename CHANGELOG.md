@@ -21,8 +21,10 @@ Historical release entries describe what was recorded at the time. Security comp
 - Added explicit recovery retry that archives earlier destination data, migrates current source data, and preserves repeated rollback backups. The first Fedora live attempt recovered to the working user service after a namespace failure; the corrected retry subsequently completed and was verified.
 
 ### Added
-- Explicit local service-account migration/rollback commands with read-only application mounts, verified private data copying, and failed-start recovery. Privileged live cutover requires local administrator authentication; general system-service migration remains planned.
+- Generalized service-account migration and preflight checks in `scripts/migrate_local_account.py` and `install.sh` (`--check-account`, `--migrate-account`, `--retry-account`, `--rollback-account`) supporting both desktop user services and existing system services.
+- Hardened service creation in `install.sh` to automatically create and bind to dedicated non-login `mp3metafix` system account with `0700` data isolation.
 - Deployment policy `MP3METAFIX_ALLOW_WEB_UPDATES` to disable in-app installation for read-only code deployments, with an explanatory admin UI label.
+- `--dev` / `--development` and `--branch <name>` options in `install.sh --update` for targeting development/testing branches.
 
 ### Documentation
 - Require planned audio fingerprinting and duplicate detection to be read-only, preserve source bytes and provenance markers, and store analysis separately. No application or version change.

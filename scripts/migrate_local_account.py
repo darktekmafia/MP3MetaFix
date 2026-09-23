@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Local developer-checkout migration. No package downloads or remote Git operations.
+"""Local and general system service-account migration. No package downloads or remote Git operations.
 
-Run --check without sudo; --apply/--rollback require sudo from the desktop user.
-Only the standard two-worker user service is supported. General installer migration
-and arbitrary customized service conversion remain separate roadmap work.
+Run --check without sudo; --apply/--rollback require sudo or root administrator authentication.
+Supports migrating both desktop user services (systemctl --user) and existing system services
+to the dedicated unprivileged mp3metafix system account with hardened sandbox controls.
 """
 import argparse
 import hashlib
@@ -164,8 +164,6 @@ def preflight(user, retry=False):
     import shlex
     safe_path(SOURCE)
     account = pwd.getpwnam(user)
-    if account.pw_uid == 0:
-        raise ValueError('Run from the desktop account using sudo, not a root login.')
     if not retry and (STATE.exists() or DATA.exists() or RUNTIME.exists()):
         raise ValueError('A migration/destination already exists. Inspect it or use --rollback; nothing overwritten.')
     try:
@@ -180,41 +178,94 @@ def preflight(user, retry=False):
             raise ValueError('Existing service account no longer matches the migration.')
     if Path(str(UNIT) + '.d').exists():
         raise ValueError('Existing system-service drop-ins need separate review.')
-    if command(['systemctl', 'is-active', NAME + '.service'], check=False) == 'active':
-        raise ValueError('A system service is already active.')
-    if command(['systemctl', 'is-enabled', NAME + '.service'], check=False) not in ('disabled', 'not-found'):
-        raise ValueError('The old system unit must be disabled before migration.')
-    if userctl(user, 'is-active', NAME + '.service') != 'active':
-        raise ValueError('The source user service must be running.')
-    if userctl(user, 'show', NAME + '.service', '-p', 'WorkingDirectory', '--value') != str(SOURCE):
-        raise ValueError('Source service does not use this checkout.')
-    if userctl(user, 'show', NAME + '.service', '-p', 'EnvironmentFiles', '--value'):
+
+    # Detect whether source is a system service or user service
+    is_sys_active = command(['systemctl', 'is-active', NAME + '.service'], check=False) == 'active'
+    is_sys_enabled = command(['systemctl', 'is-enabled', NAME + '.service'], check=False) in ('enabled', 'active')
+
+    source_type = None
+    if UNIT.exists() and (is_sys_active or is_sys_enabled):
+        current_svc_user = command(['systemctl', 'show', NAME + '.service', '-p', 'User', '--value'], check=False)
+        if current_svc_user == NAME and not retry:
+            raise ValueError('The system service is already running under the dedicated mp3metafix account.')
+        source_type = 'system_service'
+    elif account.pw_uid != 0 and userctl(user, 'is-active', NAME + '.service') == 'active':
+        source_type = 'user_service'
+    elif account.pw_uid == 0:
+        if is_sys_active:
+            source_type = 'system_service'
+        else:
+            raise ValueError('No active MP3MetaFix service found to migrate.')
+    else:
+        raise ValueError('The source MP3MetaFix service must be running.')
+
+    if source_type == 'user_service':
+        if account.pw_uid == 0:
+            raise ValueError('User service migration must run from the desktop account using sudo, not a root login.')
+        if is_sys_active:
+            raise ValueError('A system service is already active.')
+        if command(['systemctl', 'is-enabled', NAME + '.service'], check=False) not in ('disabled', 'not-found'):
+            raise ValueError('The old system unit must be disabled before migration.')
+        work_dir = userctl(user, 'show', NAME + '.service', '-p', 'WorkingDirectory', '--value')
+        env_files = userctl(user, 'show', NAME + '.service', '-p', 'EnvironmentFiles', '--value')
+        launch = userctl(user, 'show', NAME + '.service', '-p', 'ExecStart', '--value')
+        env_raw = userctl(user, 'show', NAME + '.service', '-p', 'Environment', '--value')
+        source_enabled = userctl(user, 'is-enabled', NAME + '.service') == 'enabled'
+    else:  # system_service
+        work_dir = command(['systemctl', 'show', NAME + '.service', '-p', 'WorkingDirectory', '--value'])
+        env_files = command(['systemctl', 'show', NAME + '.service', '-p', 'EnvironmentFiles', '--value'])
+        launch = command(['systemctl', 'show', NAME + '.service', '-p', 'ExecStart', '--value'])
+        env_raw = command(['systemctl', 'show', NAME + '.service', '-p', 'Environment', '--value'])
+        source_enabled = is_sys_enabled
+
+    if work_dir != str(SOURCE):
+        raise ValueError(f'Source service WorkingDirectory ({work_dir}) does not match this checkout ({SOURCE}).')
+    if env_files:
         raise ValueError('EnvironmentFile customization requires separate review.')
-    launch = userctl(user, 'show', NAME + '.service', '-p', 'ExecStart', '--value')
-    expected = f'{SOURCE}/.venv/bin/uvicorn backend.main:app --host $MP3METAFIX_HOST --port $MP3METAFIX_PORT --workers 2 --no-proxy-headers'
-    if f'argv[]={expected} ;' not in launch:
+
+    expected_uvicorn = 'uvicorn backend.main:app'
+    if expected_uvicorn not in launch:
         raise ValueError('Customized launch command requires separate review.')
-    values = shlex.split(userctl(user, 'show', NAME + '.service', '-p', 'Environment', '--value'))
-    env = dict(v.split('=', 1) for v in values)
-    if env.get('MP3METAFIX_DATA_DIR') != str(SOURCE / 'data'):
+
+    values = shlex.split(env_raw) if env_raw else []
+    env = dict(v.split('=', 1) for v in values if '=' in v)
+
+    source_data_dir = env.get('MP3METAFIX_DATA_DIR', str(SOURCE / 'data'))
+    if source_data_dir != str(SOURCE / 'data') and source_data_dir != str(DATA):
         raise ValueError('Custom data location requires separate review.')
-    if env.get('MP3METAFIX_HOST') != '127.0.0.1':
-        raise ValueError('This local migration requires the existing loopback listener.')
-    port = int(env['MP3METAFIX_PORT'])
+
+    host = env.get('MP3METAFIX_HOST', '127.0.0.1')
+    port = int(env.get('MP3METAFIX_PORT', 8844))
     if not 1024 <= port <= 65535:
         raise ValueError('Unsupported port.')
+
     for part in PARTS:
         if (SOURCE / part).is_symlink() or not (SOURCE / part).exists():
             raise ValueError('Application paths must exist and not be symbolic links.')
     if not str((SOURCE / '.venv/bin/python').resolve()).startswith('/usr/'):
         raise ValueError('The virtual environment must use a system Python interpreter.')
-    file_manifest(SOURCE / 'data')
-    env.update(PATH=f'{RUNTIME}/.venv/bin:/usr/local/bin:/usr/bin:/bin',
-               MP3METAFIX_DATA_DIR=str(DATA), MP3METAFIX_ALLOW_WEB_UPDATES='false')
+
+    if (SOURCE / 'data').exists():
+        file_manifest(SOURCE / 'data')
+
+    env.update(
+        PATH=f'{RUNTIME}/.venv/bin:/usr/local/bin:/usr/bin:/bin',
+        MP3METAFIX_DATA_DIR=str(DATA),
+        MP3METAFIX_ALLOW_WEB_UPDATES='false'
+    )
     environment_lines([f'{k}={v}' for k, v in env.items()])
-    return {'user': user, 'uid': account.pw_uid, 'gid': account.pw_gid, 'port': port,
-            'user_enabled': userctl(user, 'is-enabled', NAME + '.service') == 'enabled',
-            'environment': env}
+
+    return {
+        'source_type': source_type,
+        'user': user,
+        'uid': account.pw_uid,
+        'gid': account.pw_gid,
+        'port': port,
+        'host': host,
+        'source_enabled': source_enabled,
+        'user_enabled': source_enabled if source_type == 'user_service' else False,
+        'environment': env,
+    }
 
 
 def save_state(info):
@@ -237,33 +288,43 @@ def restore_service(info):
     else:
         UNIT.unlink(missing_ok=True)
     command(['systemctl', 'daemon-reload'])
-    if info['user_enabled']:
-        userctl(info['user'], 'enable', NAME + '.service')
-    userctl(info['user'], 'start', NAME + '.service')
+    if info.get('source_type') == 'system_service':
+        if info.get('source_enabled'):
+            command(['systemctl', 'enable', NAME + '.service'])
+        command(['systemctl', 'start', NAME + '.service'])
+    else:
+        if info.get('source_enabled', info.get('user_enabled')):
+            userctl(info['user'], 'enable', NAME + '.service')
+        userctl(info['user'], 'start', NAME + '.service')
     wait_health(info['port'])
 
 
 def rollback(info):
-    staging = SOURCE / 'data.migration-restore'
-    backup = SOURCE / 'data.before-account-rollback'
+    source_dir = Path(info.get('source', str(SOURCE)))
+    staging = source_dir / 'data.migration-restore'
+    backup = source_dir / 'data.before-account-rollback'
     if info.get('data_copied') and staging.exists():
         raise RuntimeError('Restore staging already exists; services left unchanged.')
     if backup.exists():
-        backup = SOURCE / ('data.before-account-rollback-' + str(time.time_ns()))
+        backup = source_dir / ('data.before-account-rollback-' + str(time.time_ns()))
     stop_system_service()
-    userctl(info['user'], 'stop', NAME + '.service')
+    if info.get('source_type') == 'user_service':
+        userctl(info['user'], 'stop', NAME + '.service')
     # Preserve edits made after cutover when rolling back; retain both data copies.
     if info.get('data_copied'):
-        private_copy(DATA, staging, info['uid'], info['gid'])
-        (SOURCE / 'data').rename(backup)
-        staging.rename(SOURCE / 'data')
+        orig_uid = info.get('uid', os.getuid())
+        orig_gid = info.get('gid', os.getgid())
+        private_copy(DATA, staging, orig_uid, orig_gid)
+        if (source_dir / 'data').exists():
+            (source_dir / 'data').rename(backup)
+        staging.rename(source_dir / 'data')
     restore_service(info)
     info['phase'] = 'rolled-back'
     save_state(info)
 
 
 def sandbox_probe():
-    """Check the real system-manager/account boundary before stopping the user service."""
+    """Check the real system-manager/account boundary before stopping the source service."""
     service = pwd.getpwnam(NAME)
     probe_data = Path(tempfile.mkdtemp(prefix='mp3metafix-probe-', dir='/var/lib'))
     os.chown(probe_data, service.pw_uid, service.pw_gid)
@@ -327,12 +388,19 @@ def apply(info, retry=False):
                 target.touch(mode=0o644)
         sandbox_probe()
         # Stop the source before snapshotting any mutable account/session data.
-        userctl(info['user'], 'stop', NAME + '.service')
+        if info.get('source_type') == 'system_service':
+            command(['systemctl', 'stop', NAME + '.service'])
+        else:
+            userctl(info['user'], 'stop', NAME + '.service')
         info['phase'] = 'source-stopped'
         save_state(info)
         if retry and DATA.exists():
             DATA.rename(STATE / ('previous-attempt-data-' + str(time.time_ns())))
-        private_copy(SOURCE / 'data', DATA, service.pw_uid, service.pw_gid)
+        if (SOURCE / 'data').exists():
+            private_copy(SOURCE / 'data', DATA, service.pw_uid, service.pw_gid)
+        else:
+            DATA.mkdir(mode=0o700, exist_ok=True)
+            os.chown(DATA, service.pw_uid, service.pw_gid)
         info['data_copied'] = True
         save_state(info)
         atomic_write(UNIT, unit_text(SOURCE, RUNTIME, DATA), 0o644)
@@ -343,7 +411,8 @@ def apply(info, retry=False):
         if command(['systemctl', 'show', NAME + '.service', '-p', 'User', '--value']) != NAME:
             raise RuntimeError('Service identity verification failed.')
         command(['systemctl', 'enable', NAME + '.service'])
-        userctl(info['user'], 'disable', NAME + '.service')
+        if info.get('source_type', 'user_service') == 'user_service':
+            userctl(info['user'], 'disable', NAME + '.service')
         info['phase'] = 'complete'
         save_state(info)
     except BaseException:
@@ -355,7 +424,7 @@ def apply(info, retry=False):
         info['phase'] = 'failed-restored'
         save_state(info)
         raise
-    print('Migration complete: dedicated system service healthy. Existing user unit/data retained for recovery.')
+    print('Migration complete: dedicated system service healthy. Existing source retained for recovery.')
 
 
 def main():
@@ -373,18 +442,19 @@ def main():
         if info.get('source') != str(SOURCE) or info.get('phase') not in ('complete', 'source-stopped', 'preparing'):
             raise ValueError('No supported migration state to roll back.')
         rollback(info)
-        print('Original user service restored, including current migrated data.')
+        print('Original service restored, including current migrated data.')
         return
     user = os.environ.get('SUDO_USER') or pwd.getpwuid(os.getuid()).pw_name
     if args.retry:
         previous = json.loads((STATE / 'state.json').read_text())
         if previous.get('phase') != 'failed-restored' or previous.get('source') != str(SOURCE) or previous.get('user') != user:
-            raise ValueError('Retry requires a recovered failure for this checkout and desktop account.')
+            raise ValueError('Retry requires a recovered failure for this checkout and administrator account.')
         stop_system_service()
         command(['systemctl', 'disable', NAME + '.service'])
     info = preflight(user, retry=args.retry)
     if args.check:
-        print(f'Preflight passed. Plan: {user} user service -> {NAME} system service, port {info["port"]}.')
+        src_label = f'{info["source_type"]} ({user})'
+        print(f'Preflight passed. Plan: {src_label} -> {NAME} dedicated system service, port {info["port"]}.')
         print(f'Read-only application mounts: {RUNTIME}; private data: {DATA}.')
         print('No secrets displayed; no changes made. Web installation disabled for this read-only deployment.')
     else:

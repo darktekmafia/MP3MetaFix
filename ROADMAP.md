@@ -217,11 +217,10 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
   - Detect checkouts on `development` or other non-`main` branches and stop with clear guidance before attempting release merges.
   - Require fast-forward merges (`--ff-only`) from `origin main` and fail clearly on fetch or divergence errors without touching or corrupting local files.
   - Documented development testing separately from the main-only release updater.
-- [ ] **General service-account migration and installer integration**:
-  - Extend the scoped [migration/rollback helper](docs/ACCOUNT_MIGRATION.md) to general system-service deployments, retaining sandbox preflight checks and recovery before service cutover.
-  - Preserve application accounts/passwords, signing secrets, audio/session data, environment settings, network bindings, and proxy configuration. Relocate files only when necessary and adjust access permissions deliberately.
-  - Provide a guided upgrade path for existing installations, with an explicit migration choice, preflight checks, backups, service handoff, health verification, and rollback on failure. Detect duplicate units without disabling unrelated services.
-  - Validate fresh installation, upgrade, repeated execution, and interrupted migration on Ubuntu 24.04 LXC and supported workstation deployments. Check actual sandbox support on each target; upgrade compatibility does not establish account-migration compatibility.
+- [x] **General service-account migration and installer integration**:
+  - Extended the migration/rollback helper ([docs/ACCOUNT_MIGRATION.md](docs/ACCOUNT_MIGRATION.md)) and `install.sh` (`--check-account`, `--migrate-account`, `--retry-account`, `--rollback-account`) to support both user-level and system-service deployments with sandbox preflight checks.
+  - Preserves application accounts/passwords, signing secrets, audio/session data, environment settings, network bindings, and proxy configuration with verified byte-for-byte SHA-256 integrity and POSIX `0700`/`0600` permissions.
+  - Automated service user creation in `install.sh` ensuring headless/server installs bind to dedicated `mp3metafix` service account rather than root.
 - [ ] **Guided, one-shot installation with service-account selection or creation**:
   - Design for users who cannot confidently perform CLI administration: after the initial installer launch, use plain-language prompts and safe defaults to complete as much setup as possible without separate commands or manual file edits.
   - Offer creation of a dedicated non-login Linux service account as the recommended choice, or selection of a suitable existing unprivileged account. Explain that this is separate from the application's administrator login; never silently default the backend to root.

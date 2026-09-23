@@ -224,3 +224,136 @@ def test_probe_command_checks_real_identity_and_readonly_mount_without_writing_s
     assert 'os.statvfs' in args[-1]
     assert "open('VERSION'" not in args[-1]
     assert not probe_dir.exists()
+
+
+def test_system_service_migration_and_rollback(prepared):
+    info, calls = prepared
+    info['source_type'] = 'system_service'
+    info['source_enabled'] = True
+    info['user_enabled'] = False
+    migration.apply(info)
+    assert info['phase'] == 'complete'
+    assert (migration.SOURCE / 'data/record').read_text() == 'original'
+    assert (migration.DATA / 'record').read_text() == 'original'
+    assert ['systemctl', 'enable', 'mp3metafix.service'] in calls
+    # User service disable shouldn't be called for system_service source
+    assert ['userctl', 'disable', 'mp3metafix.service'] not in calls
+
+    (migration.DATA / 'record').write_text('system service post-migration data')
+    migration.rollback(info)
+    assert (migration.SOURCE / 'data/record').read_text() == 'system service post-migration data'
+    assert migration.UNIT.read_text() == 'old disabled unit'
+    assert info['phase'] == 'rolled-back'
+
+
+def test_system_service_failed_start_restores_system_service(prepared, monkeypatch):
+    info, calls = prepared
+    info['source_type'] = 'system_service'
+    info['source_enabled'] = True
+    info['user_enabled'] = False
+    attempts = []
+    def health(_):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError('synthetic system service startup failure')
+    monkeypatch.setattr(migration, 'wait_health', health)
+    with pytest.raises(RuntimeError, match='synthetic system service startup failure'):
+        migration.apply(info)
+    assert info['phase'] == 'failed-restored'
+    assert ['systemctl', 'start', 'mp3metafix.service'] in calls
+    assert ['userctl', 'start', 'mp3metafix.service'] not in calls
+    assert migration.UNIT.read_text() == 'old disabled unit'
+    assert (migration.SOURCE / 'data/record').read_text() == 'original'
+    assert (migration.DATA / 'record').read_text() == 'original'
+
+
+def test_preflight_user_service_detection(prepared, monkeypatch):
+    info, calls = prepared
+    # Setup mock commands for preflight
+    def command(args, check=True):
+        if args[:2] == ['systemctl', 'is-active']:
+            return 'inactive'
+        if args[:2] == ['systemctl', 'is-enabled']:
+            return 'disabled'
+        return ''
+    def userctl(user, *args):
+        if len(args) >= 2 and args[0] == 'is-active':
+            return 'active'
+        if len(args) >= 2 and args[0] == 'is-enabled':
+            return 'enabled'
+        if len(args) >= 4 and args[0] == 'show' and args[2] == '-p':
+            prop = args[3]
+            if prop == 'WorkingDirectory':
+                return str(migration.SOURCE)
+            if prop == 'ExecStart':
+                return f'{migration.SOURCE}/.venv/bin/uvicorn backend.main:app --host $MP3METAFIX_HOST --port $MP3METAFIX_PORT --workers 2 --no-proxy-headers'
+            if prop == 'Environment':
+                return 'MP3METAFIX_PORT=8844 MP3METAFIX_HOST=127.0.0.1'
+            if prop == 'EnvironmentFiles':
+                return ''
+        return ''
+
+    monkeypatch.setattr(migration, 'command', command)
+    monkeypatch.setattr(migration, 'userctl', userctl)
+    def mock_getpwnam(name):
+        if name == 'mp3metafix':
+            raise KeyError('not found')
+        return SimpleNamespace(pw_uid=1000, pw_gid=1000, pw_dir='/home/desktop', pw_shell='/bin/bash')
+
+    monkeypatch.setattr(migration.pwd, 'getpwnam', mock_getpwnam)
+    (migration.SOURCE / '.venv/bin').mkdir(parents=True, exist_ok=True)
+    python_bin = migration.SOURCE / '.venv/bin/python'
+    if python_bin.exists() or python_bin.is_symlink():
+        python_bin.unlink()
+    python_bin.symlink_to('/usr/bin/python3')
+
+    # Preflight should detect user_service
+    res = migration.preflight('desktop')
+    assert res['source_type'] == 'user_service'
+    assert res['port'] == 8844
+    assert res['host'] == '127.0.0.1'
+
+
+def test_preflight_system_service_detection(prepared, monkeypatch):
+    info, calls = prepared
+    # Setup mock commands for preflight system service
+    migration.UNIT.write_text('system unit running as root')
+    def command(args, check=True):
+        if len(args) >= 2 and args[:2] == ['systemctl', 'is-active']:
+            return 'active'
+        if len(args) >= 2 and args[:2] == ['systemctl', 'is-enabled']:
+            return 'enabled'
+        if len(args) >= 5 and args[:2] == ['systemctl', 'show'] and args[3] == '-p':
+            prop = args[4]
+            if prop == 'User':
+                return 'root'
+            if prop == 'WorkingDirectory':
+                return str(migration.SOURCE)
+            if prop == 'ExecStart':
+                return f'{migration.SOURCE}/.venv/bin/uvicorn backend.main:app --host $MP3METAFIX_HOST --port $MP3METAFIX_PORT --workers 2 --no-proxy-headers'
+            if prop == 'Environment':
+                return 'MP3METAFIX_PORT=8844 MP3METAFIX_HOST=0.0.0.0'
+            if prop == 'EnvironmentFiles':
+                return ''
+        return ''
+
+    monkeypatch.setattr(migration, 'command', command)
+    def mock_getpwnam(name):
+        if name == 'mp3metafix':
+            raise KeyError('not found')
+        return SimpleNamespace(pw_uid=0, pw_gid=0, pw_dir='/root', pw_shell='/bin/bash')
+
+    monkeypatch.setattr(migration.pwd, 'getpwnam', mock_getpwnam)
+    (migration.SOURCE / '.venv/bin').mkdir(parents=True, exist_ok=True)
+    python_bin = migration.SOURCE / '.venv/bin/python'
+    if python_bin.exists() or python_bin.is_symlink():
+        python_bin.unlink()
+    python_bin.symlink_to('/usr/bin/python3')
+
+    # Preflight should detect system_service
+    res = migration.preflight('root')
+    assert res['source_type'] == 'system_service'
+    assert res['port'] == 8844
+    assert res['host'] == '0.0.0.0'
+
+

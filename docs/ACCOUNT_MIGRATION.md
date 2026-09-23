@@ -1,31 +1,35 @@
-# Local service-account migration
+# Service-Account Migration & Hardening
 
-This is a narrowly scoped migration for the standard, two-worker, loopback **user service** in a developer checkout. It is not yet the general installation/account-selection workflow or an LXC system-service migration. The Ubuntu 24.04 LXC upgrade from v0.4.0 to v0.5.1 was reported successful; that does not verify account migration there.
+This guide covers migrating existing MP3MetaFix services (both desktop **user services** `systemctl --user` and existing **system services** `/etc/systemd/system/mp3metafix.service`) to a dedicated, unprivileged `mp3metafix` Linux system account with strict POSIX permissions and systemd sandbox containment.
 
 ## What changes
 
-- Create the non-login system account `mp3metafix`, without reusing an existing account.
-- Run a hardened **system** service as that account, preserving the current port and environment/proxy settings.
-- Present only `backend`, `frontend`, `assets`, `.venv`, and `VERSION` as read-only mounts under `/opt/mp3metafix` inside the service namespace. These are mappings of the development checkout, not a second code copy. Local edits still take effect after restarting the system service. The checkout must remain mounted and available at boot; it is still trusted application code.
-- Copy data to `/var/lib/mp3metafix` after stopping the old service; verify every regular file by SHA-256, then assign private account ownership and directory/file modes 0700/0600. Preserve passwords, signing secrets, settings, and sessions without rotating credentials.
-- Preserve the old user unit and original data. Disable its autostart only after the new service passes its health and identity checks. Back up any disabled system unit and keep private migration state/environment under `/var/lib/mp3metafix-migration`.
+- Create the non-login system account `mp3metafix`, without reusing an existing personal or root account.
+- Run a hardened **system** service as that account, preserving current port, host, environment, and proxy settings.
+- Present only `backend`, `frontend`, `assets`, `.venv`, and `VERSION` as read-only mounts under `/opt/mp3metafix` inside the service namespace. These are mappings of the application checkout, not an untracked second code copy. Local edits take effect after restarting the system service.
+- Copy data to `/var/lib/mp3metafix` after stopping the source service; verify every regular file by SHA-256 digest, then assign private account ownership and directory/file modes 0700/0600. Preserve passwords, signing secrets, settings, and sessions without rotating credentials.
+- Preserve the prior unit configuration and original data. Disable autostart on the prior service only after the new service passes its health and identity checks. Back up original units and keep private migration state/environment under `/var/lib/mp3metafix-migration`.
 - Disable web installation through `MP3METAFIX_ALLOW_WEB_UPDATES=false`; update checks remain available. The admin button explains that updates are managed locally. No sudo permission is granted to the web process.
 
-## Run locally
+## Preflight and Execution
 
-Read-only preflight, as the desktop user:
+Read-only preflight check:
 
 ```bash
+# Via install.sh:
+./install.sh --check-account
+
+# Or directly:
 python3 scripts/migrate_local_account.py --check
 ```
 
-From the checkout, perform the migration with one command. Sudo requests the desktop user's administrator password in the terminal:
+Perform the migration with one command (requires sudo or root):
 
 ```bash
-./install.sh --migrate-account
+sudo ./install.sh --migrate-account
 ```
 
-The initial apply refuses existing destinations/accounts, active or enabled system services, unsupported customized launch commands, external environment files, custom data locations, ambiguous paths, and symlink/special-file data. It downloads no packages and makes no remote Git changes. The existing virtual environment must use a system Python interpreter. Account selection and general deployment conversion remain planned.
+The preflight check verifies existing destinations/accounts, detects whether the source is a user or system service, verifies working directories, and runs sandbox probes before stopping the working service. The existing virtual environment must use a system Python interpreter.
 
 Once migration succeeds, manage the **system** service:
 

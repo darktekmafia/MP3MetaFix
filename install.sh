@@ -54,9 +54,10 @@ show_help() {
     echo "  --update                Pull latest updates and rebuild dependencies"
     echo "  --dev, --development    Target development branch during updates"
     echo "  --branch <BRANCH>       Target a specific git branch during updates"
-    echo "  --migrate-account       Migrate the supported local user service to a dedicated account"
-    echo "  --retry-account         Retry a recovered local migration with fresh sandbox checks"
-    echo "  --rollback-account      Restore that user service with the latest migrated data"
+    echo "  --check-account         Check service preflight status for dedicated account migration"
+    echo "  --migrate-account       Migrate the running service to a dedicated unprivileged account"
+    echo "  --retry-account         Retry a recovered migration with fresh sandbox checks"
+    echo "  --rollback-account      Restore the prior service with the latest migrated data"
     echo "  --uninstall             Remove MP3MetaFix service, desktop launcher, and configs"
     echo "  --status                Check installation and service status"
     echo "  --access                Show network bind address, proxy trust status, and LAN URLs"
@@ -337,6 +338,33 @@ EOF
         log_info "Configuring systemd System Service (/etc/systemd/system/mp3metafix.service)..."
         SERVICE_FILE="/etc/systemd/system/mp3metafix.service"
         TEMP_SERVICE="/tmp/mp3metafix.service"
+
+        # If running as root / in server environment and no specific unprivileged user was specified,
+        # ensure dedicated non-login system service account 'mp3metafix' exists.
+        if [ "$SERVICE_USER" = "root" ] || [ -z "$SERVICE_USER" ]; then
+            if ! id -u mp3metafix >/dev/null 2>&1; then
+                log_info "Creating dedicated system service account 'mp3metafix'..."
+                if [ "$EUID" -eq 0 ]; then
+                    useradd --system --user-group --home-dir /var/lib/mp3metafix --no-create-home --shell /usr/sbin/nologin mp3metafix || true
+                else
+                    sudo useradd --system --user-group --home-dir /var/lib/mp3metafix --no-create-home --shell /usr/sbin/nologin mp3metafix || true
+                fi
+            fi
+            if id -u mp3metafix >/dev/null 2>&1; then
+                SERVICE_USER="mp3metafix"
+            fi
+        fi
+
+        # Ensure data directory has secure ownership and 0700 permissions
+        mkdir -p "${INSTALL_DIR}/data/temp"
+        if [ "$EUID" -eq 0 ]; then
+            chown -R "${SERVICE_USER}:" "${INSTALL_DIR}/data" "${INSTALL_DIR}/.venv" 2>/dev/null || true
+            chmod 0700 "${INSTALL_DIR}/data" 2>/dev/null || true
+        else
+            sudo chown -R "${SERVICE_USER}:" "${INSTALL_DIR}/data" "${INSTALL_DIR}/.venv" 2>/dev/null || true
+            sudo chmod 0700 "${INSTALL_DIR}/data" 2>/dev/null || true
+        fi
+
         sed "s|%USER%|${SERVICE_USER}|g; s|%INSTALL_DIR%|${INSTALL_DIR}|g; s|8844|${TARGET_PORT}|g" "$SERVICE_TEMPLATE" > "$TEMP_SERVICE"
 
         if [ "$EUID" -eq 0 ]; then
@@ -1046,6 +1074,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --install) ACTION="install"; shift ;;
         --update) ACTION="update"; shift ;;
+        --check-account) ACTION="check-account"; shift ;;
         --migrate-account) ACTION="migrate-account"; shift ;;
         --retry-account) ACTION="retry-account"; shift ;;
         --rollback-account) ACTION="rollback-account"; shift ;;
@@ -1147,6 +1176,7 @@ done
 case "$ACTION" in
     install) do_install ;;
     update) do_update ;;
+    check-account) do_account_migration --check ;;
     migrate-account) do_account_migration --apply ;;
     rollback-account) do_account_migration --rollback ;;
     retry-account) do_account_migration --retry ;;

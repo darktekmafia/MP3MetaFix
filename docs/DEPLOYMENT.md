@@ -348,10 +348,10 @@ The server reads environment variables. Configure them in the service environmen
 
 For comprehensive vulnerability analysis, attack surfaces, and defense mechanisms, consult [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md).
 
-## Local account migration (unreleased)
+## Service-account migration (unreleased)
 
-The [local migration procedure](ACCOUNT_MIGRATION.md) adds explicit `--migrate-account`, `--retry-account`, and `--rollback-account` installer actions for the standard developer user service. This is not an automatic upgrade change. Root cutover requires local administrator authentication. The workstation retry completed and its dedicated identity, health, and effective restrictions were verified; retain recovery data until browser editing is confirmed. General existing-system-service migration and installer account selection/creation remain planned.
+The [service-account migration procedure](ACCOUNT_MIGRATION.md) provides `--check-account`, `--migrate-account`, `--retry-account`, and `--rollback-account` installer actions supporting both desktop user services and existing system services. This is not an automatic upgrade change. Privileged cutover requires administrator authentication. The workstation retry completed and its dedicated identity, health, and effective restrictions were verified; retain recovery data until browser editing is confirmed.
 
-The Ubuntu 24.04 testing LXC upgrade from v0.4.0 to v0.5.1 was reported successful. No pre-upgrade snapshot was taken, so that original baseline is not available for a repeat test. Account migration in that LXC has not been tested. Duplicate workstation system-unit disablement was reported completed after the v0.5.1 audit.
+Fresh headless/server installations automatically configure and bind to the dedicated unprivileged `mp3metafix` system account with `0700` data isolation.
 
 The release source is strictly enforced as `origin main`; development testing uses the `development` branch separately. The installer validates that the checkout is on the `main` branch before performing updates, fetches updates explicitly from `origin main`, fast-forwards cleanly (`--ff-only`), and halts with clear errors on failure without falling back to generic `git pull` or overwriting local branches.
