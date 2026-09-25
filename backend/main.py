@@ -132,6 +132,8 @@ app = FastAPI(
     description="Server-side MP3, M4A, and WAV metadata and artwork editor",
     version=VERSION,
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
 )
 
 @app.exception_handler(AuthStoreError)

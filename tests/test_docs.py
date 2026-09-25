@@ -53,4 +53,9 @@ def test_docs_portal_static_page():
     res = client.get("/docs/")
     assert res.status_code == 200
     assert "text/html" in res.headers.get("content-type", "")
-    assert "Documentation Portal" in res.text
+    assert "Documentation & Engineering Portal" in res.text
+    assert "SwaggerUIBundle" not in res.text
+
+    # Also test without trailing slash
+    res2 = client.get("/docs")
+    assert res2.status_code in (200, 307)
