@@ -3143,8 +3143,8 @@ def test_dynamic_runtime_storage_quota_and_session_limits(auth_client, monkeypat
     })
 
 
-def test_installer_existing_service_guard_switches_to_update(tmp_path):
-    """Verify install.sh switches to safe update mode when an existing service is present."""
+def test_installer_existing_service_guard_stops_with_guidance(tmp_path):
+    """Verify install.sh stops safely with command guidance when an existing installation is detected."""
     import subprocess
     source = Path("install.sh").read_text()
     source = source[:source.index("ACTION=\"install\"")]
@@ -3155,12 +3155,16 @@ print_banner() {{ :; }}
 log_warn() {{ echo "WARN: $1"; }}
 log_info() {{ echo "INFO: $1"; }}
 get_active_service_file() {{ echo "/etc/systemd/system/mp3metafix.service:system"; }}
-do_update() {{ echo "UPDATE_EXECUTED"; return 0; }}
+do_update() {{ echo "UPDATE_EXECUTED_UNEXPECTEDLY"; return 0; }}
 FORCE_REINSTALL=false
 do_install
 ''')
     result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0
-    assert "UPDATE_EXECUTED" in result.stdout
+    assert "UPDATE_EXECUTED_UNEXPECTEDLY" not in result.stdout
     assert "Existing MP3MetaFix installation detected" in result.stdout
+    assert "To update MP3MetaFix:" in result.stdout
+    assert "./install.sh --update" in result.stdout
+    assert "./install.sh --reinstall" in result.stdout
+
 

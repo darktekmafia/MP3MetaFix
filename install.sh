@@ -395,18 +395,16 @@ do_install() {
             local existing_svc="${svc_info%%:*}"
             [ -z "$existing_svc" ] && existing_svc="systemd service or environment configuration"
             log_warn "Existing MP3MetaFix installation detected (${existing_svc})."
-            log_info "To prevent overwriting configured network bindings, reverse proxy settings, and sandbox isolation, executing safe update instead..."
-            log_info "(To force a clean reinstall from scratch, run './install.sh --reinstall')"
-            if [ "$TARGET_BRANCH_EXPLICIT" != true ] && [ -d "${INSTALL_DIR}/.git" ]; then
-                local cur_branch
-                cur_branch=$(git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
-                if [ -n "$cur_branch" ] && [ "$cur_branch" != "HEAD" ]; then
-                    TARGET_BRANCH="$cur_branch"
-                fi
-            fi
             echo ""
-            do_update
-            return $?
+            log_info "To protect your configured network bindings, reverse proxy settings, and data,"
+            log_info "the installer will not modify or overwrite your active installation."
+            echo ""
+            echo -e "  • ${BOLD}To update MP3MetaFix:${NC}          Run '${CYAN}./install.sh --update${NC}'"
+            echo -e "  • ${BOLD}To inspect/configure network:${NC}  Run '${CYAN}./install.sh --access${NC}'"
+            echo -e "  • ${BOLD}To check service status:${NC}       Run '${CYAN}./install.sh --status${NC}'"
+            echo -e "  • ${BOLD}To force a clean reinstall:${NC}    Run '${CYAN}./install.sh --reinstall${NC}'"
+            echo ""
+            return 0
         else
             log_warn "Forced reinstall requested (--reinstall/--force). Overwriting service unit configuration..."
         fi
@@ -559,7 +557,7 @@ do_update() {
             CURRENT_BRANCH=$(git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
             if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]; then
                 log_warn "Current git branch is '${CURRENT_BRANCH}', but update target is '${TARGET_BRANCH}'."
-                log_error "To update against '${TARGET_BRANCH}', switch branch first (e.g. 'git checkout ${TARGET_BRANCH}') or specify '--branch ${CURRENT_BRANCH}'."
+                log_error "To update against '${TARGET_BRANCH}', switch branch first (e.g. 'git checkout ${TARGET_BRANCH}') or specify '--branch ${CURRENT_BRANCH}' (or '--dev')."
                 return 1
             fi
 
