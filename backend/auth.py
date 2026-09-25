@@ -106,17 +106,64 @@ def verify_auth_token(
 # --- Sliding-Window Login Rate Limiter ---
 
 class LoginRateLimiter:
-    """Limits failed authentication attempts per client IP to prevent brute-force attacks."""
+    """Limits failed authentication attempts per client IP to prevent brute-force attacks with bounded tracking and auto-purging."""
 
-    def __init__(self, max_attempts: int = 5, window_seconds: int = 60, block_duration_seconds: int = 300):
+    def __init__(
+        self,
+        max_attempts: int = 5,
+        window_seconds: int = 60,
+        block_duration_seconds: int = 300,
+        max_tracked_ips: int = 5000,
+    ):
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
         self.block_duration = block_duration_seconds
+        self.max_tracked_ips = max_tracked_ips
         self.failed_attempts: Dict[str, List[float]] = {}
         self.blocked_until: Dict[str, float] = {}
+        self._last_purge_time: float = time.time()
+
+    def _purge_stale(self, now: float):
+        """Purge expired blocks and stale failure records to prevent memory exhaustion."""
+        # 1. Purge expired blocks
+        expired_blocks = [ip for ip, expiry in self.blocked_until.items() if now >= expiry]
+        for ip in expired_blocks:
+            del self.blocked_until[ip]
+
+        # 2. Purge stale attempt records
+        cutoff = now - self.window_seconds
+        stale_ips = []
+        for ip, timestamps in self.failed_attempts.items():
+            valid_times = [t for t in timestamps if t > cutoff]
+            if not valid_times:
+                stale_ips.append(ip)
+            else:
+                self.failed_attempts[ip] = valid_times
+
+        for ip in stale_ips:
+            del self.failed_attempts[ip]
+
+        # 3. Enforce maximum tracked IPs (LRU/oldest activity eviction)
+        all_ips = set(self.failed_attempts.keys()) | set(self.blocked_until.keys())
+        if len(all_ips) > self.max_tracked_ips:
+            def ip_last_active(ip: str) -> float:
+                last_fail = max(self.failed_attempts.get(ip, [0]))
+                blocked = self.blocked_until.get(ip, 0)
+                return max(last_fail, blocked)
+
+            sorted_ips = sorted(all_ips, key=ip_last_active)
+            to_remove = len(sorted_ips) - (self.max_tracked_ips // 2)
+            for ip in sorted_ips[:to_remove]:
+                self.failed_attempts.pop(ip, None)
+                self.blocked_until.pop(ip, None)
+
+        self._last_purge_time = now
 
     def is_blocked(self, client_ip: str) -> bool:
         now = time.time()
+        if now - self._last_purge_time > 60 or (len(self.failed_attempts) + len(self.blocked_until)) > self.max_tracked_ips:
+            self._purge_stale(now)
+
         # Check if currently in cooldown
         if client_ip in self.blocked_until:
             if now < self.blocked_until[client_ip]:
@@ -135,6 +182,9 @@ class LoginRateLimiter:
 
     def record_failure(self, client_ip: str):
         now = time.time()
+        if now - self._last_purge_time > 60 or (len(self.failed_attempts) + len(self.blocked_until)) > self.max_tracked_ips:
+            self._purge_stale(now)
+
         if client_ip not in self.failed_attempts:
             self.failed_attempts[client_ip] = []
         self.failed_attempts[client_ip].append(now)

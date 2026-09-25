@@ -506,6 +506,44 @@ def test_rate_limiter_purging():
     assert len(limiter.history) <= 5
 
 
+def test_login_rate_limiter_bounded_tracking_and_purging():
+    """Verify LoginRateLimiter bounded IP tracking, auto-purging, and cooldown defenses."""
+    from backend.auth import LoginRateLimiter
+
+    # 1. Normal failure accumulation and cooldown block
+    limiter = LoginRateLimiter(max_attempts=3, window_seconds=1, block_duration_seconds=1, max_tracked_ips=10)
+    assert limiter.is_blocked("192.0.2.1") is False
+
+    limiter.record_failure("192.0.2.1")
+    limiter.record_failure("192.0.2.1")
+    assert limiter.is_blocked("192.0.2.1") is False
+
+    limiter.record_failure("192.0.2.1")
+    assert limiter.is_blocked("192.0.2.1") is True
+
+    # Successful login clears state
+    limiter.record_success("192.0.2.1")
+    assert limiter.is_blocked("192.0.2.1") is False
+    assert "192.0.2.1" not in limiter.failed_attempts
+    assert "192.0.2.1" not in limiter.blocked_until
+
+    # 2. Bounded tracking under simulated many-IP flood attack (memory leak defense)
+    for i in range(30):
+        limiter.record_failure(f"192.0.2.{i}")
+
+    tracked_ips = set(limiter.failed_attempts.keys()) | set(limiter.blocked_until.keys())
+    assert len(tracked_ips) <= 10
+
+    # 3. Expiration and auto-purging of stale attempts and blocks
+    time.sleep(1.1)
+    limiter.record_failure("192.0.2.99")
+    # Previous expired entries should have been purged during the periodic check / bounded enforcement
+    tracked_after = set(limiter.failed_attempts.keys()) | set(limiter.blocked_until.keys())
+    assert len(tracked_after) <= 10
+    assert "192.0.2.99" in tracked_after
+
+
+
 @pytest.mark.anyio
 async def test_asgi_proxy_headers_middleware_chain():
     """Integration test verifying proxy header trust through the actual ASGI middleware stack.
