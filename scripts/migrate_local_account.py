@@ -26,7 +26,7 @@ RUNTIME = Path('/opt/mp3metafix')
 DATA = Path('/var/lib/mp3metafix')
 STATE = Path('/var/lib/mp3metafix-migration')
 UNIT = Path('/etc/systemd/system/mp3metafix.service')
-PARTS = ('backend', 'frontend', 'assets', '.venv', 'VERSION')
+PARTS = ('backend', 'frontend', 'assets', '.venv', 'VERSION', 'docs')
 
 
 def command(args, check=True):

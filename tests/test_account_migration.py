@@ -357,3 +357,24 @@ def test_preflight_system_service_detection(prepared, monkeypatch):
     assert res['host'] == '0.0.0.0'
 
 
+def test_migrate_service_adds_missing_docs_bind(tmp_path):
+    from scripts.migrate_service import migrate_service_content, MigrationStatus
+    source = tmp_path / 'source'
+    runtime = tmp_path / 'runtime'
+    (source / 'docs').mkdir(parents=True)
+    (source / 'backend').mkdir(parents=True)
+
+    content = f"""[Unit]
+Description=MP3MetaFix dedicated service
+
+[Service]
+ExecStart=/usr/bin/env {runtime}/.venv/bin/python -m uvicorn backend.main:app --host $MP3METAFIX_HOST --port $MP3METAFIX_PORT --workers 2 --no-proxy-headers
+BindReadOnlyPaths={source}/backend:{runtime}/backend
+BindReadOnlyPaths={source}/frontend:{runtime}/frontend
+"""
+    new_content, status, err = migrate_service_content(content)
+    assert status == MigrationStatus.CHANGED
+    assert f"BindReadOnlyPaths={source}/docs:{runtime}/docs" in new_content
+
+
+
