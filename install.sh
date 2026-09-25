@@ -397,6 +397,13 @@ do_install() {
             log_warn "Existing MP3MetaFix installation detected (${existing_svc})."
             log_info "To prevent overwriting configured network bindings, reverse proxy settings, and sandbox isolation, executing safe update instead..."
             log_info "(To force a clean reinstall from scratch, run './install.sh --reinstall')"
+            if [ "$TARGET_BRANCH_EXPLICIT" != true ] && [ -d "${INSTALL_DIR}/.git" ]; then
+                local cur_branch
+                cur_branch=$(git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+                if [ -n "$cur_branch" ] && [ "$cur_branch" != "HEAD" ]; then
+                    TARGET_BRANCH="$cur_branch"
+                fi
+            fi
             echo ""
             do_update
             return $?
@@ -1083,6 +1090,7 @@ FORCE_HEADLESS=false
 FORCE_DESKTOP=false
 FORCE_REINSTALL=false
 SKIP_SERVICE=false
+TARGET_BRANCH_EXPLICIT=false
 TARGET_PORT="$DEFAULT_PORT"
 TARGET_BIND_HOST=""
 TARGET_PORT_ARG=""
@@ -1167,11 +1175,13 @@ while [[ $# -gt 0 ]]; do
             ;;
         --dev|--development)
             TARGET_BRANCH="development"
+            TARGET_BRANCH_EXPLICIT=true
             shift 1
             ;;
         --branch)
             if [[ $# -ge 2 && ! "$2" =~ ^-- ]]; then
                 TARGET_BRANCH="$2"
+                TARGET_BRANCH_EXPLICIT=true
                 shift 2
             else
                 log_error "--branch requires a branch name argument"
