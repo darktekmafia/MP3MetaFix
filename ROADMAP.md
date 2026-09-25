@@ -233,7 +233,7 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
 
 ### Active Backlog & Future Vision 📋
 
-- [ ] **Modular Documentation Architecture & Streamlined README**:
+- [x] **Modular Documentation Architecture & Streamlined README**:
   - Refactor monolithic documentation files into domain-specific subdirectories under `docs/`:
     - `docs/app/`: MP3MetaFix single-track workflow, touch UI, waveform editor, Suno integration.
     - `docs/manager/`: MetaManager desktop batch editor, directory tree ingestion, raw ID3 frames.
