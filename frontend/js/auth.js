@@ -934,7 +934,10 @@
             tbody.appendChild(row);
           }
           table.appendChild(tbody);
-          container.appendChild(table);
+          const tableWrapper = document.createElement('div');
+          tableWrapper.className = 'help-table-wrapper';
+          tableWrapper.appendChild(table);
+          container.appendChild(tableWrapper);
           continue;
         }
       }
