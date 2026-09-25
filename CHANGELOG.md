@@ -11,6 +11,9 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ### Planned
 - **Existing Installation Guard in `install.sh`**: Preflight detection when `install.sh` is executed without `--update` on hosts with an existing service/environment file. Will prompt to preserve custom network bindings, reverse proxy domains, and trusted proxy configurations instead of overwriting with default template settings.
+- **Granular Workspace Access Controls & Maintenance Mode**: Administrator controls in `/admin` to toggle access per workspace (`/app`, `/manager`, `/projects`), configure custom maintenance reason messages, and toggle Hub card visibility for disabled/unimplemented services with graceful direct route status displays.
+- **MP3Projects Studio (`/projects`)**: Dedicated project and album workspace for multi-track grouping, sequencing, stem bundle packaging, and persistent session states.
+- **Modular Documentation Architecture**: Subdirectory reorganization under `docs/` (`app/`, `manager/`, `projects/`, `admin/`) with a streamlined, lightweight `README.md`.
 
 ## [0.5.2] - 2026-09-23
 

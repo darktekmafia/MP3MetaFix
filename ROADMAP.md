@@ -10,14 +10,15 @@ Although MP3MetaFix runs as a unified high-performance Python FastAPI service wi
 
 | Project / Interface | Route | Primary Target Persona | Screen & Form Factor | Key Design Focus & Scope |
 |---|---|---|---|---|
-| **Gateway Hub** | `/` | System Administrators, Homelab Users, Multi-Device Operators | All screens (320px–4K) | Compact app dispatching and basic availability; diagnostics in `/admin` |
+| **Gateway Hub** | `/` | System Administrators, Homelab Users, Multi-Device Operators | All screens (320px–4K) | Compact app dispatching, workspace access status, and maintenance notices; diagnostics in `/admin` |
 | **MP3MetaFix Editor** | `/app` | Mobile Creators, Smartphone/Tablet Users, Single-Track Producers | Mobile-first (phones, tablets, responsive desktop) | Speed, friction-free single-track tagging, touch waveforms, Suno prompt parsing, canned presets |
 | **MP3MetaManager** | `/manager` | Desktop Power Users, DJs, Album Curators, Batch Producers | Desktop-first (widescreen, 1080p–4K displays) | **Functional Superset of `/app`**: Full single-track inspector + high-density tables, multi-file batch tagging, deep ID3 frame inspector/editor, stem trees, synced lyrics (LRC/SYLT) |
+| **MP3Projects Studio** | `/projects` | EP/Album Curators, Multi-Track Producers, Stem Arrangers | Desktop & Tablet (768px–4K) | Multi-track project packaging, album sequencing, unified artwork/credits, persistent project state |
 | **Core Platform** | `/api` | DevOps, Package Maintainers, Infrastructure Engineers | CLI, Systemd, Reverse Proxies, Docker | Security hardening, zero-downtime updates, cross-platform deployment |
 
 > [!NOTE]
 > **Architectural Principle: Workflow & Device-Driven Interface Selection (Superset Model)**  
-> **Required future architecture:** `/manager` must include every `/app` capability through shared backend services and an integrated inspector. That inspector is not implemented yet; the current manager is a shell. Desktop batch workflows and mobile-focused editing are separate interface goals, not separate format engines.
+> **Required future architecture:** `/manager` must include every `/app` capability through shared backend services and an integrated inspector. That inspector is not implemented yet; the current manager is a shell. Desktop batch workflows, album project packaging, and mobile-focused editing are separate interface goals, not separate format engines.
 
 ---
 
@@ -48,6 +49,12 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - Keep the installed application version visible in the header for guests and signed-in users, using a read-only local version/health response. Displaying or clicking it does not trigger a remote update check.
   - Removed automatic and manual update checks, update prompts, and update-check controls from `/app`, `/manager`, and the public hub. Confined update discovery and installation controls exclusively to `/admin`, gated by administrator authentication.
   - Verified guest startup, refresh, session restore, and version-display interactions never request `/api/updates/check`, eliminating unauthenticated 401 triggers while preserving authorized administrator update management.
+- [ ] **Granular Workspace Access Controls & Maintenance Mode**:
+  - Administrator toggles in `/admin` to enable/disable guest and user access individually for `/app`, `/manager`, and `/projects`.
+  - Configurable maintenance/reason messages (e.g. "Temporarily disabled: investigating audio save bug") set in `/admin`.
+  - **Hub Card Visibility Toggle**: Configurable setting in `/admin` to choose whether disabled or coming-soon services display as a disabled card on the `/` Hub or remain completely hidden from the Hub interface.
+  - **Graceful Direct Route Handoff**: If a user accesses a disabled workspace via bookmark or direct link (`/manager`, `/projects`, `/app`), an informative maintenance/status view displays the configured message rather than an abrupt redirect or broken state.
+  - Future-proof design compatible with upcoming multi-user role tiers (Guest, User, Admin).
 - [ ] **Multi-User Role & Quota Policies**:
   - Granular per-user storage quotas, tenant directories, and role management (Editor, Viewer, Admin).
 - [ ] **Service Daemon Maintenance Triggers**:
@@ -190,9 +197,27 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 
 ---
 
-## ⚙️ Project D: Core Platform, Security & Infrastructure Roadmap
+## 🎛️ Project D: MP3Projects (`/projects`) — Multi-Track Project & Album Studio Roadmap
 
-The underlying Python backend, Mutagen audio engine, systemd service architecture, and deployment automation powering all frontends.
+**MP3Projects** is the project-oriented studio workspace designed for grouping, sequencing, and packaging multi-track releases (EPs, LPs, single bundles with stems, podcast sets) under a unified persistent project state.
+
+### Active Backlog & Future Vision 📋
+- [ ] **Dispatcher Handoff & Disabled State**:
+  - Initial presentation as a disabled / coming-soon card on `/` with configurable admin access status and maintenance messaging.
+- [ ] **Project-Centric Audio Bundling & Sequencing**:
+  - Group multiple audio files into a named project with track order numbers, unified album name, shared cover art, common artist/producer tags, and release metadata.
+- [ ] **Stem Bundle Packager**:
+  - Bundle vocal, instrumental, drum, and bass stems with synchronized timing, shared credits, and structured export packaging.
+- [ ] **Persistent Project State & Session Restoration**:
+  - Save project definitions to JSON/session files to resume album curation across sessions without losing staging edits.
+- [ ] **Mastering & Release Export**:
+  - One-click structured ZIP export containing sequenced, tag-sanitized audio files and companion cue sheets (`.cue`) or tracklists.
+
+---
+
+## ⚙️ Project E: Core Platform, Security, Documentation & Infrastructure Roadmap
+
+The underlying Python backend, Mutagen audio engine, systemd service architecture, documentation suite, and deployment automation powering all frontends.
 
 ### Completed Features ✅
 - [x] **Baseline Security Controls (incomplete; see audit remediation backlog)**:
@@ -208,6 +233,13 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
 
 ### Active Backlog & Future Vision 📋
 
+- [ ] **Modular Documentation Architecture & Streamlined README**:
+  - Refactor monolithic documentation files into domain-specific subdirectories under `docs/`:
+    - `docs/app/`: MP3MetaFix single-track workflow, touch UI, waveform editor, Suno integration.
+    - `docs/manager/`: MetaManager desktop batch editor, directory tree ingestion, raw ID3 frames.
+    - `docs/projects/`: MP3Projects multi-track bundling, album sequencing, stem workflows.
+    - `docs/admin/`: Administrator Control Center, user management, guest access toggles, maintenance mode.
+  - Streamline `README.md` to serve as a lightweight, public project overview linking to the modular guides in `docs/`.
 - [x] **Application security audit remediation (v0.5.1)** — [verification and deployment exceptions](docs/SECURITY_REMEDIATION_2026-09-21.md):
   - Reject/normalize embedded active-content artwork before preview or serving (high).
   - Enforce request-byte limits before multipart spooling/authentication and reserve storage across workers (high).
