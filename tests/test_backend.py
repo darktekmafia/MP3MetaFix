@@ -3082,3 +3082,85 @@ def test_readonly_deployment_cannot_launch_web_installer(auth_client, monkeypatc
         raise AssertionError('Installer must not be invoked')
     monkeypatch.setattr(main, 'start_install_update', forbidden)
     assert auth_client.post('/api/updates/apply').status_code == 403
+
+
+def test_dynamic_runtime_storage_quota_and_session_limits(auth_client, monkeypatch):
+    """Verify runtime storage managers and policy checks dynamically read updated settings."""
+    from backend.auth import auth_manager
+    from backend.storage import storage_manager, SessionManager
+    from backend.config import (
+        get_runtime_upload_limit_bytes,
+        get_runtime_session_ttl_seconds,
+        get_runtime_global_storage_bytes,
+        get_runtime_max_sessions,
+    )
+
+    # 1. Update settings via admin API
+    res = auth_client.post("/api/settings", json={
+        "max_upload_size_mb": 50,
+        "session_ttl_minutes": 15,
+        "max_global_storage_mb": 500,
+        "max_sessions": 3,
+    })
+    assert res.status_code == 200
+
+    # 2. Verify dynamic accessors reflect updated values
+    assert get_runtime_upload_limit_bytes() == 50 * 1024 * 1024
+    assert get_runtime_session_ttl_seconds() == 15 * 60
+    assert get_runtime_global_storage_bytes() == 500 * 1024 * 1024
+    assert get_runtime_max_sessions() == 3
+
+    # 3. Verify storage manager dynamic properties
+    assert storage_manager.max_storage_bytes == 500 * 1024 * 1024
+    assert storage_manager.ttl_seconds == 15 * 60
+    assert storage_manager.max_sessions == 3
+
+    # 4. Verify session limit enforcement and LRU eviction
+    import tempfile
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mgr = SessionManager(temp_dir=Path(temp_dir))
+        assert mgr.max_sessions == 3
+
+        s1, p1 = mgr.create_session("file1.mp3", ".mp3")
+        s2, p2 = mgr.create_session("file2.mp3", ".mp3")
+        s3, p3 = mgr.create_session("file3.mp3", ".mp3")
+        assert mgr.count_active_sessions() == 3
+
+        # Requesting space for a 4th session exceeds max_sessions (3) -> should LRU evict oldest session (s1)
+        can_store = mgr.ensure_storage_available(required_bytes=100)
+        assert can_store is True
+        assert mgr.count_active_sessions() == 2
+        assert mgr.get_session_dir(s1) is None
+        assert mgr.get_session_dir(s2) is not None
+        assert mgr.get_session_dir(s3) is not None
+
+    # Reset settings back
+    auth_manager.update_settings({
+        "max_upload_size_mb": 150,
+        "session_ttl_minutes": 60,
+        "max_global_storage_mb": 2048,
+        "max_sessions": 10,
+    })
+
+
+def test_installer_existing_service_guard_switches_to_update(tmp_path):
+    """Verify install.sh switches to safe update mode when an existing service is present."""
+    import subprocess
+    source = Path("install.sh").read_text()
+    source = source[:source.index("ACTION=\"install\"")]
+    harness = tmp_path / "test-guard.sh"
+    harness.write_text(source + f'''
+INSTALL_DIR="{tmp_path}"
+print_banner() {{ :; }}
+log_warn() {{ echo "WARN: $1"; }}
+log_info() {{ echo "INFO: $1"; }}
+get_active_service_file() {{ echo "/etc/systemd/system/mp3metafix.service:system"; }}
+do_update() {{ echo "UPDATE_EXECUTED"; return 0; }}
+FORCE_REINSTALL=false
+do_install
+''')
+    result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0
+    assert "UPDATE_EXECUTED" in result.stdout
+    assert "Existing MP3MetaFix installation detected" in result.stdout
+

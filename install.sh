@@ -51,6 +51,7 @@ show_help() {
     echo -e "Usage: ${BOLD}./install.sh [OPTIONS]${NC}\n"
     echo "Options:"
     echo "  --install               Install MP3MetaFix & systemd service (default action)"
+    echo "  --reinstall, --force    Force clean service reinstall even if an existing installation is detected"
     echo "  --update                Pull latest updates and rebuild dependencies"
     echo "  --dev, --development    Target development branch during updates"
     echo "  --branch <BRANCH>       Target a specific git branch during updates"
@@ -385,6 +386,25 @@ EOF
 # Perform Installation
 do_install() {
     print_banner
+
+    # Guard against overwriting an existing active or configured installation
+    local svc_info
+    svc_info="$(get_active_service_file)"
+    if [ -n "$svc_info" ] || [ -f "/etc/mp3metafix.env" ] || [ -f "/var/lib/mp3metafix/.env" ]; then
+        if [ "$FORCE_REINSTALL" != true ]; then
+            local existing_svc="${svc_info%%:*}"
+            [ -z "$existing_svc" ] && existing_svc="systemd service or environment configuration"
+            log_warn "Existing MP3MetaFix installation detected (${existing_svc})."
+            log_info "To prevent overwriting configured network bindings, reverse proxy settings, and sandbox isolation, executing safe update instead..."
+            log_info "(To force a clean reinstall from scratch, run './install.sh --reinstall')"
+            echo ""
+            do_update
+            return $?
+        else
+            log_warn "Forced reinstall requested (--reinstall/--force). Overwriting service unit configuration..."
+        fi
+    fi
+
     detect_distro
     detect_environment
 
@@ -1061,6 +1081,7 @@ do_uninstall() {
 ACTION="install"
 FORCE_HEADLESS=false
 FORCE_DESKTOP=false
+FORCE_REINSTALL=false
 SKIP_SERVICE=false
 TARGET_PORT="$DEFAULT_PORT"
 TARGET_BIND_HOST=""
@@ -1073,6 +1094,7 @@ SERVICE_USER="${SUDO_USER:-$USER}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --install) ACTION="install"; shift ;;
+        --reinstall|--force) FORCE_REINSTALL=true; shift ;;
         --update) ACTION="update"; shift ;;
         --check-account) ACTION="check-account"; shift ;;
         --migrate-account) ACTION="migrate-account"; shift ;;

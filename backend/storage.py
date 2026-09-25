@@ -13,6 +13,10 @@ from backend.config import (
     TEMP_DIR,
     SESSION_TTL_MINUTES,
     MAX_GLOBAL_TEMP_STORAGE_BYTES,
+    MAX_SESSIONS,
+    get_runtime_session_ttl_seconds,
+    get_runtime_global_storage_bytes,
+    get_runtime_max_sessions,
 )
 from backend.security import sanitize_filename, get_storage_dir_name
 from backend.audio_formats import AUDIO_FORMATS
@@ -25,17 +29,58 @@ class SessionManager:
     def __init__(
         self,
         temp_dir: Path = TEMP_DIR,
-        ttl_minutes: int = SESSION_TTL_MINUTES,
-        max_storage_bytes: int = MAX_GLOBAL_TEMP_STORAGE_BYTES,
+        ttl_minutes: Optional[int] = None,
+        max_storage_bytes: Optional[int] = None,
+        max_sessions: Optional[int] = None,
     ):
         self.temp_dir = temp_dir
-        self.ttl_seconds = ttl_minutes * 60
-        self.max_storage_bytes = max_storage_bytes
+        self._override_ttl_seconds = (ttl_minutes * 60) if ttl_minutes is not None else None
+        self._override_max_storage_bytes = max_storage_bytes
+        self._override_max_sessions = max_sessions
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(self.temp_dir, 0o700)
         except Exception:
             pass
+
+    @property
+    def max_storage_bytes(self) -> int:
+        if self._override_max_storage_bytes is not None:
+            return self._override_max_storage_bytes
+        return get_runtime_global_storage_bytes()
+
+    @max_storage_bytes.setter
+    def max_storage_bytes(self, value: int):
+        self._override_max_storage_bytes = value
+
+    @property
+    def ttl_seconds(self) -> int:
+        if self._override_ttl_seconds is not None:
+            return self._override_ttl_seconds
+        return get_runtime_session_ttl_seconds()
+
+    @ttl_seconds.setter
+    def ttl_seconds(self, value: int):
+        self._override_ttl_seconds = value
+
+    @property
+    def max_sessions(self) -> int:
+        if self._override_max_sessions is not None:
+            return self._override_max_sessions
+        return get_runtime_max_sessions()
+
+    @max_sessions.setter
+    def max_sessions(self, value: int):
+        self._override_max_sessions = value
+
+    def count_active_sessions(self) -> int:
+        """Count active sessions with valid session metadata in data/temp."""
+        count = 0
+        if self.temp_dir.exists():
+            for item in self.temp_dir.iterdir():
+                if item.is_dir() and (item / "session.json").is_file():
+                    count += 1
+        return count
 
     def get_total_temp_size_bytes(self) -> int:
         """Calculate total disk space consumed by all sessions in data/temp."""
@@ -57,27 +102,33 @@ class SessionManager:
     def get_session_stats(self) -> Dict[str, Any]:
         """Return aggregated session storage metrics for system diagnostics."""
         total_bytes = self.get_total_temp_size_bytes()
-        count = 0
-        if self.temp_dir.exists():
-            for item in self.temp_dir.iterdir():
-                if item.is_dir() and (item / "session.json").is_file():
-                    count += 1
+        count = self.count_active_sessions()
+        max_storage = self.max_storage_bytes
         return {
             "temp_storage_bytes": total_bytes,
             "temp_storage_mb": round(total_bytes / (1024 * 1024), 2),
-            "max_temp_storage_bytes": self.max_storage_bytes,
-            "max_temp_storage_mb": round(self.max_storage_bytes / (1024 * 1024), 2),
-            "temp_storage_used_percent": round((total_bytes / self.max_storage_bytes * 100), 1) if self.max_storage_bytes > 0 else 0.0,
+            "max_temp_storage_bytes": max_storage,
+            "max_temp_storage_mb": round(max_storage / (1024 * 1024), 2),
+            "temp_storage_used_percent": round((total_bytes / max_storage * 100), 1) if max_storage > 0 else 0.0,
             "active_sessions_count": count,
+            "max_sessions": self.max_sessions,
         }
 
     def ensure_storage_available(self, required_bytes: int = 0) -> bool:
-        """Verify storage quota and trigger LRU eviction of oldest sessions if nearing limits."""
+        """Verify storage quota and session count limits; trigger LRU eviction of oldest sessions if needed."""
         current_size = self.get_total_temp_size_bytes()
-        if current_size + required_bytes <= self.max_storage_bytes:
+        current_count = self.count_active_sessions()
+        max_bytes = self.max_storage_bytes
+        max_sess = self.max_sessions
+
+        # Check if space is available and count has room for at least 1 new session
+        if (current_size + required_bytes <= max_bytes) and (current_count < max_sess):
             return True
 
-        logger.warning(f"Temp storage approaching limit ({current_size / (1024*1024):.1f}MB). Running LRU eviction...")
+        logger.warning(
+            f"Temp storage or session limit reached ({current_size / (1024*1024):.1f}MB/{max_bytes / (1024*1024):.1f}MB, "
+            f"{current_count}/{max_sess} sessions). Running LRU eviction..."
+        )
         # Gather all session dirs with their last_accessed_at timestamp
         sessions = []
         if self.temp_dir.exists():
@@ -100,13 +151,14 @@ class SessionManager:
             try:
                 shutil.rmtree(sdir, ignore_errors=True)
                 current_size = self.get_total_temp_size_bytes()
-                if current_size + required_bytes <= self.max_storage_bytes:
-                    logger.info("Storage quota restored after LRU eviction.")
+                current_count = self.count_active_sessions()
+                if (current_size + required_bytes <= max_bytes) and (current_count < max_sess):
+                    logger.info("Storage quota and session count capacity restored after LRU eviction.")
                     return True
             except Exception as e:
                 logger.error(f"Failed to evict old session {sdir}: {e}")
 
-        return (current_size + required_bytes <= self.max_storage_bytes)
+        return (current_size + required_bytes <= max_bytes) and (current_count < max_sess)
 
     def create_session(self, original_filename: str, extension: str = ".mp3") -> Tuple[str, Path]:
         """Create a new unique session directory for an uploaded file using a decoupled hash."""

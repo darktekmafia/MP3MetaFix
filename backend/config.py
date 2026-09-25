@@ -36,6 +36,49 @@ MAX_UPLOAD_SIZE_MB = int(os.getenv("MP3METAFIX_MAX_UPLOAD_SIZE_MB", "150"))
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 MAX_GLOBAL_TEMP_STORAGE_MB = int(os.getenv("MP3METAFIX_MAX_GLOBAL_STORAGE_MB", "2048"))
 MAX_GLOBAL_TEMP_STORAGE_BYTES = MAX_GLOBAL_TEMP_STORAGE_MB * 1024 * 1024
+MAX_SESSIONS = int(os.getenv("MP3METAFIX_MAX_SESSIONS", "10"))
+
+# Dynamic Runtime Settings Accessors
+def get_runtime_session_ttl_seconds() -> int:
+    """Retrieve active session TTL in seconds from persistent settings or fallback to default."""
+    try:
+        from backend.auth import auth_manager
+        settings = auth_manager.get_settings()
+        minutes = settings.get("session_ttl_minutes", SESSION_TTL_MINUTES)
+        return int(minutes) * 60
+    except Exception:
+        return SESSION_COOKIE_MAX_AGE
+
+def get_runtime_upload_limit_bytes() -> int:
+    """Retrieve active upload size limit in bytes from persistent settings or fallback to default."""
+    try:
+        if MAX_UPLOAD_SIZE_BYTES != (MAX_UPLOAD_SIZE_MB * 1024 * 1024):
+            return MAX_UPLOAD_SIZE_BYTES
+        from backend.auth import auth_manager
+        settings = auth_manager.get_settings()
+        mb = settings.get("max_upload_size_mb", MAX_UPLOAD_SIZE_MB)
+        return int(mb) * 1024 * 1024
+    except Exception:
+        return MAX_UPLOAD_SIZE_BYTES
+
+def get_runtime_global_storage_bytes() -> int:
+    """Retrieve active global temporary storage limit in bytes from persistent settings or fallback to default."""
+    try:
+        from backend.auth import auth_manager
+        settings = auth_manager.get_settings()
+        mb = settings.get("max_global_storage_mb", settings.get("max_temp_storage_mb", MAX_GLOBAL_TEMP_STORAGE_MB))
+        return int(mb) * 1024 * 1024
+    except Exception:
+        return MAX_GLOBAL_TEMP_STORAGE_BYTES
+
+def get_runtime_max_sessions() -> int:
+    """Retrieve active max concurrent sessions from persistent settings or fallback to default."""
+    try:
+        from backend.auth import auth_manager
+        settings = auth_manager.get_settings()
+        return int(settings.get("max_sessions", MAX_SESSIONS))
+    except Exception:
+        return MAX_SESSIONS
 
 # Security / MIME Restrictions
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav"}

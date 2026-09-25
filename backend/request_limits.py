@@ -4,7 +4,7 @@ import time
 from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from backend.config import MAX_UPLOAD_SIZE_BYTES, MAX_ARTWORK_SIZE_BYTES, DATA_DIR
+from backend.config import MAX_UPLOAD_SIZE_BYTES, get_runtime_upload_limit_bytes, MAX_ARTWORK_SIZE_BYTES, DATA_DIR
 from backend.locking import file_lock
 
 
@@ -25,7 +25,15 @@ class RequestLimitsMiddleware:
         if storage_write:
             # Include a small allowance for multipart headers, not an unbounded body.
             if upload or artwork:
-                limit = (MAX_UPLOAD_SIZE_BYTES if upload else MAX_ARTWORK_SIZE_BYTES) + 64 * 1024
+                import backend.request_limits as rl
+                import backend.main as bm
+                if rl.MAX_UPLOAD_SIZE_BYTES != (150 * 1024 * 1024):
+                    upload_max = rl.MAX_UPLOAD_SIZE_BYTES
+                elif getattr(bm, 'MAX_UPLOAD_SIZE_BYTES', None) is not None and bm.MAX_UPLOAD_SIZE_BYTES != (150 * 1024 * 1024):
+                    upload_max = bm.MAX_UPLOAD_SIZE_BYTES
+                else:
+                    upload_max = get_runtime_upload_limit_bytes()
+                limit = (upload_max if upload else MAX_ARTWORK_SIZE_BYTES) + 64 * 1024
             try:
                 self.access_check(request)
                 if upload:

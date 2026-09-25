@@ -53,6 +53,8 @@ from backend.config import (
     SESSION_TTL_MINUTES,
     MAX_UPLOAD_SIZE_MB,
     MAX_GLOBAL_TEMP_STORAGE_MB,
+    get_runtime_upload_limit_bytes,
+    get_runtime_session_ttl_seconds,
 )
 from backend.security import (
     SecurityHeadersMiddleware,
@@ -639,8 +641,10 @@ async def upload_audio(
     except ValueError:
         raise HTTPException(status_code=400, detail="Supported audio formats are MP3, M4A, and WAV.")
 
-    # 2. Storage Quota Check
-    if not storage_manager.ensure_storage_available(required_bytes=MAX_UPLOAD_SIZE_BYTES + MAX_ARTWORK_SIZE_BYTES):
+    # 2. Storage Quota & Limits Check
+    upload_limit_bytes = MAX_UPLOAD_SIZE_BYTES if MAX_UPLOAD_SIZE_BYTES != (MAX_UPLOAD_SIZE_MB * 1024 * 1024) else get_runtime_upload_limit_bytes()
+    upload_limit_mb = max(1, upload_limit_bytes // (1024 * 1024))
+    if not storage_manager.ensure_storage_available(required_bytes=upload_limit_bytes + MAX_ARTWORK_SIZE_BYTES):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Server temporary storage quota exceeded. Please try again later.",
@@ -660,17 +664,20 @@ async def upload_audio(
     # Stream the file to disk enforcing max size
     total_bytes = len(header_chunk)
     try:
-        if total_bytes > MAX_UPLOAD_SIZE_BYTES:
-            raise HTTPException(status_code=413, detail="File exceeds maximum allowed size.")
+        if total_bytes > upload_limit_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File exceeds maximum allowed size ({upload_limit_mb}MB)",
+            )
         with open(audio_path, "wb") as f:
             f.write(header_chunk)
             while chunk := await file.read(1024 * 1024):  # 1MB chunks
                 total_bytes += len(chunk)
-                if total_bytes > MAX_UPLOAD_SIZE_BYTES:
+                if total_bytes > upload_limit_bytes:
                     storage_manager.cleanup_session(session_id)
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"File exceeds maximum allowed size ({MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB)",
+                        detail=f"File exceeds maximum allowed size ({upload_limit_mb}MB)",
                     )
                 f.write(chunk)
     except HTTPException:
@@ -703,7 +710,7 @@ async def upload_audio(
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
-        max_age=SESSION_COOKIE_MAX_AGE,
+        max_age=get_runtime_session_ttl_seconds(),
         httponly=True,
         secure=is_https,
         samesite="lax",

@@ -259,9 +259,11 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
   - Extended the migration/rollback helper ([docs/ACCOUNT_MIGRATION.md](docs/ACCOUNT_MIGRATION.md)) and `install.sh` (`--check-account`, `--migrate-account`, `--retry-account`, `--rollback-account`) to support both user-level and system-service deployments with sandbox preflight checks.
   - Preserves application accounts/passwords, signing secrets, audio/session data, environment settings, network bindings, and proxy configuration with verified byte-for-byte SHA-256 integrity and POSIX `0700`/`0600` permissions.
   - Automated service user creation in `install.sh` ensuring headless/server installs bind to dedicated `mp3metafix` service account rather than root.
-- [ ] **Existing Installation Guard & Customization Preservation in `install.sh`**:
-  - Add preflight detection when `install.sh` runs without `--update` on hosts with an existing service unit (`/etc/systemd/system/mp3metafix.service`) or environment file (`/etc/mp3metafix.env` / `/var/lib/mp3metafix/.env`).
-  - Warn the operator that an existing installation was detected, prompting to preserve existing network bindings, reverse proxy domains, and trusted proxy configurations (or automatically switch to in-place `--update` mode), preventing accidental template overwriting of production settings.
+- [x] **Existing Installation Guard & Customization Preservation in `install.sh`**:
+  - Added preflight detection in `do_install()` when `install.sh` runs without `--update` on hosts with an existing service unit (`/etc/systemd/system/mp3metafix.service`, user service) or environment file (`/etc/mp3metafix.env` / `/var/lib/mp3metafix/.env`).
+  - Warns the operator that an existing installation was detected and automatically switches to safe in-place `--update` mode, preserving custom network bindings, reverse proxy domains, and sandbox configurations rather than overwriting with default localhost templates. Operators can provide `--reinstall` / `--force` for explicit clean template reinstallation.
+- [x] **Apply stored quota/TTL settings to runtime policy**:
+  - Dynamic runtime queries in `RequestLimitsMiddleware`, `SessionManager`, and `verify_signed_session_token` connect active limits (`max_upload_size_mb`, `session_ttl_minutes`, `max_global_storage_mb`, `max_sessions`) directly to persistent settings store with LRU session eviction upon reaching count or storage capacity.
 - [ ] **Guided, one-shot installation with service-account selection or creation**:
   - Design for users who cannot confidently perform CLI administration: after the initial installer launch, use plain-language prompts and safe defaults to complete as much setup as possible without separate commands or manual file edits.
   - Offer creation of a dedicated non-login Linux service account as the recommended choice, or selection of a suitable existing unprivileged account. Explain that this is separate from the application's administrator login; never silently default the backend to root.
@@ -272,7 +274,6 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
 - [ ] **Reliable uploads behind authenticated reverse proxies**:
   - Investigate intermittent upload authentication challenges with HTTP Basic Auth proxies. Preserve application authorization and validate repeated upload/edit/download flows through supported proxy configurations.
   - Verify guest update-check removal and browser authentication recovery separately; do not mark the upload issue resolved until end-to-end testing confirms it.
-- [ ] **Apply stored quota/TTL settings to runtime policy**: settings persist today, while runtime enforcement reads environment-derived configuration.
 
 - [ ] **Multi-Arch Docker & OCI Container Images**:
   - Official multi-architecture Dockerfile (`linux/amd64`, `linux/arm64`) published to GitHub Container Registry (GHCR) for unRAID, TrueNAS, and Docker Compose.

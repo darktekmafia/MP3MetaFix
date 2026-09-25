@@ -14,12 +14,16 @@ Historical release entries describe what was recorded at the time. Security comp
 - **Context-Aware In-App Help Drawer / Modal**: Fast in-app overlay accessible from the user account menu, guest status pill, or keyboard shortcut (<kbd>F1</kbd>), automatically presenting the current workspace's guide with quick topic tabs and a link to open the full portal.
 - **Documentation API Endpoints**: Backend endpoints `GET /api/docs/list` and `GET /api/docs/{doc_id}` to securely serve synchronized markdown documentation directly from `docs/` with path traversal guards.
 
+### Fixed & Hardened
+- **Dynamic Runtime Quota & Policy Enforcement**: Backend middleware (`RequestLimitsMiddleware`), storage manager (`SessionManager`), and token verification (`verify_signed_session_token`) dynamically query persistent system settings (`max_upload_size_mb`, `session_ttl_minutes`, `max_global_storage_mb`, `max_sessions`). Administrator modifications in `/admin` or Quick Settings take effect immediately at runtime without requiring service restarts.
+- **Concurrent Session Count Limit & LRU Eviction**: Enforced `max_sessions` in `SessionManager`, automatically triggering LRU eviction of oldest inactive session directories when active session counts or global storage limits are approached.
+- **Existing Installation Guard in `install.sh`**: Preflight check in `do_install()` detects existing service units or environment files (`/etc/systemd/system/mp3metafix.service`, user units, or `.env` files). It safely redirects to in-place update mode (`do_update`) to preserve custom network bindings, reverse proxy domains, and sandbox permissions instead of overwriting with default templates. Added `--reinstall` / `--force` for explicit clean template reinstallation.
+
 ### Documentation
 - Modularized feature and workspace documentation into dedicated subdirectories under `docs/` (`docs/app/`, `docs/manager/`, `docs/projects/`, `docs/admin/`).
 - Streamlined `README.md` into a clean, scannable project overview featuring workspace status indicators, an installation scenarios matrix, and direct documentation links.
 
 ### Planned
-- **Existing Installation Guard in `install.sh`**: Preflight detection when `install.sh` is executed without `--update` on hosts with an existing service/environment file. Will prompt to preserve custom network bindings, reverse proxy domains, and trusted proxy configurations instead of overwriting with default template settings.
 - **Granular Workspace Access Controls & Maintenance Mode**: Administrator controls in `/admin` to toggle access per workspace (`/app`, `/manager`, `/projects`), configure custom maintenance reason messages, and toggle Hub card visibility for disabled/unimplemented services with graceful direct route status displays.
 - **MP3Projects Studio (`/projects`)**: Dedicated project and album workspace for multi-track grouping, sequencing, stem bundle packaging, and persistent session states.
 

@@ -39,7 +39,7 @@ def create_signed_session_token(session_id: str) -> str:
     return f"{payload}.{sig}"
 
 
-def verify_signed_session_token(token: str, max_age_seconds: int = SESSION_COOKIE_MAX_AGE) -> Optional[str]:
+def verify_signed_session_token(token: str, max_age_seconds: Optional[int] = None) -> Optional[str]:
     """Verify HMAC signature and timestamp expiry. Returns authenticated UUID4 session ID or None."""
     if not token or "." not in token:
         return None
@@ -55,8 +55,13 @@ def verify_signed_session_token(token: str, max_age_seconds: int = SESSION_COOKI
     try:
         ts = int(ts_str)
         now = int(time.time())
+        if max_age_seconds is None:
+            from backend.config import get_runtime_session_ttl_seconds
+            effective_max_age = get_runtime_session_ttl_seconds()
+        else:
+            effective_max_age = max_age_seconds
         # Enforce timestamp freshness (not in future by more than 60s, and not expired)
-        if ts > now + 60 or (now - ts) > max_age_seconds:
+        if ts > now + 60 or (now - ts) > effective_max_age:
             return None
     except ValueError:
         return None
