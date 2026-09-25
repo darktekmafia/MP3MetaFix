@@ -121,11 +121,10 @@ Follow a strict 4-stage validation pipeline:
 - **DO NOT** push to remote GitHub until local tests pass and verification is completely green.
 - Verify `git status` is clean before pushing upstream.
 
-### Stage 4: Explicitly Approved Deployment & Update Validation
-- Do not automatically push, tag, publish a release, or deploy to any environment without maintainer approval.
-- All future remote pushes must target `development`. Specify the destination explicitly; do not rely on an existing upstream or default push configuration that could target `main`.
-- Update `main` only through a `development` → `main` merge explicitly requested by the user after user testing and feedback confirm release readiness. Approval to push to `development` does not authorize merging to `main`, publishing a release, or deploying.
-- Apply the **Pre-Merge Release Gate** (Section 6) on `development` prior to executing the merge to `main`.
+### Stage 4: Continuous `development` Sync & Explicit `main` Release Gate
+- **Continuous `development` Sync**: Once local changes are verified with 0 test failures and committed locally, push them directly to remote GitHub branch `development` (`git push origin development`) to keep the remote `development` branch continuously in sync with local development.
+- **Strict `main` Release Gate**: Merging `development` into `main`, creating release tags, or triggering production deployment strictly requires explicit user approval. This can only take place after the user's own independent testing and security audits confirm release readiness.
+- Apply the **Pre-Merge Release Gate** (Section 6) on `development` prior to executing any approved merge to `main`.
 - Keep `origin main` as the installer default release source. The installer enforces that standard updates are run only on a `main` checkout, fast-forwards strictly from `origin main`, and halts on fetch or branch errors without falling back to generic `git pull`. Development testing checkouts use `install.sh --update --dev`.
 - Validate installer and update changes in the designated disposable LXC before recommending wider deployment. Check service identity, listening ports, proxy behavior, data preservation, and recovery after failure.
 - Preserve user files, configuration, authentication secrets, and existing data unless an approved migration explicitly changes them.
