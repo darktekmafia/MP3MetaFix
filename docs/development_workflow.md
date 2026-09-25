@@ -83,7 +83,7 @@ Before any changes are committed or merged:
 
 1. **Incremental Updates during Development (`development` branch)**:
    - Every feature, security patch, bug fix, or dependency update must be documented in [CHANGELOG.md](../CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/).
-   - Keep [README.md](../README.md), [docs/ARCHITECTURE.md](ARCHITECTURE.md), [docs/DEPLOYMENT.md](DEPLOYMENT.md), and [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md) current with any newly implemented behaviors, architecture changes, and installer options.
+   - Keep [README.md](../README.md), [VISION.md](../VISION.md), [GOVERNANCE.md](../GOVERNANCE.md), [docs/ARCHITECTURE.md](ARCHITECTURE.md), [docs/DEPLOYMENT.md](DEPLOYMENT.md), and [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md) current with any newly implemented behaviors, architecture changes, and installer options.
 2. **Public vs. Internal Documentation Boundary**:
    - Treat documentation on every remote branch as public. Document installation, use, architecture, supported behavior, product plans, and relevant security/compatibility limitations. Exclude personal learning plans, environment-specific work logs, and agent/session handoffs.
    - Keep [ROADMAP.md](../ROADMAP.md) focused on public product work.

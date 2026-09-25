@@ -138,9 +138,11 @@ Explore dedicated guides in the [`docs/`](docs/) directory:
 
 ---
 
-## 🗺️ Master Roadmap
+## 🗺️ Master Roadmap & Governance
 
-Follow upcoming milestones, sub-projects, and feature releases in the **[Master Product Roadmap](ROADMAP.md)**.
+- 🧭 **[Project Vision & Architectural Direction](VISION.md)** — Foundational commitments, API-first architecture, and vision evolution.
+- 🏛️ **[Project Governance & Transparency](GOVERNANCE.md)** — Founder stewardship, AI-assisted development transparency, contributor equality, and proposal docket lifecycle.
+- 📋 **[Master Product Roadmap](ROADMAP.md)** — Track active milestones, sub-projects, and engineering backlog items.
 
 ---
 

@@ -288,4 +288,21 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
 
 ---
 
+## 🏛️ Project Governance, Vision & Community Process Roadmap
+
+This track outlines the evolution of MP3MetaFix's formal vision, community governance structure, and release methodologies as described in [VISION.md](VISION.md) and [GOVERNANCE.md](GOVERNANCE.md):
+
+- [ ] **Formal Initial Vision Specification**:
+  - Establish and document the initial formal project vision during the founder stewardship phase to anchor project identity and architectural scope.
+- [ ] **Community Governance Transition & Succession Specification**:
+  - Define formal criteria, milestones, and voting procedures to transition project governance to the community.
+  - Formulate detailed succession protocols (triggers, administrative credential/repository transfer, governance continuity) ensuring long-term project health.
+- [ ] **Proposal Docket & Community Prioritization Tooling**:
+  - Implement structured community docket tracking for feature proposals with vision-alignment review and community voting workflows.
+- [ ] **Release-Candidate (RC) / Testing Branch Integration**:
+  - Establish an intermediate `testing` / release-candidate branch workflow enabling broad hardware, distribution, and container testing before promoting releases to `main`.
+
+---
+
 *Note: As each sub-project evolves, milestones and priorities are tracked and refined in this roadmap.*
+
