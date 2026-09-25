@@ -82,6 +82,17 @@
         roleSpan.className = 'auth-role-tag role-guest';
         roleSpan.textContent = 'Guest';
 
+        const helpBtn = document.createElement('button');
+        helpBtn.type = 'button';
+        helpBtn.className = 'btn btn-secondary btn-xs';
+        helpBtn.style.marginLeft = '0.35rem';
+        helpBtn.title = 'Documentation & Help';
+        helpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+        helpBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openHelpModal();
+        });
+
         const loginBtn = document.createElement('button');
         loginBtn.className = 'btn btn-secondary btn-xs';
         loginBtn.style.marginLeft = '0.35rem';
@@ -94,6 +105,7 @@
         guestPill.appendChild(avatar);
         guestPill.appendChild(nameSpan);
         guestPill.appendChild(roleSpan);
+        guestPill.appendChild(helpBtn);
         guestPill.appendChild(loginBtn);
         container.appendChild(guestPill);
       } else {
@@ -176,6 +188,18 @@
       openSettingsModal();
     });
     dropdown.appendChild(settingsItem);
+
+    // Help & Documentation Item
+    const helpItem = document.createElement('button');
+    helpItem.type = 'button';
+    helpItem.className = 'dropdown-item';
+    helpItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg><span>Help & Documentation</span>';
+    helpItem.addEventListener('click', () => {
+      dropdown.classList.add('hidden');
+      userPill.classList.remove('active');
+      openHelpModal();
+    });
+    dropdown.appendChild(helpItem);
 
     // Logout Item
     const logoutItem = document.createElement('button');
@@ -771,11 +795,302 @@
     checkAuthStatus();
   });
 
+  // --- In-App Help Modal Controller ---
+  let cachedDocsList = null;
+
+  function renderHelpInline(text, container) {
+    const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\)|<kbd>[^<]+<\/kbd>)/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        container.appendChild(document.createTextNode(text.substring(lastIndex, match.index)));
+      }
+      const raw = match[0];
+      if (raw.startsWith('`') && raw.endsWith('`')) {
+        const code = document.createElement('code');
+        code.textContent = raw.slice(1, -1);
+        container.appendChild(code);
+      } else if (raw.startsWith('**') && raw.endsWith('**')) {
+        const strong = document.createElement('strong');
+        renderHelpInline(raw.slice(2, -2), strong);
+        container.appendChild(strong);
+      } else if (raw.startsWith('*') && raw.endsWith('*')) {
+        const em = document.createElement('em');
+        renderHelpInline(raw.slice(1, -1), em);
+        container.appendChild(em);
+      } else if (raw.startsWith('<kbd>') && raw.endsWith('</kbd>')) {
+        const kbd = document.createElement('kbd');
+        kbd.textContent = raw.slice(5, -6);
+        container.appendChild(kbd);
+      } else if (raw.startsWith('[') && raw.includes('](') && raw.endsWith(')')) {
+        const splitIdx = raw.indexOf('](');
+        const linkText = raw.substring(1, splitIdx);
+        let linkUrl = raw.substring(splitIdx + 2, raw.length - 1);
+        const a = document.createElement('a');
+        a.textContent = linkText;
+        a.href = linkUrl;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        container.appendChild(a);
+      }
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      container.appendChild(document.createTextNode(text.substring(lastIndex)));
+    }
+  }
+
+  function renderHelpMarkdownToDOM(markdownText, container) {
+    container.innerHTML = '';
+    const lines = markdownText.split('\n');
+    let i = 0;
+    while (i < lines.length) {
+      let line = lines[i];
+      if (!line.trim()) { i++; continue; }
+
+      // Code Block
+      if (line.trim().startsWith('```')) {
+        const codeLines = [];
+        i++;
+        while (i < lines.length && !lines[i].trim().startsWith('```')) {
+          codeLines.push(lines[i]);
+          i++;
+        }
+        i++;
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        code.textContent = codeLines.join('\n');
+        pre.appendChild(code);
+        container.appendChild(pre);
+        continue;
+      }
+
+      // Alerts & Quotes
+      if (line.trim().startsWith('>')) {
+        const quoteLines = [];
+        let alertType = 'note';
+        while (i < lines.length && lines[i].trim().startsWith('>')) {
+          let clean = lines[i].trim().replace(/^>\s?/, '');
+          if (clean.startsWith('[!NOTE]')) { alertType = 'note'; clean = clean.replace('[!NOTE]', '').trim(); }
+          else if (clean.startsWith('[!TIP]')) { alertType = 'tip'; clean = clean.replace('[!TIP]', '').trim(); }
+          else if (clean.startsWith('[!WARNING]')) { alertType = 'warning'; clean = clean.replace('[!WARNING]', '').trim(); }
+          else if (clean.startsWith('[!IMPORTANT]')) { alertType = 'important'; clean = clean.replace('[!IMPORTANT]', '').trim(); }
+          else if (clean.startsWith('[!CAUTION]')) { alertType = 'caution'; clean = clean.replace('[!CAUTION]', '').trim(); }
+          if (clean) quoteLines.push(clean);
+          i++;
+        }
+        const alertDiv = document.createElement('div');
+        alertDiv.className = `docs-alert docs-alert-${alertType}`;
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'docs-alert-content';
+        quoteLines.forEach(ql => {
+          const p = document.createElement('p');
+          renderHelpInline(ql, p);
+          contentDiv.appendChild(p);
+        });
+        alertDiv.appendChild(contentDiv);
+        container.appendChild(alertDiv);
+        continue;
+      }
+
+      // Headings
+      if (line.startsWith('#')) {
+        const level = line.match(/^#+/)[0].length;
+        const headingText = line.replace(/^#+\s*/, '').trim();
+        const heading = document.createElement(`h${Math.min(level, 6)}`);
+        renderHelpInline(headingText, heading);
+        container.appendChild(heading);
+        i++;
+        continue;
+      }
+
+      // Tables
+      if (line.includes('|') && line.trim().startsWith('|')) {
+        const tableLines = [];
+        while (i < lines.length && lines[i].includes('|') && lines[i].trim().startsWith('|')) {
+          tableLines.push(lines[i].trim());
+          i++;
+        }
+        if (tableLines.length >= 2) {
+          const table = document.createElement('table');
+          const thead = document.createElement('thead');
+          const headerRow = document.createElement('tr');
+          tableLines[0].split('|').slice(1, -1).forEach(h => {
+            const th = document.createElement('th');
+            renderHelpInline(h.trim(), th);
+            headerRow.appendChild(th);
+          });
+          thead.appendChild(headerRow);
+          table.appendChild(thead);
+          const tbody = document.createElement('tbody');
+          for (let r = 2; r < tableLines.length; r++) {
+            const row = document.createElement('tr');
+            tableLines[r].split('|').slice(1, -1).forEach(c => {
+              const td = document.createElement('td');
+              renderHelpInline(c.trim(), td);
+              row.appendChild(td);
+            });
+            tbody.appendChild(row);
+          }
+          table.appendChild(tbody);
+          container.appendChild(table);
+          continue;
+        }
+      }
+
+      // Unordered Lists
+      if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
+        const ul = document.createElement('ul');
+        while (i < lines.length && (lines[i].trim().startsWith('- ') || lines[i].trim().startsWith('* '))) {
+          const li = document.createElement('li');
+          renderHelpInline(lines[i].trim().replace(/^[-*]\s+/, ''), li);
+          ul.appendChild(li);
+          i++;
+        }
+        container.appendChild(ul);
+        continue;
+      }
+
+      // Paragraph
+      const p = document.createElement('p');
+      renderHelpInline(line, p);
+      container.appendChild(p);
+      i++;
+    }
+  }
+
+  function ensureHelpModal() {
+    let modal = document.getElementById('helpModal');
+    if (modal) return modal;
+
+    modal = document.createElement('div');
+    modal.id = 'helpModal';
+    modal.className = 'modal-overlay hidden';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.innerHTML = `
+      <div class="modal-card modal-xl">
+        <div class="modal-header">
+          <div class="modal-title-group">
+            <div class="modal-icon-badge">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+              </svg>
+            </div>
+            <div>
+              <h2 id="helpModalTitle" class="modal-title">Help & Documentation</h2>
+              <p class="modal-subtitle" id="helpModalSubtitle">Quick guides and workflow reference</p>
+            </div>
+          </div>
+          <button class="btn-close" id="btnCloseHelpModal" aria-label="Close modal">&times;</button>
+        </div>
+        <div class="help-modal-body">
+          <div class="help-tabs-wrapper" id="helpTabsContainer"></div>
+          <div class="help-content-container" id="helpContentContainer">
+            <div class="docs-loading-state"><div class="spinner"></div><span>Loading documentation...</span></div>
+          </div>
+        </div>
+        <div class="help-modal-footer">
+          <a href="/docs" target="_blank" class="help-portal-link" id="helpPortalLink">
+            <span>Open Full Documentation Portal</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <line x1="7" y1="17" x2="17" y2="7"></line>
+              <polyline points="7 7 17 7 17 17"></polyline>
+            </svg>
+          </a>
+          <button type="button" class="btn btn-secondary btn-sm" id="btnDismissHelp">Close</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    modal.querySelector('#btnCloseHelpModal').addEventListener('click', () => closeModal('helpModal'));
+    modal.querySelector('#btnDismissHelp').addEventListener('click', () => closeModal('helpModal'));
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeModal('helpModal');
+    });
+
+    return modal;
+  }
+
+  async function openHelpModal(topic) {
+    const modal = ensureHelpModal();
+    const tabsContainer = modal.querySelector('#helpTabsContainer');
+    const contentContainer = modal.querySelector('#helpContentContainer');
+    const portalLink = modal.querySelector('#helpPortalLink');
+
+    // Context determination
+    if (!topic) {
+      const p = window.location.pathname;
+      if (p.startsWith('/app')) topic = 'app';
+      else if (p.startsWith('/manager')) topic = 'manager';
+      else if (p.startsWith('/admin')) topic = 'admin';
+      else if (p.startsWith('/projects')) topic = 'projects';
+      else topic = 'app';
+    }
+
+    openModal('helpModal');
+
+    // Load tabs if not cached
+    if (!cachedDocsList) {
+      try {
+        const res = await fetch('/api/docs/list');
+        const data = await res.json();
+        cachedDocsList = data.sections || [];
+      } catch (err) {
+        cachedDocsList = [
+          { id: 'app', title: 'MP3MetaFix Editor' },
+          { id: 'manager', title: 'MP3MetaManager' },
+          { id: 'projects', title: 'MP3Projects Studio' },
+          { id: 'admin', title: 'Admin Control Center' },
+          { id: 'deployment', title: 'Deployment' },
+          { id: 'architecture', title: 'Architecture' },
+        ];
+      }
+    }
+
+    // Render tab buttons
+    tabsContainer.innerHTML = '';
+    cachedDocsList.forEach(item => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `help-tab-btn ${item.id === topic ? 'active' : ''}`;
+      btn.textContent = item.title;
+      btn.addEventListener('click', () => {
+        tabsContainer.querySelectorAll('.help-tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        fetchAndRenderHelpContent(item.id, contentContainer, portalLink);
+      });
+      tabsContainer.appendChild(btn);
+    });
+
+    fetchAndRenderHelpContent(topic, contentContainer, portalLink);
+  }
+
+  async function fetchAndRenderHelpContent(docId, container, portalLink) {
+    if (portalLink) portalLink.href = `/docs#${docId}`;
+    container.innerHTML = '<div class="docs-loading-state"><div class="spinner"></div><span>Loading guide...</span></div>';
+
+    try {
+      const res = await fetch(`/api/docs/${docId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      renderHelpMarkdownToDOM(data.content, container);
+    } catch (err) {
+      container.innerHTML = `<div class="toast toast-error" style="position:static; margin:1rem 0;"><span>Could not load documentation for "${docId}".</span></div>`;
+    }
+  }
+
   // Expose public API
+  window.openHelpModal = openHelpModal;
   window.MP3MetaFixAuth = {
     state: AuthState,
     checkAuthStatus,
     openSettingsModal,
+    openHelpModal,
     openModal,
     closeModal,
   };

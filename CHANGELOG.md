@@ -9,6 +9,11 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ## [Unreleased]
 
+### Added
+- **In-App Documentation Portal (`/docs`)**: Full-page interactive documentation reader featuring responsive glassmorphic layout, category-grouped sidebar navigation, live search filtering, URL hash deep-linking (`/docs#app`, `/docs#deployment`), copyable code blocks, and previous/next article pagination.
+- **Context-Aware In-App Help Drawer / Modal**: Fast in-app overlay accessible from the user account menu, guest status pill, or keyboard shortcut (<kbd>F1</kbd>), automatically presenting the current workspace's guide with quick topic tabs and a link to open the full portal.
+- **Documentation API Endpoints**: Backend endpoints `GET /api/docs/list` and `GET /api/docs/{doc_id}` to securely serve synchronized markdown documentation directly from `docs/` with path traversal guards.
+
 ### Documentation
 - Modularized feature and workspace documentation into dedicated subdirectories under `docs/` (`docs/app/`, `docs/manager/`, `docs/projects/`, `docs/admin/`).
 - Streamlined `README.md` into a clean, scannable project overview featuring workspace status indicators, an installation scenarios matrix, and direct documentation links.

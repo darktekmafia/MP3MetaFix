@@ -36,6 +36,8 @@ from backend.config import (
     APP_DIR,
     MANAGER_DIR,
     ADMIN_DIR,
+    DOCS_DIR,
+    DOCS_STATIC_DIR,
     ASSETS_DIR,
     DATA_DIR,
     VERSION,
@@ -470,6 +472,130 @@ async def get_system_stats(user: Dict[str, Any] = Depends(require_admin)):
 async def get_app_version():
     """Version and system inquiry endpoint returning detailed environment metadata."""
     return get_system_version_info()
+
+
+DOCS_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "app": {
+        "id": "app",
+        "title": "MP3MetaFix Editor",
+        "category": "Workspaces",
+        "icon": "music",
+        "path": DOCS_DIR / "app" / "README.md",
+        "summary": "Mobile-first single-track editor, retina waveforms, cover art studio, and Suno AI extraction.",
+    },
+    "manager": {
+        "id": "manager",
+        "title": "MP3MetaManager",
+        "category": "Workspaces",
+        "icon": "folder",
+        "path": DOCS_DIR / "manager" / "README.md",
+        "summary": "Desktop batch editor, spreadsheet controls, stem pack bundler, and universal ID3 frame manager.",
+    },
+    "projects": {
+        "id": "projects",
+        "title": "MP3Projects Studio",
+        "category": "Workspaces",
+        "icon": "disc",
+        "path": DOCS_DIR / "projects" / "README.md",
+        "summary": "Multi-track EP/LP bundling, album sequencing, unified artwork, and persistent sessions.",
+    },
+    "admin": {
+        "id": "admin",
+        "title": "Admin Control Center",
+        "category": "Workspaces",
+        "icon": "shield",
+        "path": DOCS_DIR / "admin" / "README.md",
+        "summary": "System telemetry, access controls, Quick Settings pinning, and authorized updates.",
+    },
+    "deployment": {
+        "id": "deployment",
+        "title": "Production Deployment",
+        "category": "Deployment & Operations",
+        "icon": "server",
+        "path": DOCS_DIR / "DEPLOYMENT.md",
+        "summary": "Linux systemd service, Proxmox LXC setup, reverse proxy templates, and maintenance CLI.",
+    },
+    "account_migration": {
+        "id": "account_migration",
+        "title": "Service Account Migration",
+        "category": "Deployment & Operations",
+        "icon": "lock",
+        "path": DOCS_DIR / "ACCOUNT_MIGRATION.md",
+        "summary": "Dedicated unprivileged mp3metafix service user migration with 0700 filesystem isolation.",
+    },
+    "architecture": {
+        "id": "architecture",
+        "title": "System Architecture",
+        "category": "Security & Architecture",
+        "icon": "cpu",
+        "path": DOCS_DIR / "ARCHITECTURE.md",
+        "summary": "FastAPI engine, native Mutagen audio pipelines, and decoupled cryptographic storage.",
+    },
+    "security": {
+        "id": "security",
+        "title": "Security Hardening",
+        "category": "Security & Architecture",
+        "icon": "shield-check",
+        "path": DOCS_DIR / "SECURITY_HARDENING.md",
+        "summary": "Cryptographic session tokens, POSIX permissions, anti-spoofing rate limits, and defenses.",
+    },
+    "workflow": {
+        "id": "workflow",
+        "title": "Development Workflow",
+        "category": "Reference",
+        "icon": "code",
+        "path": DOCS_DIR / "development_workflow.md",
+        "summary": "Engineering standards, staged git workflow, release gates, and testing mandates.",
+    },
+    "suno_tos": {
+        "id": "suno_tos",
+        "title": "Suno TOS Compliance",
+        "category": "Reference",
+        "icon": "file-text",
+        "path": DOCS_DIR / "SUNO_TOS_COMPLIANCE.md",
+        "summary": "Permissible metadata ingestion, watermark preservation, and third-party terms compliance.",
+    },
+}
+
+
+@app.get("/api/docs/list")
+async def list_docs():
+    """Return available documentation articles and categories."""
+    sections = []
+    for doc_id, doc in DOCS_REGISTRY.items():
+        sections.append({
+            "id": doc["id"],
+            "title": doc["title"],
+            "category": doc["category"],
+            "icon": doc.get("icon", "file-text"),
+            "summary": doc.get("summary", ""),
+            "available": doc["path"].is_file(),
+        })
+    return {"sections": sections}
+
+
+@app.get("/api/docs/{doc_id}")
+async def get_doc_content(doc_id: str):
+    """Return the raw markdown content of a specific documentation article."""
+    if doc_id not in DOCS_REGISTRY:
+        raise HTTPException(404, "Documentation topic not found")
+    doc_meta = DOCS_REGISTRY[doc_id]
+    doc_path = doc_meta["path"]
+    if not doc_path.is_file():
+        raise HTTPException(404, "Documentation file is not available on host")
+    
+    try:
+        content = doc_path.read_text(encoding="utf-8")
+        return {
+            "id": doc_meta["id"],
+            "title": doc_meta["title"],
+            "category": doc_meta["category"],
+            "icon": doc_meta.get("icon", "file-text"),
+            "content": content,
+        }
+    except Exception as e:
+        logger.error(f"Failed to read documentation file {doc_path}: {e}")
+        raise HTTPException(500, "Could not load documentation content")
 
 
 @app.get("/api/updates/check")
@@ -1121,6 +1247,9 @@ if MANAGER_DIR.is_dir():
 
 if ADMIN_DIR.is_dir():
     app.mount("/admin", StaticFiles(directory=ADMIN_DIR, html=True), name="admin")
+
+if DOCS_STATIC_DIR.is_dir():
+    app.mount("/docs", StaticFiles(directory=DOCS_STATIC_DIR, html=True), name="docs")
 
 if STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")

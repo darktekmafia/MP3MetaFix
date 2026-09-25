@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MP3MetaFix Documentation Portal - Guides, Workspaces, Deployment, and Architecture">
+  <title>MP3MetaFix | Documentation Portal</title>
+  
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  
+  <link rel="icon" type="image/svg+xml" href="/assets/mp3metafix.svg">
+  <link rel="stylesheet" href="/css/styles.css?v=0.5.2">
+  <link rel="stylesheet" href="/docs/docs.css?v=0.5.2">
+</head>
+<body class="app-body docs-body">
+  <!-- Dynamic Background Glow Elements -->
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div class="bg-glow bg-glow-3"></div>
+
+  <div class="app-container docs-container">
+    <!-- Header -->
+    <header class="app-header docs-header">
+      <div class="brand-group">
+        <a href="/" class="brand-logo-container" title="Back to Gateway Hub">
+          <img src="/assets/mp3metafix.svg" alt="MP3MetaFix Logo" class="brand-logo" width="44" height="44">
+        </a>
+        <div class="brand-text">
+          <h1 class="brand-title">MP3<span>MetaFix</span></h1>
+          <p class="brand-subtitle"><span class="sub-full">Documentation & Engineering Portal</span><span class="sub-short">Docs</span></p>
+        </div>
+      </div>
+
+      <div class="docs-header-actions">
+        <!-- Quick Workspace Switcher -->
+        <nav class="docs-workspace-nav" aria-label="Workspaces">
+          <a href="/" class="nav-tab-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg> Hub</a>
+          <a href="/app" class="nav-tab-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg> Editor</a>
+          <a href="/manager" class="nav-tab-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Manager</a>
+        </nav>
+
+        <div class="header-auth-container" id="headerAuthContainer"></div>
+      </div>
+    </header>
+
+    <!-- Mobile Drawer Toggle -->
+    <div class="docs-mobile-nav-bar">
+      <button type="button" class="btn btn-secondary btn-sm" id="docsMobileMenuToggle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+        <span id="docsMobileCurrentTitle">Table of Contents</span>
+      </button>
+    </div>
+
+    <!-- Docs Main Layout -->
+    <div class="docs-layout">
+      <!-- Sidebar Navigation -->
+      <aside class="docs-sidebar" id="docsSidebar">
+        <div class="docs-search-wrapper">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="text" id="docsSearchInput" class="docs-search-input" placeholder="Search documentation..." autocomplete="off">
+          <button type="button" id="docsSearchClear" class="docs-search-clear hidden" aria-label="Clear search">✕</button>
+        </div>
+
+        <nav class="docs-nav" id="docsNavContainer" aria-label="Documentation navigation">
+          <!-- Dynamically populated categories and article items -->
+          <div class="docs-loading-spinner" id="docsNavLoading">
+            <div class="spinner"></div>
+            <span>Loading guides...</span>
+          </div>
+        </nav>
+      </aside>
+
+      <!-- Main Document Viewport -->
+      <main class="docs-content-area">
+        <div class="card docs-article-card" id="docsArticleCard">
+          <div class="docs-article-header" id="docsArticleHeader">
+            <div class="docs-meta-top">
+              <span class="docs-category-pill" id="docsCategoryPill">Guide</span>
+              <span class="docs-read-time" id="docsReadTime"></span>
+            </div>
+            <h2 class="docs-article-title" id="docsArticleTitle">Loading...</h2>
+          </div>
+
+          <div class="docs-article-body" id="docsArticleBody">
+            <div class="docs-loading-state" id="docsContentLoading">
+              <div class="spinner"></div>
+              <span>Fetching documentation content...</span>
+            </div>
+          </div>
+
+          <!-- Bottom Article Pager -->
+          <footer class="docs-article-footer" id="docsArticleFooter">
+            <button type="button" class="btn btn-secondary docs-pager-btn" id="docsPrevBtn" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="15 18 9 12 15 6"></polyline></svg>
+              <span class="pager-text"><span class="pager-sub">Previous</span><span class="pager-title" id="docsPrevTitle">None</span></span>
+            </button>
+            <button type="button" class="btn btn-secondary docs-pager-btn" id="docsNextBtn" disabled>
+              <span class="pager-text"><span class="pager-sub">Next</span><span class="pager-title" id="docsNextTitle">None</span></span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            </button>
+          </footer>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Scripts -->
+  <script src="/js/auth.js?v=0.5.2"></script>
+  <script src="/docs/docs.js?v=0.5.2"></script>
+</body>
+</html>

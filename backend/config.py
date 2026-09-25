@@ -8,10 +8,12 @@ from typing import Optional
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("MP3METAFIX_DATA_DIR", BASE_DIR / "data"))
 TEMP_DIR = DATA_DIR / "temp"
+DOCS_DIR = BASE_DIR / "docs"
 STATIC_DIR = BASE_DIR / "frontend"
 APP_DIR = STATIC_DIR / "app"
 MANAGER_DIR = STATIC_DIR / "manager"
 ADMIN_DIR = STATIC_DIR / "admin"
+DOCS_STATIC_DIR = STATIC_DIR / "docs"
 ASSETS_DIR = BASE_DIR / "assets"
 
 # Ensure directories exist
@@ -20,6 +22,7 @@ ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 APP_DIR.mkdir(parents=True, exist_ok=True)
 MANAGER_DIR.mkdir(parents=True, exist_ok=True)
 ADMIN_DIR.mkdir(parents=True, exist_ok=True)
+DOCS_STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 # Server Config
 HOST = os.getenv("MP3METAFIX_HOST", "127.0.0.1")
