@@ -231,6 +231,7 @@ def test_api_health_and_version(client):
     res_health = client.get("/api/health")
     assert res_health.status_code == 200
     assert res_health.json()["status"] == "ok"
+    assert res_health.json()["max_upload_size_mb"] == 150
 
     res_health_head = client.head("/api/health")
     assert res_health_head.status_code == 200
@@ -2300,6 +2301,7 @@ def test_suno_integration_settings_and_quick_pinning(client):
     res_status = client.get("/api/auth/status")
     assert res_status.status_code == 200
     assert res_status.json()["suno_integration_enabled"] is False
+    assert "max_upload_size_mb" in res_status.json()
 
     # 3. Settings endpoint updates suno_integration_enabled and quick pin
     res_update = client.post(

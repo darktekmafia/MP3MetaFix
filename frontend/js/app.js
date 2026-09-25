@@ -190,8 +190,20 @@ document.addEventListener('DOMContentLoaded', () => {
   let pendingArrayBuffer = null;
 
   async function handleFileUpload(file) {
+    if (!file) return;
+
     if (!/\.(mp3|m4a|wav)$/i.test(file.name)) {
       showToast('Please select an MP3, M4A, or WAV audio file', 'error');
+      if (fileInput) fileInput.value = '';
+      return;
+    }
+
+    const maxMb = window.MP3MetaFixMaxUploadSizeMb || 150;
+    const maxBytes = maxMb * 1024 * 1024;
+    if (file.size > maxBytes) {
+      const fileSizeMb = (file.size / (1024 * 1024)).toFixed(1);
+      showToast(`Selected file (${fileSizeMb} MB) exceeds maximum upload limit (${maxMb} MB).`, 'error');
+      if (fileInput) fileInput.value = '';
       return;
     }
 
@@ -239,9 +251,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } else {
         uploadProgressContainer.classList.add('hidden');
+        if (fileInput) fileInput.value = '';
         if (xhr.status === 401) {
           showToast('Authentication required. Please sign in.', 'error');
           if (window.MP3MetaFixAuth) window.MP3MetaFixAuth.openModal('loginModal');
+          return;
+        }
+        if (xhr.status === 413) {
+          const limitMb = window.MP3MetaFixMaxUploadSizeMb || 150;
+          try {
+            const errData = JSON.parse(xhr.responseText);
+            showToast(errData.detail || `File exceeds maximum allowed upload size (${limitMb} MB).`, 'error');
+          } catch (_) {
+            showToast(`File exceeds maximum allowed upload size (${limitMb} MB).`, 'error');
+          }
           return;
         }
         try {
@@ -255,6 +278,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     xhr.onerror = () => {
       uploadProgressContainer.classList.add('hidden');
+      if (fileInput) fileInput.value = '';
       showToast('Network error during upload', 'error');
     };
 
@@ -432,6 +456,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!state.hasSession) return;
     if (!file.type.startsWith('image/')) {
       showToast('Please upload an image file (JPEG, PNG, WebP)', 'error');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('Artwork image must be under 10 MB', 'error');
       return;
     }
 
@@ -2014,6 +2042,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Restore session once auth is established
   window.addEventListener('mp3metafix:auth-ready', (e) => {
+    if (e.detail && typeof e.detail.maxUploadSizeMb !== 'undefined') {
+      const pill = document.getElementById('maxUploadPill');
+      if (pill) pill.textContent = `Up to ${e.detail.maxUploadSizeMb} MB`;
+    }
     if (e.detail && typeof e.detail.sunoIntegrationEnabled !== 'undefined') {
       state.sunoIntegrationEnabled = !!e.detail.sunoIntegrationEnabled;
       updateSunoIntegrationUI();

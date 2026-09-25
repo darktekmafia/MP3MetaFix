@@ -245,6 +245,7 @@ async def get_auth_status(request: Request):
     """Return system setup state, current session identity, and guest mode policy."""
     setup_req = auth_manager.is_setup_required()
     user = get_current_user(request)
+    settings = auth_manager.get_settings()
     return {
         "setup_required": setup_req,
         "initialized": not setup_req,
@@ -255,7 +256,9 @@ async def get_auth_status(request: Request):
         "guest_mode": auth_manager.is_guest_mode_enabled(),
         "is_guest": user is None and auth_manager.is_guest_mode_enabled(),
         "suno_integration_enabled": auth_manager.is_suno_enabled(),
+        "max_upload_size_mb": settings.get("max_upload_size_mb", MAX_UPLOAD_SIZE_MB),
     }
+
 
 
 @app.post("/api/auth/setup")
@@ -373,7 +376,12 @@ async def update_settings(req: SettingsUpdateRequest, user: Dict[str, Any] = Dep
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health_check():
     """Health check endpoint supporting both GET and HEAD requests."""
-    return {"status": "ok", "version": VERSION}
+    return {
+        "status": "ok",
+        "version": VERSION,
+        "max_upload_size_mb": auth_manager.get_settings().get("max_upload_size_mb", MAX_UPLOAD_SIZE_MB),
+    }
+
 
 
 SERVER_START_TIME = time.time()

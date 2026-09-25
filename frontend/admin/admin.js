@@ -267,6 +267,11 @@
 
       if (res.ok) {
         notify('System policies and quick settings updated successfully', 'success');
+        window.MP3MetaFixMaxUploadSizeMb = maxUploadSize;
+        const maxUploadPill = document.getElementById('maxUploadPill');
+        if (maxUploadPill) {
+          maxUploadPill.textContent = `Up to ${maxUploadSize} MB`;
+        }
       } else {
         notify(data.detail || 'Failed to update system policies', 'error');
       }

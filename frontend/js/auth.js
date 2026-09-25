@@ -267,6 +267,13 @@
       AuthState.guestMode = !!data.guest_mode;
       AuthState.isGuest = !!data.is_guest;
       AuthState.sunoIntegrationEnabled = !!data.suno_integration_enabled;
+      AuthState.maxUploadSizeMb = data.max_upload_size_mb || 150;
+      window.MP3MetaFixMaxUploadSizeMb = AuthState.maxUploadSizeMb;
+
+      const maxUploadPill = document.getElementById('maxUploadPill');
+      if (maxUploadPill) {
+        maxUploadPill.textContent = `Up to ${AuthState.maxUploadSizeMb} MB`;
+      }
 
       renderHeaderAuth();
 
@@ -615,6 +622,12 @@
         notify('Quick Settings updated successfully', 'success');
         AuthState.guestMode = isGuest;
         AuthState.sunoIntegrationEnabled = isSuno;
+        AuthState.maxUploadSizeMb = maxUpload;
+        window.MP3MetaFixMaxUploadSizeMb = maxUpload;
+        const maxUploadPill = document.getElementById('maxUploadPill');
+        if (maxUploadPill) {
+          maxUploadPill.textContent = `Up to ${maxUpload} MB`;
+        }
         window.dispatchEvent(new CustomEvent('mp3metafix:auth-ready', { detail: { ...AuthState } }));
         renderHeaderAuth();
       } else {
