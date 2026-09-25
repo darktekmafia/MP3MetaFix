@@ -1,6 +1,6 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.5.2-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.5.3-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
 
@@ -21,6 +21,8 @@ MP3MetaFix organizes music editing into tailored workspace interfaces:
 | 🗂️ **MP3MetaManager** | `/manager` | *Under Development (Shell)* | Desktop-first power-user workspace for high-density spreadsheet batch editing, folder tree ingestion, deep ID3 frame inspection (`TXXX`, `COMM`, `APIC`), stems, and LRC karaoke sync. |
 | 🎛️ **MP3Projects Studio** | `/projects` | *Under Development (Planned)* | Multi-track album sequencing, stem pack bundling, persistent project sessions, and structured release ZIP packaging. |
 | 🛡️ **Admin Control Center** | `/admin` | **Active** | Administrator dashboard for system diagnostics (CPU, RAM, disk, quotas), guest access controls, Quick Settings pinning, and authorized update management. |
+| 📖 **Documentation Portal** | `/docs` | **Active** | Full interactive documentation reader and in-app context help with architecture, guides, and API reference. |
+
 
 ---
 

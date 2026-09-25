@@ -9,11 +9,14 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-09-25
+
 ### Added
 - **In-App Documentation Portal (`/docs`)**: Full-page interactive documentation reader featuring responsive glassmorphic layout, category-grouped sidebar navigation, live search filtering, URL hash deep-linking (`/docs#app`, `/docs#deployment`), copyable code blocks, and previous/next article pagination.
 - **Context-Aware In-App Help Drawer / Modal**: Fast in-app overlay accessible from the user account menu, guest status pill, or keyboard shortcut (<kbd>F1</kbd>), automatically presenting the current workspace's guide with quick topic tabs and a link to open the full portal.
 - **Documentation API Endpoints**: Backend endpoints `GET /api/docs/list` and `GET /api/docs/{doc_id}` to securely serve synchronized markdown documentation directly from `docs/` with path traversal guards.
 
+### Fixed & Hardened
 - **Login Rate Limiter Memory Defense & Bounded Tracking**: Hardened `LoginRateLimiter` against per-IP dictionary exhaustion attacks by introducing `max_tracked_ips=5000` bounds and periodic auto-purging (`_purge_stale`) of expired blocks and stale failure records, protecting memory on resource-constrained host systems and containers.
 - **Dynamic Runtime Quota & Policy Enforcement**: Backend middleware (`RequestLimitsMiddleware`), storage manager (`SessionManager`), and token verification (`verify_signed_session_token`) dynamically query persistent system settings (`max_upload_size_mb`, `session_ttl_minutes`, `max_global_storage_mb`, `max_sessions`). Administrator modifications in `/admin` or Quick Settings take effect immediately at runtime without requiring service restarts.
 - **Client-Side Upload Size Catch & Dynamic Dropzone Badge**: Added pre-upload file size validation in `/app` and `/manager` before dispatching network requests, displaying informative UI toast notifications (`Selected file (X MB) exceeds maximum upload limit (Y MB)`) and preventing raw HTTP 413 network rejections in the browser console. Dropzone capacity badges (`#maxUploadPill`) dynamically synchronize with active runtime quotas.
