@@ -17,8 +17,8 @@
     rawText: '',
   };
 
-  // Section / Header Regex
-  const SECTION_TAG_REGEX = /^\[(.*?)\]$/;
+  // Section / Header Regex - matches [Verse 1], (Chorus), [Outro], (Bridge), etc.
+  const SECTION_TAG_REGEX = /^[\[(](.*?)[\])]$/;
   const INSTRUMENTAL_TAGS = ['intro', 'guitar solo', 'solo', 'instrumental', 'drop', 'interlude', 'outro', 'break'];
 
   // DOM Elements cache
@@ -112,12 +112,16 @@
     const parsed = [];
     let idx = 0;
 
-    // Map existing timestamps by text or sequential index if available
-    const existingMap = new Map();
+    // Map existing timestamps in sequential queues per lowercase text key to prevent repeated lyrics collisions
+    const occurrencesMap = new Map();
     if (Array.isArray(existingSynced)) {
       existingSynced.forEach(item => {
         if (item && item.text) {
-          existingMap.set(item.text.trim().toLowerCase(), item.time_ms);
+          const key = item.text.trim().toLowerCase();
+          if (!occurrencesMap.has(key)) {
+            occurrencesMap.set(key, []);
+          }
+          occurrencesMap.get(key).push(item.time_ms);
         }
       });
     }
@@ -126,10 +130,9 @@
       const info = classifyLine(lineText);
       let time_ms = null;
 
-      // Check if existing timestamp matches
       const lower = lineText.toLowerCase();
-      if (existingMap.has(lower)) {
-        time_ms = existingMap.get(lower);
+      if (occurrencesMap.has(lower) && occurrencesMap.get(lower).length > 0) {
+        time_ms = occurrencesMap.get(lower).shift();
       }
 
       parsed.push({
