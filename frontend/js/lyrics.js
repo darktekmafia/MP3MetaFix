@@ -146,6 +146,30 @@
   }
 
   // --- Helpers ---
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function getActiveLines() {
+    if (lyricsState.stripTags) {
+      return lyricsState.lines.filter(l => !l.isHeader);
+    }
+    return lyricsState.lines;
+  }
+
+  function getExportableLines() {
+    if (lyricsState.stripTags) {
+      return lyricsState.lines.filter(l => !l.isHeader && l.time_ms !== null);
+    }
+    return lyricsState.lines.filter(l => l.time_ms !== null);
+  }
+
   function formatMs(ms) {
     if (ms === null || typeof ms === 'undefined') return '--:--.--';
     const totalSecs = Math.max(0, ms / 1000);
@@ -222,7 +246,7 @@
         const sylt = appState.metadata.synced_lyrics || [];
         if (raw || sylt.length > 0) {
           lyricsState.lines = parseLyricsText(raw || sylt.map(s => s.text).join('\n'), sylt);
-          findNextUnstampedIndex();
+          lyricsState.currentIndex = findNextTargetIndex(0);
         }
       }
     } else {
@@ -231,14 +255,55 @@
     }
   }
 
-  function findNextUnstampedIndex() {
-    for (let i = 0; i < lyricsState.lines.length; i++) {
-      if (lyricsState.lines[i].time_ms === null) {
-        lyricsState.currentIndex = i;
-        return;
+  function findNextTargetIndex(fromIdx = 0) {
+    if (lyricsState.lines.length === 0) return 0;
+
+    // If stripTags is enabled, strictly search for next unstamped vocal line
+    if (lyricsState.stripTags) {
+      for (let i = fromIdx; i < lyricsState.lines.length; i++) {
+        if (!lyricsState.lines[i].isHeader && lyricsState.lines[i].time_ms === null) {
+          return i;
+        }
+      }
+      for (let i = 0; i < lyricsState.lines.length; i++) {
+        if (!lyricsState.lines[i].isHeader && lyricsState.lines[i].time_ms === null) {
+          return i;
+        }
+      }
+      for (let i = lyricsState.lines.length - 1; i >= 0; i--) {
+        if (!lyricsState.lines[i].isHeader) return i;
+      }
+      return 0;
+    }
+
+    // Normal mode (tags preserved):
+    // Auto-stamp Intro at 0ms if at start
+    if (lyricsState.lines.length > 0 && lyricsState.lines[0].isHeader && lyricsState.lines[0].time_ms === null) {
+      lyricsState.lines[0].time_ms = 0;
+    }
+
+    // Look for next unstamped line. If it's a section header preceding vocals, target the vocal line directly
+    for (let i = fromIdx; i < lyricsState.lines.length; i++) {
+      const line = lyricsState.lines[i];
+      if (line.time_ms === null) {
+        if (line.isHeader && i + 1 < lyricsState.lines.length && !lyricsState.lines[i + 1].isHeader) {
+          return i + 1;
+        }
+        return i;
       }
     }
-    lyricsState.currentIndex = Math.max(0, lyricsState.lines.length - 1);
+
+    for (let i = 0; i < lyricsState.lines.length; i++) {
+      const line = lyricsState.lines[i];
+      if (line.time_ms === null) {
+        if (line.isHeader && i + 1 < lyricsState.lines.length && !lyricsState.lines[i + 1].isHeader) {
+          return i + 1;
+        }
+        return i;
+      }
+    }
+
+    return Math.max(0, lyricsState.lines.length - 1);
   }
 
   // --- Stamping Logic ---
@@ -257,13 +322,38 @@
     const currentMs = Math.round(audio.currentTime * 1000);
     const targetIdx = lyricsState.currentIndex;
 
-    if (targetIdx < lyricsState.lines.length) {
-      lyricsState.lines[targetIdx].time_ms = currentMs;
+    if (targetIdx >= 0 && targetIdx < lyricsState.lines.length) {
+      const targetLine = lyricsState.lines[targetIdx];
 
-      // Advance to next line
-      if (targetIdx + 1 < lyricsState.lines.length) {
-        lyricsState.currentIndex = targetIdx + 1;
+      // Auto-stamp preceding header tags with lead-in reduction if not stripped
+      if (!lyricsState.stripTags && !targetLine.isHeader) {
+        const LEAD_IN_MS = 500; // 500ms time reduction / lead-in for section tags
+        for (let j = targetIdx - 1; j >= 0; j--) {
+          const prevLine = lyricsState.lines[j];
+          if (prevLine.isHeader && prevLine.time_ms === null) {
+            if (j === 0 && (prevLine.isInstrumental || prevLine.headerLabel.toLowerCase().includes('intro'))) {
+              prevLine.time_ms = 0;
+            } else {
+              let prevStamped = 0;
+              for (let k = j - 1; k >= 0; k--) {
+                if (lyricsState.lines[k].time_ms !== null) {
+                  prevStamped = lyricsState.lines[k].time_ms;
+                  break;
+                }
+              }
+              prevLine.time_ms = Math.max(prevStamped + 50, currentMs - LEAD_IN_MS);
+            }
+          } else if (!prevLine.isHeader) {
+            break;
+          }
+        }
       }
+
+      // Stamp target line
+      targetLine.time_ms = currentMs;
+
+      // Advance to next target line
+      lyricsState.currentIndex = findNextTargetIndex(targetIdx + 1);
 
       renderQueue();
       updateHeroBanner();
@@ -272,9 +362,37 @@
   }
 
   function stepBackOneLine() {
-    if (lyricsState.currentIndex > 0) {
-      lyricsState.currentIndex--;
-      lyricsState.lines[lyricsState.currentIndex].time_ms = null;
+    const activeLines = getActiveLines();
+    if (activeLines.length === 0) return;
+
+    let lastStampedIdx = -1;
+    for (let i = lyricsState.lines.length - 1; i >= 0; i--) {
+      if (lyricsState.lines[i].time_ms !== null) {
+        if (lyricsState.stripTags && lyricsState.lines[i].isHeader) continue;
+        lastStampedIdx = i;
+        break;
+      }
+    }
+
+    if (lastStampedIdx >= 0) {
+      const line = lyricsState.lines[lastStampedIdx];
+      line.time_ms = null;
+
+      // If this was a vocal line with auto-stamped preceding headers, clear them too
+      if (!lyricsState.stripTags && !line.isHeader) {
+        for (let j = lastStampedIdx - 1; j >= 0; j--) {
+          const prev = lyricsState.lines[j];
+          if (prev.isHeader) {
+            if (j !== 0 || prev.time_ms !== 0) {
+              prev.time_ms = null;
+            }
+          } else {
+            break;
+          }
+        }
+      }
+
+      lyricsState.currentIndex = lastStampedIdx;
       renderQueue();
       updateHeroBanner();
       scrollRowIntoView(lyricsState.currentIndex);
@@ -282,11 +400,16 @@
   }
 
   function nudgeLastStamped(deltaMs) {
-    const stampedIdx = lyricsState.currentIndex > 0 && lyricsState.lines[lyricsState.currentIndex].time_ms === null
-      ? lyricsState.currentIndex - 1
-      : lyricsState.currentIndex;
+    let stampedIdx = -1;
+    for (let i = lyricsState.lines.length - 1; i >= 0; i--) {
+      if (lyricsState.lines[i].time_ms !== null) {
+        if (lyricsState.stripTags && lyricsState.lines[i].isHeader) continue;
+        stampedIdx = i;
+        break;
+      }
+    }
 
-    if (stampedIdx >= 0 && stampedIdx < lyricsState.lines.length && lyricsState.lines[stampedIdx].time_ms !== null) {
+    if (stampedIdx >= 0 && stampedIdx < lyricsState.lines.length) {
       lyricsState.lines[stampedIdx].time_ms = Math.max(0, lyricsState.lines[stampedIdx].time_ms + deltaMs);
       renderQueue();
     }
@@ -295,7 +418,7 @@
   function clearAllStamps() {
     if (confirm('Clear all timestamp recordings? The lyrics text will remain intact.')) {
       lyricsState.lines.forEach(l => l.time_ms = null);
-      lyricsState.currentIndex = 0;
+      lyricsState.currentIndex = findNextTargetIndex(0);
       renderQueue();
       updateHeroBanner();
       showToast('All timestamps cleared', 'info');
@@ -306,7 +429,8 @@
   function renderQueue() {
     if (!dom.lyricsQueueContainer) return;
 
-    if (lyricsState.lines.length === 0) {
+    const activeLines = getActiveLines();
+    if (activeLines.length === 0) {
       if (dom.lyricsEmptyState) dom.lyricsEmptyState.classList.remove('hidden');
       dom.lyricsQueueContainer.innerHTML = '';
       updateHeroBanner();
@@ -316,25 +440,29 @@
     if (dom.lyricsEmptyState) dom.lyricsEmptyState.classList.add('hidden');
     dom.lyricsQueueContainer.innerHTML = '';
 
+    let displayRank = 1;
     lyricsState.lines.forEach((line, idx) => {
-      // If stripTags is true and line is a header, omit it
+      // If stripTags is true and line is a header, omit it completely from the DOM
       if (lyricsState.stripTags && line.isHeader) return;
 
+      const isCurrent = idx === lyricsState.currentIndex;
+      const isStamped = line.time_ms !== null;
+
       const row = document.createElement('div');
-      row.className = `lyric-queue-row ${idx === lyricsState.currentIndex ? 'active' : ''} ${line.time_ms !== null ? 'stamped' : ''} ${line.isHeader ? 'row-header' : ''}`;
+      row.className = `lyric-queue-row ${isCurrent ? 'active' : ''} ${isStamped ? 'stamped' : ''} ${line.isHeader ? 'row-header' : ''}`;
       row.dataset.index = idx;
 
       // Index column
       const idxCell = document.createElement('div');
       idxCell.className = 'queue-col-idx';
-      idxCell.textContent = `#${idx + 1}`;
+      idxCell.textContent = `#${displayRank++}`;
 
       // Status indicator
       const statusCell = document.createElement('div');
       statusCell.className = 'queue-col-status';
-      if (line.time_ms !== null) {
+      if (isStamped) {
         statusCell.innerHTML = '<span class="status-dot-stamped" title="Stamped">✓</span>';
-      } else if (idx === lyricsState.currentIndex) {
+      } else if (isCurrent) {
         statusCell.innerHTML = '<span class="status-dot-active" title="Next to stamp">▶</span>';
       } else {
         statusCell.innerHTML = '<span class="status-dot-pending" title="Pending">○</span>';
@@ -345,9 +473,9 @@
       timeCell.className = 'queue-col-time';
       const timeBtn = document.createElement('button');
       timeBtn.type = 'button';
-      timeBtn.className = `lyric-time-pill ${line.time_ms !== null ? 'has-time' : ''}`;
+      timeBtn.className = `lyric-time-pill ${isStamped ? 'has-time' : ''}`;
       timeBtn.textContent = formatMs(line.time_ms);
-      timeBtn.title = line.time_ms !== null ? 'Click to jump audio to this timestamp' : 'Not stamped yet';
+      timeBtn.title = isStamped ? 'Click to jump audio to this timestamp' : 'Not stamped yet';
       timeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         if (line.time_ms !== null) {
@@ -405,7 +533,7 @@
       });
 
       actionCell.appendChild(restampBtn);
-      if (line.time_ms !== null) actionCell.appendChild(clearBtn);
+      if (isStamped) actionCell.appendChild(clearBtn);
 
       // Row click selects line
       row.addEventListener('click', () => {
@@ -429,7 +557,8 @@
   function updateHeroBanner() {
     if (!dom.stampHeroLineText || !dom.stampHeroLineCounter) return;
 
-    const total = lyricsState.lines.length;
+    const activeLines = getActiveLines();
+    const total = activeLines.length;
     if (total === 0) {
       dom.stampHeroLineText.textContent = 'No Lyrics Loaded';
       dom.stampHeroLineCounter.textContent = '0 / 0';
@@ -437,15 +566,38 @@
     }
 
     const current = lyricsState.lines[lyricsState.currentIndex];
-    if (current) {
-      dom.stampHeroLineText.textContent = current.text;
-      dom.stampHeroLineCounter.textContent = `Line ${lyricsState.currentIndex + 1} of ${total}`;
+    if (current && (!lyricsState.stripTags || !current.isHeader)) {
+      const activeRank = activeLines.indexOf(current) + 1;
+      dom.stampHeroLineCounter.textContent = lyricsState.stripTags
+        ? `Vocal Line ${activeRank} of ${total}`
+        : `Line ${activeRank} of ${total}`;
+
+      let parentHeader = '';
+      if (!current.isHeader) {
+        for (let j = lyricsState.currentIndex - 1; j >= 0; j--) {
+          if (lyricsState.lines[j].isHeader) {
+            parentHeader = lyricsState.lines[j].text;
+            break;
+          }
+        }
+      }
+
       if (current.isHeader) {
-        dom.stampHeroLineText.innerHTML = `<span class="section-tag-badge">${current.text}</span>`;
+        dom.stampHeroLineText.innerHTML = `<span class="section-tag-badge ${current.isInstrumental ? 'badge-instrumental' : 'badge-vocal'}">${escapeHtml(current.text)}</span>`;
+      } else if (parentHeader && !lyricsState.stripTags) {
+        dom.stampHeroLineText.innerHTML = `<span class="section-tag-badge badge-vocal" style="font-size:0.75rem; vertical-align:middle; margin-right:8px;">${escapeHtml(parentHeader)}</span><span>${escapeHtml(current.text)}</span>`;
+      } else {
+        dom.stampHeroLineText.textContent = current.text;
       }
     } else {
-      dom.stampHeroLineText.textContent = 'All Lines Stamped! 🎉';
-      dom.stampHeroLineCounter.textContent = `${total} / ${total}`;
+      const allStamped = activeLines.every(l => l.time_ms !== null);
+      if (allStamped) {
+        dom.stampHeroLineText.textContent = 'All Lines Stamped! 🎉';
+        dom.stampHeroLineCounter.textContent = `${total} / ${total}`;
+      } else {
+        lyricsState.currentIndex = findNextTargetIndex(0);
+        updateHeroBanner();
+      }
     }
   }
 
@@ -464,7 +616,7 @@
     if (!audio) return;
 
     const currentMs = Math.round(audio.currentTime * 1000);
-    const lines = lyricsState.lines.filter(l => l.time_ms !== null).sort((a, b) => a.time_ms - b.time_ms);
+    const lines = getExportableLines().sort((a, b) => a.time_ms - b.time_ms);
 
     if (lines.length === 0) {
       if (dom.karaokeActiveLine) dom.karaokeActiveLine.textContent = 'No stamped lyrics yet. Use Tap-to-Sync to record timestamps.';
@@ -523,9 +675,7 @@
       return;
     }
 
-    const stampedEntries = lyricsState.lines
-      .filter(l => l.time_ms !== null)
-      .map(l => ({ text: l.text, time_ms: l.time_ms }));
+    const stampedEntries = getExportableLines().map(l => ({ text: l.text, time_ms: l.time_ms }));
 
     if (stampedEntries.length === 0) {
       showToast('No timestamped lyrics to save.', 'info');
@@ -580,9 +730,7 @@
 
   // --- Export & Import LRC ---
   async function exportLrcFile() {
-    const stampedEntries = lyricsState.lines
-      .filter(l => l.time_ms !== null)
-      .map(l => ({ text: l.text, time_ms: l.time_ms }));
+    const stampedEntries = getExportableLines().map(l => ({ text: l.text, time_ms: l.time_ms }));
 
     if (stampedEntries.length === 0) {
       showToast('Please stamp at least one line before exporting .LRC', 'info');
@@ -633,7 +781,7 @@
       const data = await res.json();
       if (res.ok && data.success && data.entries) {
         lyricsState.lines = parseLyricsText(data.entries.map(e => e.text).join('\n'), data.entries);
-        findNextUnstampedIndex();
+        lyricsState.currentIndex = findNextTargetIndex(0);
         renderQueue();
         showToast(`Imported ${data.count} timestamped lines from .LRC`, 'success');
       } else {
@@ -701,7 +849,9 @@
     if (dom.toggleStripTags) {
       dom.toggleStripTags.addEventListener('change', (e) => {
         lyricsState.stripTags = e.target.checked;
+        lyricsState.currentIndex = findNextTargetIndex(0);
         renderQueue();
+        updateHeroBanner();
       });
     }
 
@@ -770,7 +920,7 @@
           return;
         }
         lyricsState.lines = parseLyricsText(text, appState.metadata.synced_lyrics || []);
-        findNextUnstampedIndex();
+        lyricsState.currentIndex = findNextTargetIndex(0);
         renderQueue();
         showToast('Pulled lyrics from audio track', 'success');
       });
@@ -785,7 +935,7 @@
           return;
         }
         lyricsState.lines = parseLyricsText(text, lyricsState.lines.filter(l => l.time_ms !== null));
-        findNextUnstampedIndex();
+        lyricsState.currentIndex = findNextTargetIndex(0);
         switchLyricsMode('sync');
         showToast('Updated lyrics queue', 'success');
       });
