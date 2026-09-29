@@ -79,6 +79,8 @@ from backend.metadata_engine import (
     extract_metadata_and_artwork,
     write_metadata_and_artwork,
     get_embedded_artwork_binary,
+    sylt_to_lrc,
+    lrc_to_sylt,
 )
 from backend.suno_extractor import (
     fetch_suno_metadata,
@@ -916,6 +918,44 @@ async def api_suno_apply_artwork(
         "size_bytes": len(clean_bytes),
         "preview_data_url": preview_url,
     }
+
+
+class LrcParseRequest(BaseModel):
+    lrc_text: str = Field(..., max_length=100000, description="Raw LRC lyrics text")
+
+
+class LrcExportRequest(BaseModel):
+    entries: list = Field(default=[], description="Synced lyrics entries")
+    artist: Optional[str] = Field(default="", max_length=500)
+    title: Optional[str] = Field(default="", max_length=500)
+    album: Optional[str] = Field(default="", max_length=500)
+
+
+@app.post("/api/lyrics/parse-lrc")
+async def parse_lrc_payload(
+    req: LrcParseRequest,
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
+):
+    """Parse raw LRC text and return structured timestamped lyric entries."""
+    entries = lrc_to_sylt(req.lrc_text)
+    return {"success": True, "entries": entries, "count": len(entries)}
+
+
+@app.post("/api/lyrics/export-lrc")
+async def export_lrc_payload(
+    req: LrcExportRequest,
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
+):
+    """Generate standard LRC file content from timestamped entries."""
+    lrc_content = sylt_to_lrc(req.entries, artist=req.artist or "", title=req.title or "", album=req.album or "")
+    filename = sanitize_filename(f"{req.artist} - {req.title}" if req.artist and req.title else (req.title or "lyrics")) + ".lrc"
+    return Response(
+        content=lrc_content,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
 
 
 @app.post("/api/save")

@@ -3213,3 +3213,92 @@ do_install
     assert "./install.sh --reinstall" in result.stdout
 
 
+def test_sylt_extract_and_save_roundtrip(tmp_path):
+    """Verify SYLT frame writing and reading in MP3 metadata engine."""
+    from backend.metadata_engine import (
+        MetadataModel,
+        extract_metadata_and_artwork,
+        write_metadata_and_artwork,
+        sylt_to_lrc,
+        lrc_to_sylt,
+    )
+    import shutil
+
+    sample = Path("Right In Front Of You.mp3")
+    if not sample.exists():
+        pytest.skip("Sample Right In Front Of You.mp3 not found")
+
+    dest = tmp_path / "test_sylt.mp3"
+    shutil.copyfile(sample, dest)
+
+    # 1. Initial extraction of Suno track
+    data = extract_metadata_and_artwork(dest)
+    assert "[Intro]" in data["metadata"]["lyrics"]
+    assert "[Verse 1]" in data["metadata"]["lyrics"]
+    assert isinstance(data["metadata"]["synced_lyrics"], list)
+
+    # 2. Add synced lyrics
+    entries = [
+        {"text": "[Intro]", "time_ms": 0},
+        {"text": "[Verse 1]", "time_ms": 4200},
+        {"text": "I remember the day you arrived with nothing but a name", "time_ms": 8500},
+        {"text": "[Chorus]", "time_ms": 25000},
+    ]
+    meta = MetadataModel(
+        title=data["metadata"]["title"],
+        artist=data["metadata"]["artist"],
+        lyrics=data["metadata"]["lyrics"],
+        synced_lyrics=entries,
+    )
+    write_metadata_and_artwork(dest, meta)
+
+    # 3. Verify reading back
+    updated = extract_metadata_and_artwork(dest)
+    assert len(updated["metadata"]["synced_lyrics"]) == 4
+    assert updated["metadata"]["synced_lyrics"][0]["text"] == "[Intro]"
+    assert updated["metadata"]["synced_lyrics"][0]["time_ms"] == 0
+    assert updated["metadata"]["synced_lyrics"][1]["text"] == "[Verse 1]"
+    assert updated["metadata"]["synced_lyrics"][1]["time_ms"] == 4200
+
+    # 4. LRC format conversion roundtrip
+    lrc = sylt_to_lrc(entries, artist="against_the_grain", title="Right In Front Of You")
+    assert "[ti:Right In Front Of You]" in lrc
+    assert "[00:04.20][Verse 1]" in lrc
+
+    parsed = lrc_to_sylt(lrc)
+    assert len(parsed) == 4
+    assert parsed[1]["text"] == "[Verse 1]"
+    assert parsed[1]["time_ms"] == 4200
+
+
+def test_lyrics_api_endpoints(client):
+    """Verify /api/lyrics/parse-lrc and /api/lyrics/export-lrc endpoints."""
+    lrc_text = """[ti:Test Track]
+[ar:Test Artist]
+[00:02.50][Intro]
+[00:06.00]First line of lyrics
+[00:12.35]Second line of lyrics
+"""
+    # Parse
+    res_parse = client.post("/api/lyrics/parse-lrc", json={"lrc_text": lrc_text})
+    assert res_parse.status_code == 200
+    data = res_parse.json()
+    assert data["success"] is True
+    assert data["count"] == 3
+    assert data["entries"][0]["text"] == "[Intro]"
+    assert data["entries"][0]["time_ms"] == 2500
+    assert data["entries"][1]["text"] == "First line of lyrics"
+    assert data["entries"][1]["time_ms"] == 6000
+
+    # Export
+    res_export = client.post("/api/lyrics/export-lrc", json={
+        "entries": data["entries"],
+        "artist": "Test Artist",
+        "title": "Test Track",
+    })
+    assert res_export.status_code == 200
+    assert "attachment" in res_export.headers.get("content-disposition", "")
+    assert "[00:02.50][Intro]" in res_export.text
+
+
+

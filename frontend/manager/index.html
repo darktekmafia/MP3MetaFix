@@ -78,6 +78,12 @@
                 <span>MP3Metafix</span>
               </button>
             </li>
+            <li class="sidebar-nav-item" id="navItemLyrics">
+              <button class="sidebar-nav-btn" id="btnNavLyrics" title="Interactive Tap-to-Sync lyrics and SYLT generator">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+                <span>Synced Lyrics / SYLT</span>
+              </button>
+            </li>
           </ul>
         </div>
 
@@ -95,12 +101,6 @@
               <button class="sidebar-nav-btn btn-disabled" disabled aria-disabled="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
                 <span>Suno AI Stems</span>
-              </button>
-            </li>
-            <li class="sidebar-nav-item">
-              <button class="sidebar-nav-btn btn-disabled" disabled aria-disabled="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
-                <span>Synced Lyrics / SYLT</span>
               </button>
             </li>
             <li class="sidebar-nav-item">
@@ -131,8 +131,9 @@
         </div>
       </aside>
 
-      <!-- Center Data Area: Integrated MP3MetaFix Editor Workspace -->
+      <!-- Center Data Area: Integrated MP3MetaFix Editor & Synced Lyrics Workspace -->
       <section class="manager-main-panel">
+        <div id="panelAppView">
         <!-- State 1: Upload Dropzone -->
         <section id="uploadSection" class="upload-section">
           <div id="dropzone" class="dropzone-card" tabindex="0" role="button" aria-label="Upload MP3, M4A, or WAV audio file">
@@ -484,6 +485,180 @@
             </div>
           </div>
         </section>
+        </div>
+
+        <!-- Synced Lyrics & Karaoke Studio Panel -->
+        <div id="panelLyricsView" class="lyrics-panel-view hidden">
+          <!-- Lyrics Header / Audio Track Status Card -->
+          <div class="card lyrics-header-card">
+            <div class="lyrics-header-row">
+              <div class="lyrics-track-info">
+                <div class="lyrics-icon-badge">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22">
+                    <path d="M9 18V5l12-2v13"></path>
+                    <circle cx="6" cy="18" r="3"></circle>
+                    <circle cx="18" cy="16" r="3"></circle>
+                  </svg>
+                </div>
+                <div>
+                  <h2 id="lyricsTrackTitle" class="lyrics-track-title">No Audio Track Loaded</h2>
+                  <p id="lyricsAudioSpecs" class="lyrics-track-sub">Upload or load an audio file in MP3MetaFix</p>
+                </div>
+              </div>
+
+              <!-- Mode Switcher Tabs -->
+              <div class="lyrics-mode-tabs" role="tablist">
+                <button type="button" class="btn btn-sm btn-secondary active" id="btnModeSync">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                  <span>Tap-to-Sync</span>
+                </button>
+                <button type="button" class="btn btn-sm btn-secondary" id="btnModeKaraoke">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                  <span>Karaoke Preview</span>
+                </button>
+                <button type="button" class="btn btn-sm btn-secondary" id="btnModeRaw">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                  <span>Raw Text / Edit</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Mini Audio Scrubber & Playback Controls -->
+            <div class="lyrics-player-bar">
+              <button type="button" class="player-btn-play player-btn-sm" id="btnLyricsPlayPause" aria-label="Play or pause audio">
+                <svg id="lyricsPlayIcon" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <svg id="lyricsPauseIcon" viewBox="0 0 24 24" fill="currentColor" class="hidden"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+              </button>
+              <span id="lyricsTimeCurrent" class="lyrics-time-display">00:00.00</span>
+              <input type="range" id="lyricsScrubber" min="0" max="100" step="0.1" value="0" class="player-slider lyrics-slider" aria-label="Audio position scrubber">
+              <span id="lyricsTimeTotal" class="lyrics-time-display">00:00.00</span>
+              <div class="lyrics-speed-group">
+                <select id="selectLyricsSpeed" class="form-select form-select-xs" title="Playback speed" aria-label="Playback speed">
+                  <option value="1.0" selected>1.0x Normal</option>
+                  <option value="0.75">0.75x Slow</option>
+                  <option value="0.5">0.5x Half</option>
+                  <option value="1.25">1.25x Fast</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mode 1: Tap-to-Sync View -->
+          <div id="modeSyncView" class="lyrics-mode-container">
+            <!-- Stamping Hero Banner -->
+            <div class="card stamping-hero-card">
+              <div class="stamping-hero-top">
+                <span class="stamping-hero-badge">Next Line to Stamp</span>
+                <span id="stampHeroLineCounter" class="stamping-hero-counter">0 / 0</span>
+              </div>
+              <div id="stampHeroLineText" class="stamping-hero-text">
+                Press [Spacebar] or tap below to stamp timestamp
+              </div>
+              <div class="stamping-hero-actions">
+                <button type="button" class="btn btn-primary btn-lg stamping-btn" id="btnStampHero">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  <span>STAMP TIMESTAMP (<kbd>Space</kbd>)</span>
+                </button>
+                <div class="stamping-adjust-group">
+                  <button type="button" class="btn btn-secondary btn-sm" id="btnStepBack" title="Revert last stamped line (Backspace)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+                    <span>Step Back</span>
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btnNudgeBack" title="Nudge -100ms">
+                    <span>-100ms</span>
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btnNudgeForward" title="Nudge +100ms">
+                    <span>+100ms</span>
+                  </button>
+                  <button type="button" class="btn btn-ghost btn-sm text-danger" id="btnClearAllStamps" title="Clear all timestamps">
+                    <span>Clear All</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Toolbar / Sync Options & Actions -->
+            <div class="lyrics-action-toolbar">
+              <div class="lyrics-toolbar-left">
+                <button type="button" class="btn btn-secondary btn-sm" id="btnPullTrackLyrics" title="Load lyrics from currently loaded audio file (USLT)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                  <span>Pull Track Lyrics (USLT)</span>
+                </button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnImportLrc" title="Import from standard .LRC file">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                  <span>Import .LRC</span>
+                </button>
+                <input type="file" id="lrcFileInput" accept=".lrc,text/plain" class="visually-hidden">
+                <label class="toggle-switch-compact" title="Display bracketed section tags like [Verse 1] as non-singable visual dividers">
+                  <input type="checkbox" id="toggleStripTags">
+                  <span class="compact-slider"></span>
+                  <span class="compact-label">Strip Section Tags</span>
+                </label>
+              </div>
+
+              <div class="lyrics-toolbar-right">
+                <button type="button" class="btn btn-secondary btn-sm" id="btnExportLrc" title="Export as standalone .LRC file">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                  <span>Export .LRC</span>
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" id="btnSaveSylt" title="Save SYLT frame directly into current MP3 audio file">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                  <span>Save SYLT to Audio</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Stamping Queue Table Card -->
+            <div class="card lyrics-queue-card">
+              <div class="queue-header-row">
+                <span class="queue-col-idx">Line</span>
+                <span class="queue-col-status">Status</span>
+                <span class="queue-col-time">Time (mm:ss.xx)</span>
+                <span class="queue-col-text">Lyric Text</span>
+                <span class="queue-col-actions">Actions</span>
+              </div>
+              <div id="lyricsQueueContainer" class="lyrics-queue-list">
+                <!-- Injected dynamically -->
+              </div>
+              <div id="lyricsEmptyState" class="lyrics-empty-notice">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                <h4>No Lyrics in Queue</h4>
+                <p>Click "Pull Track Lyrics (USLT)", import an .LRC file, or switch to "Raw Text / Edit" tab to paste lyrics.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mode 2: Karaoke Preview View -->
+          <div id="modeKaraokeView" class="lyrics-mode-container hidden">
+            <div class="card karaoke-preview-card">
+              <div class="karaoke-stage">
+                <div id="karaokeSectionBadge" class="karaoke-section-pill"></div>
+                <div id="karaokeCueBox" class="karaoke-cue-box hidden">
+                  <span id="karaokeCueText" class="karaoke-cue-text">🎵 Musical Intro</span>
+                </div>
+                <div id="karaokePrevLine" class="karaoke-line karaoke-prev"></div>
+                <div id="karaokeActiveLine" class="karaoke-line karaoke-active">Press Play to start Karaoke Preview</div>
+                <div id="karaokeNextLine" class="karaoke-line karaoke-next"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mode 3: Raw Text Edit View -->
+          <div id="modeRawView" class="lyrics-mode-container hidden">
+            <div class="card raw-lyrics-card">
+              <div class="raw-lyrics-header">
+                <h3>Raw Lyrics Text</h3>
+                <p>Paste or edit lyrics line by line. Bracketed tags like <code>[Intro]</code>, <code>[Verse 1]</code>, <code>[Chorus]</code> are preserved as section markers.</p>
+              </div>
+              <textarea id="rawLyricsTextarea" class="form-textarea raw-lyrics-textarea" rows="14" placeholder="Paste track lyrics here..."></textarea>
+              <div class="raw-lyrics-actions">
+                <button type="button" class="btn btn-primary" id="btnRawApply">
+                  <span>Apply Lyrics to Sync Queue</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
 
@@ -1024,5 +1199,6 @@
 
   <script src="/js/auth.js?v=0.5.3"></script>
   <script src="/js/app.js?v=0.5.3"></script>
+  <script src="/js/lyrics.js?v=0.5.3"></script>
 </body>
 </html>

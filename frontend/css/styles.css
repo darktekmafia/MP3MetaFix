@@ -2712,6 +2712,592 @@ button {
 }
 
 /* ==========================================================================
+   Synced Lyrics & Tap-to-Sync Karaoke Studio Styles
+   ========================================================================== */
+.lyrics-panel-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.lyrics-header-card {
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.lyrics-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.lyrics-track-info {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.lyrics-icon-badge {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(236, 72, 153, 0.2));
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-cyan);
+  flex-shrink: 0;
+}
+
+.lyrics-track-title {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 450px;
+}
+
+.lyrics-track-sub {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0.15rem 0 0;
+}
+
+.lyrics-mode-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 0.3rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.lyrics-mode-tabs .btn {
+  font-size: 0.8rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: none;
+  color: var(--text-muted);
+}
+
+.lyrics-mode-tabs .btn.active {
+  background: var(--clr-primary, #38bdf8);
+  color: #0f172a;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(56, 189, 248, 0.35);
+}
+
+.lyrics-player-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.player-btn-sm {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.player-btn-sm svg {
+  width: 16px;
+  height: 16px;
+}
+
+.lyrics-time-display {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  min-width: 65px;
+}
+
+.lyrics-slider {
+  flex: 1;
+}
+
+.lyrics-speed-group .form-select-xs {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  height: 28px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+}
+
+/* Stamping Hero Card */
+.stamping-hero-card {
+  padding: 1.75rem;
+  background: linear-gradient(135deg, rgba(30, 41, 69, 0.7), rgba(15, 23, 42, 0.8));
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  text-align: center;
+}
+
+.stamping-hero-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.stamping-hero-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-cyan);
+  background: rgba(56, 189, 248, 0.12);
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+.stamping-hero-counter {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.stamping-hero-text {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #fff;
+  min-height: 55px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0.5rem 0 1.5rem;
+  line-height: 1.35;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.stamping-hero-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.stamping-btn {
+  position: relative;
+  padding: 0.85rem 2.25rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: linear-gradient(135deg, #38bdf8, #818cf8);
+  color: #0f172a;
+  border: none;
+  box-shadow: 0 4px 20px rgba(56, 189, 248, 0.4);
+  transition: all var(--transition-fast);
+}
+
+.stamping-btn:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 6px 28px rgba(56, 189, 248, 0.55);
+}
+
+.stamping-btn:active {
+  transform: translateY(1px) scale(0.99);
+}
+
+.stamping-adjust-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Lyrics Action Toolbar */
+.lyrics-action-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.lyrics-toolbar-left,
+.lyrics-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.toggle-switch-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-left: 0.4rem;
+}
+
+.toggle-switch-compact input {
+  display: none;
+}
+
+.compact-slider {
+  width: 28px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+  position: relative;
+  transition: all var(--transition-fast);
+}
+
+.compact-slider:before {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  top: 2px;
+  left: 2px;
+  transition: all var(--transition-fast);
+}
+
+.toggle-switch-compact input:checked + .compact-slider {
+  background: var(--accent-cyan);
+}
+
+.toggle-switch-compact input:checked + .compact-slider:before {
+  transform: translateX(12px);
+}
+
+/* Stamping Queue Table */
+.lyrics-queue-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.queue-header-row {
+  display: grid;
+  grid-template-columns: 55px 60px 140px 1fr 90px;
+  padding: 0.75rem 1.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.lyrics-queue-list {
+  max-height: 480px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.lyric-queue-row {
+  display: grid;
+  grid-template-columns: 55px 60px 140px 1fr 90px;
+  align-items: center;
+  padding: 0.65rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 0.9rem;
+  transition: background var(--transition-fast);
+  cursor: pointer;
+}
+
+.lyric-queue-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lyric-queue-row.active {
+  background: rgba(56, 189, 248, 0.12);
+  border-left: 3px solid var(--accent-cyan);
+}
+
+.lyric-queue-row.stamped {
+  opacity: 0.92;
+}
+
+.lyric-queue-row.row-header {
+  background: rgba(129, 140, 248, 0.06);
+}
+
+.queue-col-idx {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  font-family: monospace;
+}
+
+.queue-col-status {
+  display: flex;
+  align-items: center;
+}
+
+.status-dot-stamped {
+  color: #10b981;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.status-dot-active {
+  color: var(--accent-cyan);
+  animation: pulse-dot 1.2s infinite;
+  font-size: 0.75rem;
+}
+
+.status-dot-pending {
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+
+.lyric-time-pill {
+  font-family: monospace;
+  font-size: 0.82rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.lyric-time-pill.has-time {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #34d399;
+  font-weight: 600;
+}
+
+.lyric-time-pill.has-time:hover {
+  background: rgba(16, 185, 129, 0.25);
+  color: #fff;
+}
+
+.queue-col-text {
+  color: var(--text-main);
+  line-height: 1.4;
+  padding-right: 1rem;
+}
+
+.section-tag-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.15rem 0.55rem;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(236, 72, 153, 0.25));
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  color: #c084fc;
+  letter-spacing: 0.03em;
+}
+
+.badge-instrumental {
+  background: rgba(234, 179, 8, 0.15);
+  border-color: rgba(234, 179, 8, 0.35);
+  color: #facc15;
+}
+
+.badge-vocal {
+  background: rgba(56, 189, 248, 0.15);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #38bdf8;
+}
+
+.queue-col-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.btn-icon-xs {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-icon-xs:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.lyrics-empty-notice {
+  text-align: center;
+  padding: 3.5rem 2rem;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.lyrics-empty-notice h4 {
+  font-size: 1.1rem;
+  color: #fff;
+  margin: 0;
+}
+
+.lyrics-empty-notice p {
+  font-size: 0.88rem;
+  max-width: 420px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Karaoke Live Visualizer Mode */
+.karaoke-preview-card {
+  min-height: 380px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 2rem;
+  background: radial-gradient(circle at center, rgba(30, 41, 69, 0.6) 0%, rgba(15, 23, 42, 0.9) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+.karaoke-stage {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.25rem;
+  max-width: 700px;
+  width: 100%;
+}
+
+.karaoke-section-pill {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent-cyan);
+  min-height: 24px;
+}
+
+.karaoke-cue-box {
+  padding: 0.4rem 1rem;
+  background: rgba(234, 179, 8, 0.15);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 9999px;
+  color: #facc15;
+  font-weight: 600;
+  font-size: 0.85rem;
+  animation: pulse-dot 1.5s infinite;
+}
+
+.karaoke-line {
+  transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.karaoke-prev {
+  font-size: 1.05rem;
+  color: rgba(255, 255, 255, 0.35);
+  min-height: 30px;
+}
+
+.karaoke-active {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(135deg, #38bdf8, #ec4899);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-shadow: 0 0 30px rgba(56, 189, 248, 0.4);
+  line-height: 1.3;
+}
+
+.karaoke-next {
+  font-size: 1.15rem;
+  color: rgba(255, 255, 255, 0.55);
+  min-height: 30px;
+}
+
+/* Raw Lyrics Edit Card */
+.raw-lyrics-card {
+  padding: 1.5rem;
+}
+
+.raw-lyrics-header {
+  margin-bottom: 1rem;
+}
+
+.raw-lyrics-header h3 {
+  font-size: 1.1rem;
+  color: #fff;
+  margin: 0 0 0.3rem;
+}
+
+.raw-lyrics-header p {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.raw-lyrics-textarea {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  width: 100%;
+}
+
+.raw-lyrics-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+@media (max-width: 768px) {
+  .queue-header-row,
+  .lyric-queue-row {
+    grid-template-columns: 45px 45px 105px 1fr 65px;
+    font-size: 0.82rem;
+    padding: 0.5rem 0.75rem;
+  }
+  .stamping-hero-text {
+    font-size: 1.25rem;
+  }
+  .karaoke-active {
+    font-size: 1.4rem;
+  }
+}
+
+/* ==========================================================================
    Responsive Rules for Gateway Hub, Mobile Editor (/app), and Manager
    ========================================================================== */
 .sub-short,

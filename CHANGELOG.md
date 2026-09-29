@@ -10,6 +10,9 @@ Historical release entries describe what was recorded at the time. Security comp
 ## [Unreleased]
 
 ### Added
+- **Synced Lyrics / SYLT & Tap-to-Sync Studio in `/manager`**: Interactive synchronized lyrics studio for timing creator-owned and self-generated audio tracks. Features live tap-to-sync timestamping (<kbd>Space</kbd> / Tap), jump-to-time audio playback, timestamp nudging ($\pm 100\text{ms}$), live karaoke preview mode with active-line spotlighting and previous-line fade, and full `.lrc` file import/export.
+- **Structural Tag Classification & Karaoke Pacing**: Automatic classification of non-singable structural tags (e.g. `[Intro]`, `[Verse 1]`, `[Chorus]`, `[Guitar Solo]`, `[Outro]`) as distinctive visual pill badges, preserving tag integrity while pacing playback during instrumental breaks.
+- **Mutagen ID3 SYLT Frame Engine & Endpoints**: Added atomic ID3 `SYLT` (Synchronized Lyrics/Text, millisecond format) extraction and serialization to `backend/metadata_engine.py`, alongside new `POST /api/lyrics/parse-lrc` and `POST /api/lyrics/export-lrc` conversion endpoints.
 - **Integrated MP3MetaFix Editor in `/manager` Workspace**: Embedded the single-track audio metadata editor, artwork manager, audio waveform player, Suno AI sync, and canned preset workflows directly into the `/manager` desktop workspace with dedicated sidebar navigation (`MP3Metafix`), enabling admins and desktop power users to edit audio tracks without leaving `/manager`.
 
 ### Documentation & Governance

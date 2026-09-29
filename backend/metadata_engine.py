@@ -29,11 +29,13 @@ from mutagen.id3 import (
     TPOS,
     COMM,
     USLT,
+    SYLT,
     TBPM,
     APIC,
     PictureType,
     Encoding,
 )
+import re
 from pydantic import BaseModel, Field
 
 class MetadataModel(BaseModel):
@@ -51,6 +53,7 @@ class MetadataModel(BaseModel):
     bpm: Optional[str] = Field(default="", max_length=50, description="Beats per minute")
     comment: Optional[str] = Field(default="", max_length=10000, description="User comment")
     lyrics: Optional[str] = Field(default="", max_length=65536, description="Unsynchronized lyrics (max 64KB)")
+    synced_lyrics: Optional[list] = Field(default=None, description="Synchronized lyrics entries list")
     custom_filename: Optional[str] = Field(default=None, max_length=255, description="Requested output filename")
     remove_artwork: Optional[bool] = Field(default=False, description="Flag to remove cover art")
 
@@ -145,6 +148,17 @@ def extract_metadata_and_artwork(file_path: Path) -> Dict[str, Any]:
                     lyrics = str(v.text).strip()
                     break
 
+    # Synced lyrics (find SYLT frame)
+    synced_lyrics = []
+    if tags:
+        for k, v in tags.items():
+            if k.startswith("SYLT"):
+                if hasattr(v, "text") and v.text:
+                    for item in v.text:
+                        if isinstance(item, (list, tuple)) and len(item) >= 2:
+                            synced_lyrics.append({"text": str(item[0]), "time_ms": int(item[1])})
+                    break
+
     # Audio stream properties
     duration = 0.0
     bitrate = 0
@@ -185,6 +199,7 @@ def extract_metadata_and_artwork(file_path: Path) -> Dict[str, Any]:
             "bpm": get_text("TBPM"),
             "comment": comment,
             "lyrics": lyrics,
+            "synced_lyrics": synced_lyrics,
         },
         "audio_info": {
             **descriptor,
@@ -303,6 +318,25 @@ def _write_id3(
     if lyrics_val:
         tags.add(USLT(encoding=enc, lang="eng", desc="", text=lyrics_val))
 
+    # Synced Lyrics (SYLT)
+    if meta.synced_lyrics is not None:
+        tags.delall("SYLT")
+        if meta.synced_lyrics:
+            sylt_entries = []
+            for entry in meta.synced_lyrics:
+                if isinstance(entry, dict):
+                    txt = str(entry.get("text", "")).strip()
+                    t_ms = int(entry.get("time_ms", 0))
+                elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                    txt = str(entry[0]).strip()
+                    t_ms = int(entry[1])
+                else:
+                    continue
+                if txt or t_ms >= 0:
+                    sylt_entries.append((txt, t_ms))
+            if sylt_entries:
+                tags.add(SYLT(encoding=enc, lang="eng", format=2, type=1, desc="", text=sylt_entries))
+
     # Artwork Handling
     if meta.remove_artwork:
         tags.delall("APIC")
@@ -376,6 +410,7 @@ def _extract_m4a(file_path):
         metadata[first], metadata[total] = (str(value) if value else "" for value in values)
     bpm = tags.get("tmpo", [0])[0]
     metadata["bpm"] = str(bpm) if bpm else ""
+    metadata["synced_lyrics"] = []
     art = _m4a_artwork(tags)
     return {
         "metadata": metadata,
@@ -446,3 +481,64 @@ def write_metadata_and_artwork(file_path: Path, meta: MetadataModel,
         os.replace(temporary, file_path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def sylt_to_lrc(entries: list, artist: str = "", title: str = "", album: str = "") -> str:
+    """Format SYLT list of (text, time_ms) entries into standard LRC format."""
+    lines = []
+    if title:
+        lines.append(f"[ti:{title}]")
+    if artist:
+        lines.append(f"[ar:{artist}]")
+    if album:
+        lines.append(f"[al:{album}]")
+    lines.append("[by:MP3MetaFix]")
+
+    for item in entries:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            txt, t_ms = str(item[0]), int(item[1])
+        elif isinstance(item, dict):
+            txt, t_ms = str(item.get("text", "")), int(item.get("time_ms", 0))
+        else:
+            continue
+
+        minutes = int(t_ms // 60000)
+        seconds = int((t_ms % 60000) // 1000)
+        hundredths = int((t_ms % 1000) // 10)
+        lines.append(f"[{minutes:02d}:{seconds:02d}.{hundredths:02d}]{txt}")
+
+    return "\n".join(lines)
+
+
+def lrc_to_sylt(lrc_text: str) -> list:
+    """Parse standard LRC formatted text into list of (text, time_ms) entries."""
+    entries = []
+    time_regex = re.compile(r"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]")
+    for raw_line in lrc_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if re.match(r"^\[[a-zA-Z]+:.*\]$", line):
+            continue
+
+        matches = list(time_regex.finditer(line))
+        if not matches:
+            continue
+
+        clean_text = time_regex.sub("", line).strip()
+        for m in matches:
+            mins = int(m.group(1))
+            secs = int(m.group(2))
+            fraction_str = m.group(3) or "0"
+            if len(fraction_str) == 1:
+                ms = int(fraction_str) * 100
+            elif len(fraction_str) == 2:
+                ms = int(fraction_str) * 10
+            else:
+                ms = int(fraction_str[:3])
+
+            total_ms = (mins * 60 + secs) * 1000 + ms
+            entries.append({"text": clean_text, "time_ms": total_ms})
+
+    entries.sort(key=lambda x: x["time_ms"])
+    return entries
