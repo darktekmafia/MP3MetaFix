@@ -9,6 +9,9 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ## [Unreleased]
 
+### Added
+- **Integrated MP3MetaFix Editor in `/manager` Workspace**: Embedded the single-track audio metadata editor, artwork manager, audio waveform player, Suno AI sync, and canned preset workflows directly into the `/manager` desktop workspace with dedicated sidebar navigation (`MP3Metafix`), enabling admins and desktop power users to edit audio tracks without leaving `/manager`.
+
 ### Documentation & Governance
 - **Project Vision & Long-Term Direction (`VISION.md`)**: Established the permanent open-source foundational governance commitment, defined core engineering principles (non-destructive tagging, security by design), documented current capabilities, articulated the long-term API-first architectural foundation, and outlined the vision evolution model.
 - **Governance & Development Transparency (`GOVERNANCE.md`)**: Disclosed the solo founder stewardship and AI/LLM-assisted implementation model, multi-layered verification and engineering rigor, equal contributor voice, mature proposal docket lifecycle, and cataloged open governance design questions (succession, voting rules, quorum) as explicitly TBD.

@@ -310,6 +310,11 @@ def test_multi_interface_static_mounts(client):
     assert res_mgr.status_code == 200
     assert "MP3MetaManager Desktop Workspace" in res_mgr.text
     assert "app-switcher-nav" in res_mgr.text
+    assert "manager-sidebar" in res_mgr.text
+    assert "MP3Metafix" in res_mgr.text
+    assert "uploadSection" in res_mgr.text
+    assert "editorSection" in res_mgr.text
+    assert "/js/app.js" in res_mgr.text
 
 
 def test_security_static_mounts_and_telemetry_isolation(client):

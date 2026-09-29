@@ -2529,9 +2529,11 @@ button {
 
 .manager-workspace {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 240px minmax(0, 1fr);
   gap: 1.5rem;
   margin-bottom: 2rem;
+  min-width: 0;
+  width: 100%;
 }
 
 .manager-sidebar {
@@ -2542,6 +2544,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  align-self: flex-start;
 }
 
 .sidebar-heading {
@@ -2567,15 +2570,18 @@ button {
   align-items: center;
   gap: 0.65rem;
   padding: 0.6rem 0.75rem;
+  min-height: 44px;
   font-size: 0.84rem;
   font-weight: 500;
   color: var(--text-muted);
   border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
   text-align: left;
+  border: 1px solid transparent;
+  cursor: pointer;
 }
 
-.sidebar-nav-btn:hover {
+.sidebar-nav-btn:hover:not(:disabled) {
   color: #fff;
   background: rgba(255, 255, 255, 0.05);
 }
@@ -2584,6 +2590,12 @@ button {
   color: #fff;
   background: rgba(56, 189, 248, 0.15);
   border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.sidebar-nav-btn:disabled,
+.sidebar-nav-btn.btn-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .nav-count-badge {
@@ -2599,6 +2611,8 @@ button {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  min-width: 0;
+  width: 100%;
 }
 
 .manager-toolbar {
@@ -2691,7 +2705,7 @@ button {
   justify-content: center;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 960px) {
   .manager-workspace {
     grid-template-columns: 1fr;
   }
