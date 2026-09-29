@@ -399,19 +399,73 @@
     }
   }
 
-  function nudgeLastStamped(deltaMs) {
-    let stampedIdx = -1;
-    for (let i = lyricsState.lines.length - 1; i >= 0; i--) {
+  function nudgeSelectedOrLast(deltaMs) {
+    if (lyricsState.lines.length === 0) return;
+
+    let targetIdx = lyricsState.currentIndex;
+
+    // 1. If currently selected line has a timestamp, nudge it directly
+    if (targetIdx >= 0 && targetIdx < lyricsState.lines.length && lyricsState.lines[targetIdx].time_ms !== null) {
+      const oldTime = lyricsState.lines[targetIdx].time_ms;
+      const newTime = Math.max(0, oldTime + deltaMs);
+      lyricsState.lines[targetIdx].time_ms = newTime;
+      renderQueue();
+      updateHeroBanner();
+      showToast(`Nudged line #${targetIdx + 1} (${deltaMs > 0 ? '+' : ''}${deltaMs}ms) → ${formatMs(newTime)}`, 'info', 1500);
+      return;
+    }
+
+    // 2. Otherwise find the most recent stamped line before or at currentIndex
+    let foundIdx = -1;
+    for (let i = targetIdx; i >= 0; i--) {
       if (lyricsState.lines[i].time_ms !== null) {
         if (lyricsState.stripTags && lyricsState.lines[i].isHeader) continue;
-        stampedIdx = i;
+        foundIdx = i;
         break;
       }
     }
 
-    if (stampedIdx >= 0 && stampedIdx < lyricsState.lines.length) {
-      lyricsState.lines[stampedIdx].time_ms = Math.max(0, lyricsState.lines[stampedIdx].time_ms + deltaMs);
+    // 3. Fallback: search backwards from the end
+    if (foundIdx === -1) {
+      for (let i = lyricsState.lines.length - 1; i >= 0; i--) {
+        if (lyricsState.lines[i].time_ms !== null) {
+          if (lyricsState.stripTags && lyricsState.lines[i].isHeader) continue;
+          foundIdx = i;
+          break;
+        }
+      }
+    }
+
+    if (foundIdx >= 0 && foundIdx < lyricsState.lines.length) {
+      const oldTime = lyricsState.lines[foundIdx].time_ms;
+      const newTime = Math.max(0, oldTime + deltaMs);
+      lyricsState.lines[foundIdx].time_ms = newTime;
+      lyricsState.currentIndex = foundIdx;
       renderQueue();
+      updateHeroBanner();
+      showToast(`Nudged line #${foundIdx + 1} (${deltaMs > 0 ? '+' : ''}${deltaMs}ms) → ${formatMs(newTime)}`, 'info', 1500);
+    } else {
+      showToast('No timestamped line selected to nudge.', 'info', 2000);
+    }
+  }
+
+  function navigateSelectedLine(delta) {
+    const activeLines = getActiveLines();
+    if (activeLines.length === 0) return;
+
+    const curLine = lyricsState.lines[lyricsState.currentIndex];
+    let curRank = activeLines.indexOf(curLine);
+    if (curRank === -1) curRank = 0;
+
+    const nextRank = Math.max(0, Math.min(activeLines.length - 1, curRank + delta));
+    const targetLine = activeLines[nextRank];
+    const targetIdx = lyricsState.lines.indexOf(targetLine);
+
+    if (targetIdx !== -1) {
+      lyricsState.currentIndex = targetIdx;
+      renderQueue();
+      updateHeroBanner();
+      scrollRowIntoView(targetIdx);
     }
   }
 
@@ -841,8 +895,8 @@
     // Stamping buttons
     if (dom.btnStampHero) dom.btnStampHero.addEventListener('click', stampCurrentLine);
     if (dom.btnStepBack) dom.btnStepBack.addEventListener('click', stepBackOneLine);
-    if (dom.btnNudgeBack) dom.btnNudgeBack.addEventListener('click', () => nudgeLastStamped(-100));
-    if (dom.btnNudgeForward) dom.btnNudgeForward.addEventListener('click', () => nudgeLastStamped(100));
+    if (dom.btnNudgeBack) dom.btnNudgeBack.addEventListener('click', () => nudgeSelectedOrLast(-100));
+    if (dom.btnNudgeForward) dom.btnNudgeForward.addEventListener('click', () => nudgeSelectedOrLast(100));
     if (dom.btnClearAllStamps) dom.btnClearAllStamps.addEventListener('click', clearAllStamps);
 
     // Toggle strip tags
@@ -941,9 +995,9 @@
       });
     }
 
-    // Keyboard Spacebar Stamping Shortcut (when in sync mode & not focusing an input)
+    // Keyboard Shortcuts (when in sync mode & not focusing an input)
     window.addEventListener('keydown', (e) => {
-      // Only stamp when lyrics panel is visible and activeMode is 'sync'
+      // Only handle when lyrics panel is visible and activeMode is 'sync'
       if (dom.panelLyricsView && !dom.panelLyricsView.classList.contains('hidden') && lyricsState.activeMode === 'sync') {
         const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
         if (activeTag === 'input' || activeTag === 'textarea') return;
@@ -951,9 +1005,21 @@
         if (e.code === 'Space') {
           e.preventDefault();
           stampCurrentLine();
-        } else if (e.key === 'ArrowLeft' || e.key === 'Backspace') {
+        } else if (e.key === 'Backspace') {
           e.preventDefault();
           stepBackOneLine();
+        } else if (e.key === '[' || e.key === '-') {
+          e.preventDefault();
+          nudgeSelectedOrLast(-100);
+        } else if (e.key === ']' || e.key === '=' || e.key === '+') {
+          e.preventDefault();
+          nudgeSelectedOrLast(100);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          navigateSelectedLine(-1);
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          navigateSelectedLine(1);
         }
       }
     });
