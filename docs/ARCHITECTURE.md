@@ -133,12 +133,14 @@ The editor update inspector treats its header notification badge as optional; bo
 ### 3. MP3MetaManager Desktop Workspace (`/manager`)
 - **Target Persona**: Desktop Power Users, DJs, Album Curators, Batch Producers.
 - **Design Philosophy**: High-density desktop workspace built for widescreen 1080p–4K displays.
-- **Planned Superset Capabilities (not yet implemented)**:
-  - **Integrated Single-Track Inspector**: Built-in drawer offering in-place access to all `/app` features (all ID3 fields, waveform scrubber, cover art studio, canned comment presets, dynamic filename generator, and Suno prompt parser).
+- **Implemented Capabilities**:
+  - **Integrated Single-Track Inspector**: Built-in access to all `/app` features (all ID3 fields, waveform scrubber, cover art studio, canned comment presets, dynamic filename generator, and Suno AI sync).
+  - **Karaoke Tap-to-Sync & Synced Lyrics Studio (`.lrc` / `SYLT`)**: Interactive playback timestamping tool for synced lyrics companion files (`.lrc`) and ID3 binary frames (`SYLT`, millisecond format), with smart auto-header timing ($500\text{ms}$ lead-in), tag stripping, selected line nudging, and live visualizer preview.
+- **Planned Superset Capabilities (in development)**:
   - **Multi-Track Batch Spreadsheet Editor**: High-density table with keyboard navigation (<kbd>Tab</kbd>, <kbd>Enter</kbd>), bulk tag propagation, regex find-and-replace, and auto-numbering.
   - **Universal ID3 Frame & Raw MPEG Byte Inspector**: Direct viewing, editing, and addition of any standard ID3 frame, custom `TXXX` key-values, multi-language `COMM`/`USLT` descriptors, multiple `APIC` pictures, and low-level hex inspection.
-  - **Karaoke Tap-to-Sync & Synced Lyrics (`.lrc` / `SYLT`)**: Interactive playback timestamping tool for synced lyrics sidecars and ID3 frames.
   - **Suno AI Stem & Generation Tree Organizer**: Visual lineage graph organizing extensions, variations, and split stems.
+  - **Custom Lyric Video Studio & MP4 Generator (`.mp4`)**: Dynamic canvas preview and server-side FFmpeg composition for social video sharing.
 
 ### 4. Global App Switcher
 - Embedded header pill navigation allowing instant switching between `/app`, `/manager`, and `/` across all interfaces without losing active context.

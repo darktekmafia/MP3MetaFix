@@ -18,7 +18,7 @@ MP3MetaFix organizes music editing into tailored workspace interfaces:
 |---|---|---|---|
 | 🏠 **Gateway Hub** | `/` | **Active** | Central dispatcher and workspace selector with status indicators and maintenance notices. |
 | 📱 **MP3MetaFix Editor** | `/app` | **Active** | Mobile-first single-track editor with live retina waveforms, APIC cover art studio, Suno AI metadata extraction, and comment presets. Optimized for touchscreens ($\ge 320\text{px}$) and desktop browsers. |
-| 🗂️ **MP3MetaManager** | `/manager` | *Under Development (Shell)* | Desktop-first power-user workspace for high-density spreadsheet batch editing, folder tree ingestion, deep ID3 frame inspection (`TXXX`, `COMM`, `APIC`), stems, and LRC karaoke sync. |
+| 🗂️ **MP3MetaManager** | `/manager` | *Active Development (Editor & Synced Lyrics Live)* | Desktop power-user workspace featuring embedded single-track editor, Synced Lyrics (SYLT / LRC) studio with live tap-to-sync, live karaoke visualizer, and planned batch spreadsheet tagging. |
 | 🎛️ **MP3Projects Studio** | `/projects` | *Under Development (Planned)* | Multi-track album sequencing, stem pack bundling, persistent project sessions, and structured release ZIP packaging. |
 | 🛡️ **Admin Control Center** | `/admin` | **Active** | Administrator dashboard for system diagnostics (CPU, RAM, disk, quotas), guest access controls, Quick Settings pinning, and authorized update management. |
 | 📖 **Documentation Portal** | `/docs` | **Active** | Full interactive documentation reader and in-app context help with architecture, guides, and API reference. |

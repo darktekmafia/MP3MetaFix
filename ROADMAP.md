@@ -133,19 +133,23 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - High-density top toolbar with search filter and batch action controls.
 - [x] **Global Header Switcher Integration**:
   - Unified app switcher navigation pill linking back to `/app` and `/` seamlessly.
-- [x] **Coming Soon State & Navigation Safety**:
-  - Clear placeholder state with active editor handoff buttons to prevent dead-end interactions while in development.
-
-### Active Backlog & Future Vision 📋
-- [ ] **Full Feature Parity with MP3MetaFix (`/app`) via Integrated Single-Track Inspector**:
-  - Embedded collapsible **Track Detail Inspector Drawer / Side Panel** allowing comprehensive single-track editing without leaving the batch workspace:
+- [x] **Integrated MP3MetaFix Single-Track Inspector (`/manager` Sidebar → `MP3Metafix`)**:
+  - Direct single-track editor embedded within the `/manager` desktop workspace:
     - *Full Tag Suite*: In-place editing for Track Title, Artist, Album, Album Artist, Genre, Year/Date, Track/Total, Disc/Total, BPM, Composer, Comments, and Unsynchronized Lyrics (`USLT`).
-    - *Album Artwork Studio*: Direct cover art drag-and-drop replacement, high-res preview, format normalization (JPEG/PNG/WebP), extraction, and removal.
-    - *Retina Canvas Audio Waveform Visualizer*: Full audio playback with dynamic waveform peaks, continuous drag scrubbing, and HTTP 206 streaming for the currently selected track.
+    - *Album Artwork Studio*: Direct cover art drag-and-drop replacement, high-res preview, format normalization (JPEG/PNG/WebP), and removal.
+    - *Canvas Audio Waveform Player*: Audio playback with dynamic waveform peaks, continuous drag scrubbing, and HTTP 206 streaming for loaded tracks.
     - *Canned Comment Presets & Preset Manager*: Quick-select preset dropdown and persistent custom preset creation.
     - *Dynamic Filename Formatter*: Instant pattern-based renaming (`%artist% - %title%.mp3`, `%track% - %title%.mp3`) with preset buttons.
-    - *Suno.com URL / Share Link Auto-Parser*: Direct URL fetching and tag prefilling for single tracks within the desktop queue.
-    - *Single-Track Native Save & Export*: In-place disk writeback and direct download.
+    - *Suno.com Sync & Watermark Safety*: Ingest metadata and high-res art while preserving proprietary provenance tags.
+- [x] **Tap-to-Sync Karaoke Lyric Stamping (`.lrc` & ID3 `SYLT`) (`/manager` Sidebar → `Synced Lyrics / SYLT`)**:
+  - Interactive "Tap-to-Sync" studio allowing creators to tap <kbd>Space</kbd> during playback to stamp precise millisecond timestamps onto lyric lines.
+  - **Smart Structural Tag Handling**: Automatic `00:00.00` timing for opening `[Intro]` tags and automatic $500\text{ms}$ lead-in reduction on preceding section headers (`[Verse 1]`, `[Chorus]`, `[Bridge]`) when stamping first vocal lines.
+  - **Precision Adjustments & Keyboard Navigation**: Selected line nudging ($\pm 100\text{ms}$, <kbd>[</kbd>, <kbd>]</kbd>, <kbd>-</kbd>, <kbd>+</kbd>), keyboard row navigation (<kbd>↑</kbd>, <kbd>↓</kbd>), and step-back (<kbd>Backspace</kbd>).
+  - **Strip Section Tags Mode**: Toggleable complete exclusion of non-singable tags from stamping and export.
+  - **Live Karaoke Visualizer**: Active-line spotlight, previous-line fade, and instrumental break cues.
+  - **Atomic Save & Conversion**: Embed native ID3 `SYLT` frames directly into audio files, or import/export standard `.lrc` companion files.
+
+### Active Backlog & Future Vision 📋
 - [ ] **Universal ID3 Frame & Raw Metadata Inspector / Editor ("View/Edit All Embedded Information")**:
   - **Comprehensive Frame Manager**: View, add, edit, and delete **any** embedded ID3v2.3 / ID3v2.4 frame:
     - *Standard Text Frames*: `TIT1` (Grouping), `TIT2` (Title), `TIT3` (Subtitle), `TPE1`–`TPE4` (Artists/Conductor), `TALB` (Album), `TOAL` (Original Album), `TCOM` (Composer), `TEXT` (Lyricist), `TCON` (Genre), `TCOP` (Copyright), `TPUB` (Publisher), `TDRC`/`TYER` (Recording Date), `TRCK` (Track), `TPOS` (Disc), `TBPM` (BPM), `TKEY` (Initial Key), `TLAN` (Language), `TSRC` (ISRC), `TSSE` (Encoder).
@@ -180,9 +184,6 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - One-click packaging into structured multi-track `.zip` archives or DAW-ready directories.
 - [ ] **Suno MP4 Video Ingestion & Asset Extractor**:
   - Drag and drop Suno `.mp4` video files to extract clean audio (lossless WAV or MP3 320kbps), extract timestamped lyrics, and recover high-resolution poster artwork.
-- [ ] **Tap-to-Sync Karaoke Lyric Stamping (`.lrc` & ID3 `SYLT`)**:
-  - Interactive "Tap-to-Sync" tool allowing creators to tap <kbd>Space</kbd> during playback to stamp exact timestamps onto lyric lines.
-  - Export standard `.lrc` sidecar companion files or embed directly into the ID3 `SYLT` binary frame.
 - [ ] **Suno AI Stem & Generation Tree Organizer**:
   - Visual parent/child lineage graph organizing variations, extensions, and separated vocal/instrumental stems.
 - [ ] **Bulk Cover Art Manager**:
