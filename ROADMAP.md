@@ -52,7 +52,7 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 - [ ] **Public & Guest Access to In-App Help & Documentation**:
   - Make the in-app Help Modal and `/docs` documentation portal directly accessible to unauthenticated visitors and guest mode users across all workspace headers, navigation drawers, and footer bars without requiring an active user login.
   - Ensure documentation API endpoints (`GET /api/docs/list`, `GET /api/docs/{doc_id}`) remain open for public reading while strictly preserving path-traversal safeguards and tenant isolation.
-- [ ] **Granular Workspace Access Controls & Maintenance Mode**:
+- [x] **Granular Workspace Access Controls & Maintenance Mode**:
   - Administrator toggles in `/admin` to enable/disable guest and user access individually for `/app`, `/manager`, and `/projects`.
   - Configurable maintenance/reason messages (e.g. "Temporarily disabled: investigating audio save bug") set in `/admin`.
   - **Hub Card Visibility Toggle**: Configurable setting in `/admin` to choose whether disabled or coming-soon services display as a disabled card on the `/` Hub or remain completely hidden from the Hub interface.

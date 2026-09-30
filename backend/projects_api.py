@@ -91,6 +91,14 @@ def require_auth(request: Request) -> Dict[str, Any]:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Account not found.",
         )
+
+    if user.get("role") != "admin" and not auth_manager.is_workspace_enabled("projects"):
+        msg = auth_manager.get_workspace_maintenance_message("projects")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Maintenance Mode: {msg}",
+        )
+
     return user
 
 

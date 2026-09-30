@@ -38,6 +38,7 @@ def setup_auth_environment(tmp_path, monkeypatch):
     test_auth_mgr = AuthManager(auth_dir=auth_dir)
     monkeypatch.setattr("backend.main.auth_manager", test_auth_mgr)
     monkeypatch.setattr("backend.auth.auth_manager", test_auth_mgr)
+    monkeypatch.setattr("backend.projects_api.auth_manager", test_auth_mgr)
     login_rate_limiter.failed_attempts.clear()
     login_rate_limiter.blocked_until.clear()
     # Isolate uploaded files and rate limits as well as account state.
@@ -2617,8 +2618,127 @@ def test_quick_settings_pinned_persistence(auth_client, unauth_client):
     assert "software_updates" in pinned
     assert "invalid_key" not in pinned
 
-    # 4. Unauthenticated client cannot update
-    assert unauth_client.post("/api/settings", json={"quick_settings_pinned": ["guest_mode_enabled"]}).status_code == 401
+def test_workspace_access_controls_and_maintenance_mode(auth_client, unauth_client, sample_mp3_bytes):
+    import uuid
+    import time
+    from backend.auth import auth_manager, AUTH_COOKIE_NAME, hash_password
+
+    # 1. Verify default workspace settings in /api/auth/status and /api/settings
+    res_status = unauth_client.get("/api/auth/status")
+    assert res_status.status_code == 200
+    status_data = res_status.json()
+    assert "workspace_access" in status_data
+    assert "hub_hide_disabled_cards" in status_data
+    assert status_data["hub_hide_disabled_cards"] is False
+    assert status_data["workspace_access"]["app"]["enabled"] is True
+    assert status_data["workspace_access"]["app"]["guest_allowed"] is True
+    assert status_data["workspace_access"]["manager"]["guest_allowed"] is False
+    assert status_data["workspace_access"]["projects"]["guest_allowed"] is False
+
+    # 2. Update workspace settings as administrator
+    custom_msg = "MP3MetaFix is temporarily offline for maintenance."
+    res_update = auth_client.post("/api/settings", json={
+        "hub_hide_disabled_cards": True,
+        "workspace_access": {
+            "app": {
+                "enabled": False,
+                "guest_allowed": True,
+                "maintenance_message": custom_msg,
+            },
+            "manager": {
+                "enabled": True,
+                "guest_allowed": True,
+                "maintenance_message": "Manager notice",
+            },
+        },
+    })
+    assert res_update.status_code == 200
+
+    # Verify settings persisted
+    res_get = auth_client.get("/api/settings")
+    assert res_get.status_code == 200
+    settings_data = res_get.json()
+    assert settings_data["hub_hide_disabled_cards"] is True
+    assert settings_data["workspace_access"]["app"]["enabled"] is False
+    assert settings_data["workspace_access"]["app"]["maintenance_message"] == custom_msg
+    assert settings_data["workspace_access"]["manager"]["guest_allowed"] is True
+
+    # 3. Test maintenance mode gating on /app audio upload
+    # Guest mode is active
+    auth_client.post("/api/settings", json={"guest_mode_enabled": True})
+    
+    # Guest/Unauth client is blocked with 503 Maintenance Mode
+    res_blocked = unauth_client.post("/api/upload", files={"file": ("test.mp3", sample_mp3_bytes, "audio/mpeg")})
+    assert res_blocked.status_code == 503
+    assert custom_msg in res_blocked.json().get("detail", "")
+
+    # Admin client bypasses maintenance mode
+    res_admin_up = auth_client.post("/api/upload", files={"file": ("admin.mp3", sample_mp3_bytes, "audio/mpeg")})
+    assert res_admin_up.status_code == 200
+
+    # 4. Re-enable app, but disable guest access for app specifically
+    auth_client.post("/api/settings", json={
+        "workspace_access": {
+            "app": {
+                "enabled": True,
+                "guest_allowed": False,
+                "maintenance_message": "",
+            }
+        }
+    })
+    res_guest_denied = unauth_client.post("/api/upload", files={"file": ("test.mp3", sample_mp3_bytes, "audio/mpeg")})
+    assert res_guest_denied.status_code == 401
+    assert "not permitted for this workspace" in res_guest_denied.json().get("detail", "")
+
+    # 5. Test maintenance mode on persistent Projects workspace
+    proj_msg = "Projects studio workspace is undergoing database migration."
+    auth_client.post("/api/settings", json={
+        "workspace_access": {
+            "projects": {
+                "enabled": False,
+                "guest_allowed": False,
+                "maintenance_message": proj_msg,
+            }
+        }
+    })
+
+    # Non-admin user gets 503 Maintenance Mode on projects endpoints
+    # Create regular user account
+    user_id = str(uuid.uuid4())
+    users = auth_manager._load_users()
+    users.append({
+        "id": user_id,
+        "username": "regular_user",
+        "password_hash": hash_password("RegularPass123!"),
+        "role": "user",
+        "created_at": int(time.time()),
+        "updated_at": int(time.time()),
+    })
+    auth_manager._save_users(users)
+    user_token = auth_manager.issue_token(user_id)
+
+    user_client = TestClient(app)
+    user_client.cookies.set(AUTH_COOKIE_NAME, user_token, domain="testserver.local", path="/")
+
+    res_user_proj = user_client.get("/api/projects/tracks")
+    assert res_user_proj.status_code == 503
+    assert proj_msg in res_user_proj.json().get("detail", "")
+
+    # Admin user can access projects during maintenance mode
+    res_admin_proj = auth_client.get("/api/projects/tracks")
+    assert res_admin_proj.status_code == 200
+
+    # 6. Reset settings back to defaults
+    auth_client.post("/api/settings", json={
+        "guest_mode_enabled": False,
+        "hub_hide_disabled_cards": False,
+        "workspace_access": {
+            "app": {"enabled": True, "guest_allowed": True, "maintenance_message": ""},
+            "manager": {"enabled": True, "guest_allowed": False, "maintenance_message": ""},
+            "projects": {"enabled": True, "guest_allowed": False, "maintenance_message": ""},
+        }
+    })
+
 
 
 

@@ -14,6 +14,8 @@
     guestMode: false,
     isGuest: false,
     sunoIntegrationEnabled: false,
+    workspaceAccess: {},
+    hubHideDisabledCards: false,
   };
 
   // Safe toast notifier fallback
@@ -317,12 +319,214 @@
     });
   }
 
-  // Check if current route is permitted for unauthenticated guests when guestMode is enabled
-  function isGuestAllowedPath() {
+  function getCurrentWorkspace() {
     const path = window.location.pathname;
-    const isHub = path === '/' || path === '/index.html' || path === '';
-    const isApp = path === '/app' || path.startsWith('/app/');
-    return isHub || isApp;
+    if (path === '/app' || path.startsWith('/app/')) return 'app';
+    if (path === '/manager' || path.startsWith('/manager/')) return 'manager';
+    if (path === '/projects' || path.startsWith('/projects/')) return 'projects';
+    if (path === '/admin' || path.startsWith('/admin/')) return 'admin';
+    if (path === '/docs' || path.startsWith('/docs/')) return 'docs';
+    return 'hub';
+  }
+
+  // Check if current route is permitted for unauthenticated guests
+  function isGuestAllowedPath(wsAccess) {
+    const ws = getCurrentWorkspace();
+    if (ws === 'hub' || ws === 'docs') return true;
+    if (ws === 'app' || ws === 'manager' || ws === 'projects') {
+      const cfg = wsAccess && wsAccess[ws];
+      if (cfg && typeof cfg.guest_allowed === 'boolean') return cfg.guest_allowed;
+      if (ws === 'app') return true;
+    }
+    return false;
+  }
+
+  // --- Safe DOM Maintenance Views & Banners ---
+  function renderMaintenanceView(workspace, cfg) {
+    let overlay = document.getElementById('maintenanceOverlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'maintenanceOverlay';
+      overlay.className = 'maintenance-overlay';
+      document.body.appendChild(overlay);
+    }
+    overlay.textContent = ''; // safe clear
+
+    const card = document.createElement('div');
+    card.className = 'card maintenance-card';
+
+    const iconDiv = document.createElement('div');
+    iconDiv.className = 'maintenance-icon-badge';
+    iconDiv.textContent = '🛠️';
+
+    const badgePill = document.createElement('div');
+    badgePill.className = 'app-badge-pill pill-maintenance';
+    const pillDot = document.createElement('span');
+    pillDot.className = 'pill-dot pill-dot-amber';
+    const pillText = document.createElement('span');
+    pillText.textContent = 'Maintenance Mode Active';
+    badgePill.appendChild(pillDot);
+    badgePill.appendChild(pillText);
+
+    const title = document.createElement('h2');
+    title.className = 'maintenance-title';
+    const wsNames = {
+      app: 'MP3MetaFix',
+      manager: 'MP3MetaManager',
+      projects: 'MP3MetaProjects',
+    };
+    title.textContent = `${wsNames[workspace] || 'Workspace'} Under Maintenance`;
+
+    const msgP = document.createElement('p');
+    msgP.className = 'maintenance-message';
+    msgP.textContent = (cfg && cfg.maintenance_message) ? cfg.maintenance_message : 'This workspace is temporarily undergoing scheduled maintenance. Please check back shortly.';
+
+    const actionGroup = document.createElement('div');
+    actionGroup.className = 'maintenance-actions';
+
+    const hubLink = document.createElement('a');
+    hubLink.href = '/';
+    hubLink.className = 'btn btn-primary';
+    const hubText = document.createElement('span');
+    hubText.textContent = 'Return to Gateway Hub';
+    hubLink.appendChild(hubText);
+
+    actionGroup.appendChild(hubLink);
+
+    if (!AuthState.authenticated) {
+      const adminLoginBtn = document.createElement('button');
+      adminLoginBtn.type = 'button';
+      adminLoginBtn.className = 'btn btn-secondary';
+      adminLoginBtn.textContent = 'Sign In as Administrator';
+      adminLoginBtn.addEventListener('click', () => {
+        openModal('loginModal');
+      });
+      actionGroup.appendChild(adminLoginBtn);
+    }
+
+    card.appendChild(iconDiv);
+    card.appendChild(badgePill);
+    card.appendChild(title);
+    card.appendChild(msgP);
+    card.appendChild(actionGroup);
+
+    overlay.appendChild(card);
+    overlay.classList.remove('hidden');
+  }
+
+  function removeMaintenanceView() {
+    const overlay = document.getElementById('maintenanceOverlay');
+    if (overlay) {
+      overlay.remove();
+    }
+  }
+
+  function renderAdminMaintenanceBanner(workspace) {
+    let banner = document.getElementById('maintenanceAdminBanner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'maintenanceAdminBanner';
+      banner.className = 'maintenance-admin-banner';
+      const container = document.querySelector('.app-container') || document.body;
+      const header = container.querySelector('.app-header');
+      if (header && header.nextSibling) {
+        container.insertBefore(banner, header.nextSibling);
+      } else {
+        container.prepend(banner);
+      }
+    }
+    banner.textContent = '';
+
+    const pill = document.createElement('span');
+    pill.className = 'app-badge-pill pill-maintenance';
+    const dot = document.createElement('span');
+    dot.className = 'pill-dot pill-dot-amber';
+    const text = document.createElement('span');
+    text.textContent = '⚠️ Maintenance Mode Active';
+    pill.appendChild(dot);
+    pill.appendChild(text);
+
+    const desc = document.createElement('span');
+    desc.className = 'admin-banner-text';
+    desc.textContent = 'Admin Preview: You have full access to test this workspace while public and guest access is restricted.';
+
+    banner.appendChild(pill);
+    banner.appendChild(desc);
+  }
+
+  function removeAdminMaintenanceBanner() {
+    const banner = document.getElementById('maintenanceAdminBanner');
+    if (banner) {
+      banner.remove();
+    }
+  }
+
+  function updateHubCards(wsAccess, hubHideDisabled) {
+    const currentWs = getCurrentWorkspace();
+    if (currentWs !== 'hub') return;
+
+    const cardMap = [
+      { ws: 'app', cardSelector: '.app-card:not(.app-card-manager):not(.app-card-projects)', btnSelector: '#btnLaunchFix' },
+      { ws: 'manager', cardSelector: '.app-card-manager', btnSelector: '#btnLaunchManager' },
+      { ws: 'projects', cardSelector: '.app-card-projects', btnSelector: '#btnLaunchProjects' },
+    ];
+
+    cardMap.forEach(({ ws, cardSelector, btnSelector }) => {
+      const card = document.querySelector(cardSelector);
+      const btn = document.querySelector(btnSelector);
+      if (!card) return;
+
+      const cfg = wsAccess ? wsAccess[ws] : null;
+      const isEnabled = cfg ? cfg.enabled !== false : true;
+
+      if (!isEnabled) {
+        if (hubHideDisabled) {
+          card.style.display = 'none';
+        } else {
+          card.style.display = '';
+          card.classList.add('card-in-maintenance');
+
+          let badge = card.querySelector('.hub-maintenance-badge');
+          if (!badge) {
+            badge = document.createElement('div');
+            badge.className = 'app-badge-pill pill-maintenance hub-maintenance-badge';
+            const dot = document.createElement('span');
+            dot.className = 'pill-dot pill-dot-amber';
+            const txt = document.createElement('span');
+            txt.textContent = 'Maintenance Mode';
+            badge.appendChild(dot);
+            badge.appendChild(txt);
+            const header = card.querySelector('.app-card-header');
+            if (header) {
+              header.prepend(badge);
+            }
+          }
+
+          if (btn) {
+            btn.dataset.origHref = btn.getAttribute('href') || btn.dataset.origHref || `/${ws}`;
+            btn.dataset.origText = btn.dataset.origText || btn.textContent.trim();
+            btn.classList.add('btn-maintenance-disabled');
+            btn.removeAttribute('href');
+            btn.style.cursor = 'pointer';
+            const msg = cfg?.maintenance_message || 'Under scheduled maintenance.';
+            btn.onclick = (e) => {
+              e.preventDefault();
+              notify(`${card.querySelector('.app-title')?.textContent || ws}: ${msg}`, 'info');
+            };
+          }
+        }
+      } else {
+        card.style.display = '';
+        card.classList.remove('card-in-maintenance');
+        const badge = card.querySelector('.hub-maintenance-badge');
+        if (badge) badge.remove();
+        if (btn && btn.dataset.origHref) {
+          btn.setAttribute('href', btn.dataset.origHref);
+          btn.classList.remove('btn-maintenance-disabled');
+          btn.onclick = null;
+        }
+      }
+    });
   }
 
   // --- API Authentication Handlers ---
@@ -339,6 +543,8 @@
       AuthState.guestMode = !!data.guest_mode;
       AuthState.isGuest = !!data.is_guest;
       AuthState.sunoIntegrationEnabled = !!data.suno_integration_enabled;
+      AuthState.workspaceAccess = data.workspace_access || {};
+      AuthState.hubHideDisabledCards = !!data.hub_hide_disabled_cards;
       AuthState.maxUploadSizeMb = data.max_upload_size_mb || 150;
       window.MP3MetaFixMaxUploadSizeMb = AuthState.maxUploadSizeMb;
 
@@ -356,21 +562,42 @@
         return;
       }
 
-      const path = window.location.pathname;
-      const isAdminPage = path === '/admin' || path.startsWith('/admin/');
+      const currentWs = getCurrentWorkspace();
+      updateHubCards(AuthState.workspaceAccess, AuthState.hubHideDisabledCards);
+
+      // Check if current workspace is in maintenance mode
+      if (['app', 'manager', 'projects'].includes(currentWs)) {
+        const wsCfg = AuthState.workspaceAccess[currentWs];
+        const isWsEnabled = wsCfg ? wsCfg.enabled !== false : true;
+
+        if (!isWsEnabled) {
+          if (AuthState.authenticated && AuthState.role === 'admin') {
+            removeMaintenanceView();
+            renderAdminMaintenanceBanner(currentWs);
+          } else {
+            renderMaintenanceView(currentWs, wsCfg);
+            closeModal('loginModal');
+            closeModal('setupModal');
+            return;
+          }
+        } else {
+          removeMaintenanceView();
+          removeAdminMaintenanceBanner();
+        }
+      }
+
+      const isAdminPage = currentWs === 'admin';
 
       if (!AuthState.authenticated) {
-        if (AuthState.guestMode && isGuestAllowedPath()) {
-          // Allowed as Guest on / and /app
+        const isGuestPermitted = isGuestAllowedPath(AuthState.workspaceAccess);
+        if (AuthState.guestMode && isGuestPermitted) {
           closeModal('loginModal');
           closeModal('setupModal');
           window.dispatchEvent(new CustomEvent('mp3metafix:auth-ready', { detail: { ...AuthState } }));
         } else {
-          // Protected page (/manager, /admin) or Guest mode disabled -> show login modal
           openModal('loginModal');
         }
       } else {
-        // Authenticated user
         if (isAdminPage && AuthState.role !== 'admin') {
           notify('Administrator privileges required to access the Admin Control Center', 'error');
           setTimeout(() => { window.location.href = '/'; }, 1500);

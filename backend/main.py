@@ -228,16 +228,28 @@ def require_admin(request: Request) -> Dict[str, Any]:
     return user
 
 
-def enforce_access_policy(request: Request) -> Optional[Dict[str, Any]]:
-    """Enforce access control on file-editing endpoints based on Guest Mode settings."""
+def enforce_access_policy(request: Request, workspace: str = "app") -> Optional[Dict[str, Any]]:
+    """Enforce access control on workspace endpoints based on Guest Mode & Workspace Maintenance settings."""
     user = get_current_user(request)
+    if user and user.get("role") == "admin":
+        return user
+
+    if not auth_manager.is_workspace_enabled(workspace):
+        msg = auth_manager.get_workspace_maintenance_message(workspace)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Maintenance Mode: {msg}",
+        )
+
     if user:
         return user
-    if auth_manager.is_guest_mode_enabled():
+
+    if auth_manager.is_guest_mode_enabled() and auth_manager.is_workspace_guest_allowed(workspace):
         return None
+
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required. Guest mode is disabled.",
+        detail="Authentication required. Guest mode is disabled or not permitted for this workspace.",
     )
 
 
@@ -245,7 +257,7 @@ def enforce_access_policy(request: Request) -> Optional[Dict[str, Any]]:
 
 @app.get("/api/auth/status")
 async def get_auth_status(request: Request):
-    """Return system setup state, current session identity, and guest mode policy."""
+    """Return system setup state, current session identity, and guest mode / workspace access policy."""
     setup_req = auth_manager.is_setup_required()
     user = get_current_user(request)
     settings = auth_manager.get_settings()
@@ -260,6 +272,8 @@ async def get_auth_status(request: Request):
         "is_guest": user is None and auth_manager.is_guest_mode_enabled(),
         "suno_integration_enabled": auth_manager.is_suno_enabled(),
         "max_upload_size_mb": settings.get("max_upload_size_mb", MAX_UPLOAD_SIZE_MB),
+        "workspace_access": settings.get("workspace_access", {}),
+        "hub_hide_disabled_cards": bool(settings.get("hub_hide_disabled_cards", False)),
     }
 
 
@@ -361,6 +375,8 @@ async def get_settings(user: Dict[str, Any] = Depends(require_authenticated_user
         "max_temp_storage_mb": storage_quota,
         "max_sessions": settings.get("max_sessions", 10),
         "quick_settings_pinned": settings.get("quick_settings_pinned", ["guest_mode_enabled", "max_sessions", "max_global_storage_mb"]),
+        "workspace_access": settings.get("workspace_access", {}),
+        "hub_hide_disabled_cards": bool(settings.get("hub_hide_disabled_cards", False)),
         "version": VERSION,
         "is_admin": user.get("role") == "admin",
     }

@@ -193,6 +193,29 @@
     }
   }
 
+  function updateWorkspaceStatusLabels() {
+    const appCb = document.getElementById('wsAppEnabled');
+    const appLbl = document.getElementById('wsAppStatusLabel');
+    if (appCb && appLbl) {
+      appLbl.textContent = appCb.checked ? 'Workspace Active' : 'Maintenance Mode';
+      appLbl.style.color = appCb.checked ? 'var(--accent-teal, #14b8a6)' : 'var(--accent-amber, #f59e0b)';
+    }
+
+    const mgrCb = document.getElementById('wsManagerEnabled');
+    const mgrLbl = document.getElementById('wsManagerStatusLabel');
+    if (mgrCb && mgrLbl) {
+      mgrLbl.textContent = mgrCb.checked ? 'Workspace Active' : 'Maintenance Mode';
+      mgrLbl.style.color = mgrCb.checked ? 'var(--accent-teal, #14b8a6)' : 'var(--accent-amber, #f59e0b)';
+    }
+
+    const projCb = document.getElementById('wsProjectsEnabled');
+    const projLbl = document.getElementById('wsProjectsStatusLabel');
+    if (projCb && projLbl) {
+      projLbl.textContent = projCb.checked ? 'Workspace Active' : 'Maintenance Mode';
+      projLbl.style.color = projCb.checked ? 'var(--accent-teal, #14b8a6)' : 'var(--accent-amber, #f59e0b)';
+    }
+  }
+
   async function loadSettings() {
     try {
       const res = await fetch('/api/settings');
@@ -213,6 +236,38 @@
       if (inputSessionTtl) inputSessionTtl.value = settings.session_ttl_minutes || 60;
       if (inputMaxUploadSize) inputMaxUploadSize.value = settings.max_upload_size_mb || 150;
 
+      // Workspace Access & Maintenance Controls
+      const hubHideCb = document.getElementById('adminHubHideDisabled');
+      if (hubHideCb) hubHideCb.checked = !!settings.hub_hide_disabled_cards;
+
+      const wsAccess = settings.workspace_access || {};
+      const appCfg = wsAccess.app || {};
+      const mgrCfg = wsAccess.manager || {};
+      const projCfg = wsAccess.projects || {};
+
+      const appEnabled = document.getElementById('wsAppEnabled');
+      const appGuest = document.getElementById('wsAppGuestAllowed');
+      const appMsg = document.getElementById('wsAppMessage');
+      if (appEnabled) appEnabled.checked = appCfg.enabled !== false;
+      if (appGuest) appGuest.checked = appCfg.guest_allowed !== false;
+      if (appMsg) appMsg.value = appCfg.maintenance_message || '';
+
+      const mgrEnabled = document.getElementById('wsManagerEnabled');
+      const mgrGuest = document.getElementById('wsManagerGuestAllowed');
+      const mgrMsg = document.getElementById('wsManagerMessage');
+      if (mgrEnabled) mgrEnabled.checked = mgrCfg.enabled !== false;
+      if (mgrGuest) mgrGuest.checked = !!mgrCfg.guest_allowed;
+      if (mgrMsg) mgrMsg.value = mgrCfg.maintenance_message || '';
+
+      const projEnabled = document.getElementById('wsProjectsEnabled');
+      const projGuest = document.getElementById('wsProjectsGuestAllowed');
+      const projMsg = document.getElementById('wsProjectsMessage');
+      if (projEnabled) projEnabled.checked = projCfg.enabled !== false;
+      if (projGuest) projGuest.checked = !!projCfg.guest_allowed;
+      if (projMsg) projMsg.value = projCfg.maintenance_message || '';
+
+      updateWorkspaceStatusLabels();
+
       // Populate Quick Settings pin checkboxes
       const pinned = Array.isArray(settings.quick_settings_pinned) ? settings.quick_settings_pinned : [];
       document.querySelectorAll('.pin-checkbox').forEach((cb) => {
@@ -224,6 +279,67 @@
       });
     } catch (err) {
       console.warn('Could not load admin settings:', err);
+    }
+  }
+
+  async function handleSaveWorkspaceSettings(e) {
+    if (e) e.preventDefault();
+    const submitBtn = document.getElementById('btnSaveWorkspaceSettings');
+    const hubHideCb = document.getElementById('adminHubHideDisabled');
+
+    const appEnabled = document.getElementById('wsAppEnabled');
+    const appGuest = document.getElementById('wsAppGuestAllowed');
+    const appMsg = document.getElementById('wsAppMessage');
+
+    const mgrEnabled = document.getElementById('wsManagerEnabled');
+    const mgrGuest = document.getElementById('wsManagerGuestAllowed');
+    const mgrMsg = document.getElementById('wsManagerMessage');
+
+    const projEnabled = document.getElementById('wsProjectsEnabled');
+    const projGuest = document.getElementById('wsProjectsGuestAllowed');
+    const projMsg = document.getElementById('wsProjectsMessage');
+
+    const payload = {
+      hub_hide_disabled_cards: hubHideCb ? hubHideCb.checked : false,
+      workspace_access: {
+        app: {
+          enabled: appEnabled ? appEnabled.checked : true,
+          guest_allowed: appGuest ? appGuest.checked : true,
+          maintenance_message: appMsg ? appMsg.value.trim() : '',
+        },
+        manager: {
+          enabled: mgrEnabled ? mgrEnabled.checked : true,
+          guest_allowed: mgrGuest ? mgrGuest.checked : false,
+          maintenance_message: mgrMsg ? mgrMsg.value.trim() : '',
+        },
+        projects: {
+          enabled: projEnabled ? projEnabled.checked : true,
+          guest_allowed: projGuest ? projGuest.checked : false,
+          maintenance_message: projMsg ? projMsg.value.trim() : '',
+        },
+      },
+    };
+
+    if (submitBtn) submitBtn.disabled = true;
+
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        notify('Workspace access policies and maintenance settings saved', 'success');
+        updateWorkspaceStatusLabels();
+      } else {
+        notify(data.detail || 'Failed to save workspace access policies', 'error');
+      }
+    } catch (err) {
+      notify('Network error saving workspace settings', 'error');
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
     }
   }
 
@@ -525,6 +641,19 @@
     if (formSettings) {
       formSettings.addEventListener('submit', handleSaveSettings);
     }
+
+    const formWorkspaces = document.getElementById('formWorkspaceAccess');
+    if (formWorkspaces) {
+      formWorkspaces.addEventListener('submit', handleSaveWorkspaceSettings);
+    }
+
+    // Dynamic workspace status labels on toggle change
+    ['wsAppEnabled', 'wsManagerEnabled', 'wsProjectsEnabled'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener('change', updateWorkspaceStatusLabels);
+      }
+    });
 
     const formPassword = document.getElementById('formAdminPassword');
     if (formPassword) {
