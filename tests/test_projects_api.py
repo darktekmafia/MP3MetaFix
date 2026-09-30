@@ -352,6 +352,64 @@ def test_ingest_session_into_project_take(client, auth_cookies):
     storage_manager.cleanup_session(session_id)
 
 
+def test_ingest_session_update_existing_take(client, auth_cookies):
+    """Test updating an existing project take in place from an active editing session."""
+    # 1. Create a project track and initial take
+    res = client.post("/api/projects/tracks", json={"title": "Original Track"}, cookies=auth_cookies)
+    assert res.status_code == 201
+    track = res.json()
+    track_id = track["id"]
+
+    res = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Take 1", "notes": "Initial draft"},
+        files={"file": ("v1.mp3", VALID_MP3_HEADER, "audio/mpeg")},
+        cookies=auth_cookies,
+    )
+    assert res.status_code == 201
+    take = res.json()
+    take_id = take["id"]
+    assert take["label"] == "Take 1"
+
+    # 2. Create an ephemeral session representing updated edits
+    session_id, audio_path = storage_manager.create_session("v1_updated.mp3", ".mp3")
+    with open(audio_path, "wb") as f:
+        f.write(VALID_MP3_HEADER + b"\x00" * 64)
+
+    session_token = create_signed_session_token(session_id)
+    combined_cookies = {
+        AUTH_COOKIE_NAME: auth_cookies[AUTH_COOKIE_NAME],
+        SESSION_COOKIE_NAME: session_token,
+    }
+
+    # 3. Ingest into existing track & take (Update mode)
+    res = client.post(
+        "/api/projects/ingest-session",
+        json={
+            "track_id": track_id,
+            "take_id": take_id,
+            "take_label": "Take 1 (Updated)",
+            "notes": "Fixed metadata and levels",
+        },
+        cookies=combined_cookies,
+    )
+    assert res.status_code in (200, 201)
+    updated_take = res.json()
+    assert updated_take["id"] == take_id
+    assert updated_take["label"] == "Take 1 (Updated)"
+    assert updated_take["notes"] == "Fixed metadata and levels"
+
+    # Verify track takes count is still 1 (not duplicated)
+    res = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+    assert res.status_code == 200
+    track_detail = res.json()
+    assert len(track_detail["takes"]) == 1
+    assert track_detail["takes"][0]["id"] == take_id
+    assert track_detail["takes"][0]["label"] == "Take 1 (Updated)"
+
+    storage_manager.cleanup_session(session_id)
+
+
 def test_api_cross_tenant_isolation(client, setup_auth_environment, auth_cookies):
     """Verify User B cannot access, modify, or delete User A's tracks or albums via API."""
     import uuid

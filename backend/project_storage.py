@@ -473,6 +473,79 @@ class ProjectStorageManager:
 
         return TakeMetadata(**data)
 
+    def update_take_audio(
+        self,
+        user_id: str,
+        track_id: str,
+        take_id: str,
+        audio_bytes: bytes,
+        extension: str = ".mp3",
+        label: Optional[str] = None,
+        notes: Optional[str] = None,
+        is_master: Optional[bool] = None,
+    ) -> TakeMetadata:
+        """Update an existing take's audio file and metadata in place."""
+        take = self.get_take(user_id, track_id, take_id)
+        if not take:
+            raise ValueError(f"Take {take_id} not found in track {track_id}")
+
+        size_diff = len(audio_bytes) - take.size_bytes
+        if size_diff > 0:
+            self.ensure_quota_available(user_id, size_diff)
+
+        take_dir = self._get_take_dir(user_id, track_id, take_id)
+        fmt = extension.lstrip(".").lower()
+        if fmt not in AUDIO_FORMATS:
+            fmt = "mp3"
+
+        # Remove old audio file(s)
+        for ext in AUDIO_FORMATS:
+            old_f = take_dir / f"audio{ext}"
+            if old_f.is_file():
+                try:
+                    old_f.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        audio_dest = take_dir / f"audio.{fmt}"
+        with open(audio_dest, "wb") as f:
+            f.write(audio_bytes)
+        try:
+            os.chmod(audio_dest, 0o600)
+        except Exception:
+            pass
+
+        # Probe duration if possible, fallback to existing duration
+        duration = take.duration_seconds
+        try:
+            import mutagen
+            audio = mutagen.File(str(audio_dest))
+            if audio is not None and audio.info is not None:
+                duration = round(float(getattr(audio.info, "length", 0.0)), 2)
+        except Exception:
+            pass
+
+        data = take.model_dump()
+        data["format"] = fmt
+        data["size_bytes"] = len(audio_bytes)
+        data["duration_seconds"] = duration
+        if label:
+            data["label"] = label
+        if notes is not None:
+            data["notes"] = notes
+        if is_master is not None:
+            data["is_master"] = is_master
+        data["updated_at"] = time.time()
+
+        manifest_path = take_dir / "take.json"
+        with file_lock(manifest_path):
+            atomic_json(manifest_path, data)
+
+        if is_master:
+            self.update_track(user_id, track_id, {"primary_take_id": take_id})
+
+        return TakeMetadata(**data)
+
     def delete_take(self, user_id: str, track_id: str, take_id: str) -> bool:
         """Delete a take and its stems."""
         try:

@@ -656,6 +656,7 @@ async def get_album_artwork(
 
 class IngestSessionRequest(BaseModel):
     track_id: Optional[str] = Field(default=None, max_length=40)
+    take_id: Optional[str] = Field(default=None, max_length=40)
     new_track_title: Optional[str] = Field(default=None, max_length=200)
     take_label: Optional[str] = Field(default=None, max_length=100)
     notes: Optional[str] = Field(default=None, max_length=10000)
@@ -668,7 +669,7 @@ async def ingest_session(
     payload: IngestSessionRequest,
     user: Dict[str, Any] = Depends(require_auth),
 ):
-    """Promote an active ephemeral /app session directly into a persistent track workspace take."""
+    """Promote or update an active ephemeral session into a persistent track workspace take."""
     cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
     session_id = verify_signed_session_token(cookie_token)
     if not session_id:
@@ -688,7 +689,31 @@ async def ingest_session(
     ext = audio_path.suffix.lower()
     original_filename = session_info.get("original_filename", f"track{ext}")
 
-    # Determine track workspace (create new if not provided)
+    # Case 1: Update existing take in place
+    if payload.track_id and payload.take_id:
+        existing_track = project_storage_manager.get_track(user["id"], payload.track_id)
+        if not existing_track:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target track workspace not found.")
+        existing_take = project_storage_manager.get_take(user["id"], payload.track_id, payload.take_id)
+        if not existing_take:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target take not found.")
+
+        try:
+            take = project_storage_manager.update_take_audio(
+                user_id=user["id"],
+                track_id=payload.track_id,
+                take_id=payload.take_id,
+                audio_bytes=audio_bytes,
+                extension=ext,
+                label=payload.take_label or existing_take.label,
+                notes=payload.notes if payload.notes is not None else existing_take.notes,
+                is_master=payload.is_master,
+            )
+            return take
+        except ProjectStorageQuotaExceeded as e:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
+
+    # Case 2 & 3: Add new take to existing track or create new track
     target_track_id = payload.track_id
     if not target_track_id:
         title = payload.new_track_title or Path(original_filename).stem

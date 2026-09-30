@@ -925,6 +925,15 @@
         method: 'POST',
       });
       if (res.ok) {
+        const data = await res.json();
+        const track = state.tracks.find(t => t.id === trackId);
+        sessionStorage.setItem('mp3metafix_loaded_project_track', JSON.stringify({
+          track_id: trackId,
+          take_id: takeId,
+          track_title: track ? track.title : 'Workspace Track',
+          take_label: data.label || 'Master Take',
+          filename: data.filename || 'track.mp3',
+        }));
         window.location.href = targetUrl;
       } else {
         const err = await res.json();

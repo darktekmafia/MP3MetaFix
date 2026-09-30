@@ -1310,16 +1310,28 @@
       <form id="formSaveToProject" class="modal-body">
         <div class="form-group">
           <label class="form-label">Destination Track Workspace</label>
-          <div class="radio-group-horizontal" style="display: flex; gap: 1.5rem; margin-bottom: 0.75rem;">
+          <div class="radio-group-horizontal" style="display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.75rem;">
+            <label class="radio-label" id="labelRadioSaveUpdateTake" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+              <input type="radio" name="saveProjectTargetMode" id="radioSaveUpdateTake" value="update">
+              <span>Update Current Take</span>
+            </label>
+            <label class="radio-label" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+              <input type="radio" name="saveProjectTargetMode" id="radioSaveExistingTrack" value="existing">
+              <span>Add Take to Track</span>
+            </label>
             <label class="radio-label" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
               <input type="radio" name="saveProjectTargetMode" id="radioSaveNewTrack" value="new" checked>
               <span>Create New Track</span>
             </label>
-            <label class="radio-label" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
-              <input type="radio" name="saveProjectTargetMode" id="radioSaveExistingTrack" value="existing">
-              <span>Add Take to Existing Track</span>
-            </label>
           </div>
+        </div>
+
+        <div id="saveProjectUpdateGroup" class="form-group hidden" style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 0.75rem 1rem;">
+          <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="color: var(--clr-primary, #38bdf8); flex-shrink: 0;"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            <span>Target: <strong id="saveProjectUpdateNoticeText" style="color: var(--clr-primary, #38bdf8);">Loaded Take</strong></span>
+          </div>
+          <p class="form-subtext" style="margin-top: 0.25rem; margin-bottom: 0; font-size: 0.75rem; color: var(--clr-muted, #94a3b8);">Overwrites the existing audio file & updated metadata directly in your persistent project workspace.</p>
         </div>
 
         <div id="saveProjectNewTrackFields" class="form-group">

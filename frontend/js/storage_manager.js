@@ -54,6 +54,10 @@
     dom.saveProjectNewTrackFields = document.getElementById('saveProjectNewTrackFields');
     dom.radioSaveNewTrack = document.getElementById('radioSaveNewTrack');
     dom.radioSaveExistingTrack = document.getElementById('radioSaveExistingTrack');
+    dom.radioSaveUpdateTake = document.getElementById('radioSaveUpdateTake');
+    dom.labelRadioSaveUpdateTake = document.getElementById('labelRadioSaveUpdateTake');
+    dom.saveProjectUpdateGroup = document.getElementById('saveProjectUpdateGroup');
+    dom.saveProjectUpdateNoticeText = document.getElementById('saveProjectUpdateNoticeText');
 
     // New Track Modal
     dom.modalNewTrack = document.getElementById('modalNewTrack');
@@ -537,6 +541,16 @@
         method: 'POST',
       });
       if (res.ok) {
+        const data = await res.json();
+        const track = storageState.tracks.find(t => t.id === trackId);
+        storageState.loadedProjectTake = {
+          track_id: trackId,
+          take_id: takeId,
+          track_title: track ? track.title : 'Workspace Track',
+          take_label: data.label || 'Master Take',
+          filename: data.filename || 'track.mp3',
+        };
+        sessionStorage.setItem('mp3metafix_loaded_project_track', JSON.stringify(storageState.loadedProjectTake));
         showToast('✨ Track loaded into editor session!', 'success');
         // Restore session in frontend app.js
         if (typeof window.restoreSession === 'function') {
@@ -660,6 +674,15 @@
     if (!dom.modalSaveToProject) return;
     if (dom.formSaveToProject) dom.formSaveToProject.reset();
 
+    // Check if we loaded a project take previously
+    let loadedTake = storageState.loadedProjectTake;
+    if (!loadedTake) {
+      try {
+        const stored = sessionStorage.getItem('mp3metafix_loaded_project_track');
+        if (stored) loadedTake = JSON.parse(stored);
+      } catch (e) {}
+    }
+
     // Populate existing tracks dropdown
     if (dom.selectSaveTargetTrack) {
       dom.selectSaveTargetTrack.innerHTML = '';
@@ -667,23 +690,49 @@
         const opt = document.createElement('option');
         opt.value = track.id;
         opt.textContent = track.title || 'Untitled Track';
+        if (loadedTake && loadedTake.track_id === track.id) {
+          opt.selected = true;
+        }
         dom.selectSaveTargetTrack.appendChild(opt);
       });
     }
 
-    // Default to New Track if no tracks exist, else default based on radio
-    if (storageState.tracks.length === 0) {
-      if (dom.radioSaveNewTrack) dom.radioSaveNewTrack.checked = true;
-      if (dom.radioSaveExistingTrack) dom.radioSaveExistingTrack.disabled = true;
-      if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.remove('hidden');
-      const selectGrp = document.getElementById('saveProjectExistingTrackGroup');
+    const selectGrp = document.getElementById('saveProjectExistingTrackGroup');
+
+    if (loadedTake && loadedTake.track_id && loadedTake.take_id) {
+      if (dom.labelRadioSaveUpdateTake) dom.labelRadioSaveUpdateTake.classList.remove('hidden');
+      if (dom.radioSaveUpdateTake) {
+        dom.radioSaveUpdateTake.disabled = false;
+        dom.radioSaveUpdateTake.checked = true;
+      }
+      if (dom.saveProjectUpdateNoticeText) {
+        dom.saveProjectUpdateNoticeText.textContent = `${loadedTake.track_title || 'Workspace Track'} • ${loadedTake.take_label || 'Current Take'}`;
+      }
+      if (dom.saveProjectUpdateGroup) dom.saveProjectUpdateGroup.classList.remove('hidden');
+      if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.add('hidden');
       if (selectGrp) selectGrp.classList.add('hidden');
+
+      const takeLabelInput = document.getElementById('saveProjectTakeLabel');
+      if (takeLabelInput) takeLabelInput.value = loadedTake.take_label || '';
     } else {
-      if (dom.radioSaveExistingTrack) dom.radioSaveExistingTrack.disabled = false;
-      if (dom.radioSaveNewTrack) dom.radioSaveNewTrack.checked = true;
-      if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.remove('hidden');
-      const selectGrp = document.getElementById('saveProjectExistingTrackGroup');
-      if (selectGrp) selectGrp.classList.add('hidden');
+      if (dom.labelRadioSaveUpdateTake) dom.labelRadioSaveUpdateTake.classList.add('hidden');
+      if (dom.radioSaveUpdateTake) {
+        dom.radioSaveUpdateTake.disabled = true;
+        dom.radioSaveUpdateTake.checked = false;
+      }
+      if (dom.saveProjectUpdateGroup) dom.saveProjectUpdateGroup.classList.add('hidden');
+
+      if (storageState.tracks.length === 0) {
+        if (dom.radioSaveNewTrack) dom.radioSaveNewTrack.checked = true;
+        if (dom.radioSaveExistingTrack) dom.radioSaveExistingTrack.disabled = true;
+        if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.remove('hidden');
+        if (selectGrp) selectGrp.classList.add('hidden');
+      } else {
+        if (dom.radioSaveExistingTrack) dom.radioSaveExistingTrack.disabled = false;
+        if (dom.radioSaveNewTrack) dom.radioSaveNewTrack.checked = true;
+        if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.remove('hidden');
+        if (selectGrp) selectGrp.classList.add('hidden');
+      }
     }
 
     // Pre-fill Title from loaded filename or title tag if available
@@ -825,27 +874,59 @@
 
   async function handleSaveToProjectSubmit(e) {
     e.preventDefault();
-    const isNew = dom.radioSaveNewTrack.checked;
+    const mode = document.querySelector('input[name="saveProjectTargetMode"]:checked')?.value || 'new';
     const newTitle = (document.getElementById('saveProjectTrackTitle').value || '').trim();
-    const targetTrackId = isNew ? null : dom.selectSaveTargetTrack.value;
+    const targetTrackId = dom.selectSaveTargetTrack ? dom.selectSaveTargetTrack.value : null;
     const takeLabel = (document.getElementById('saveProjectTakeLabel').value || '').trim();
     const notes = (document.getElementById('saveProjectNotes').value || '').trim();
     const isMaster = document.getElementById('saveProjectIsMaster').checked;
 
-    if (isNew && !newTitle) {
-      showToast('Please enter a track title', 'error');
-      return;
+    let payload = {};
+
+    if (mode === 'update') {
+      let loadedTake = storageState.loadedProjectTake;
+      if (!loadedTake) {
+        try {
+          const stored = sessionStorage.getItem('mp3metafix_loaded_project_track');
+          if (stored) loadedTake = JSON.parse(stored);
+        } catch (err) {}
+      }
+      if (!loadedTake || !loadedTake.track_id || !loadedTake.take_id) {
+        showToast('No active loaded workspace take to update', 'error');
+        return;
+      }
+      payload = {
+        track_id: loadedTake.track_id,
+        take_id: loadedTake.take_id,
+        take_label: takeLabel || loadedTake.take_label || 'Master Take',
+        notes: notes || null,
+        is_master: isMaster,
+      };
+    } else if (mode === 'existing') {
+      if (!targetTrackId) {
+        showToast('Please select a target track workspace', 'error');
+        return;
+      }
+      payload = {
+        track_id: targetTrackId,
+        take_label: takeLabel || 'Editor Take',
+        notes: notes || null,
+        is_master: isMaster,
+      };
+    } else {
+      if (!newTitle) {
+        showToast('Please enter a track title', 'error');
+        return;
+      }
+      payload = {
+        new_track_title: newTitle,
+        take_label: takeLabel || 'Editor Take',
+        notes: notes || null,
+        is_master: isMaster,
+      };
     }
 
-    const payload = {
-      track_id: targetTrackId,
-      new_track_title: isNew ? newTitle : null,
-      take_label: takeLabel || 'Editor Take',
-      notes: notes || null,
-      is_master: isMaster,
-    };
-
-    showToast('Saving audio into project workspace...', 'info', 2000);
+    showToast(mode === 'update' ? 'Updating workspace take...' : 'Saving audio into project workspace...', 'info', 2000);
     try {
       const res = await fetch('/api/projects/ingest-session', {
         method: 'POST',
@@ -854,7 +935,8 @@
       });
 
       if (res.ok) {
-        showToast('✨ Audio file saved into Project Storage!', 'success');
+        const savedTake = await res.json();
+        showToast(mode === 'update' ? '✨ Track take updated in workspace!' : '✨ Audio file saved into Project Storage!', 'success');
         closeSaveToProjectModal();
         fetchStorageData();
       } else {
@@ -919,18 +1001,27 @@
     }
 
     // Radio toggle in Save to Project modal
-    if (dom.radioSaveNewTrack && dom.radioSaveExistingTrack) {
-      dom.radioSaveNewTrack.addEventListener('change', () => {
-        if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.remove('hidden');
-        const selectGrp = document.getElementById('saveProjectExistingTrackGroup');
-        if (selectGrp) selectGrp.classList.add('hidden');
-      });
-      dom.radioSaveExistingTrack.addEventListener('change', () => {
+    function updateSaveTargetModeUI() {
+      const mode = document.querySelector('input[name="saveProjectTargetMode"]:checked')?.value || 'new';
+      const selectGrp = document.getElementById('saveProjectExistingTrackGroup');
+      if (mode === 'update') {
+        if (dom.saveProjectUpdateGroup) dom.saveProjectUpdateGroup.classList.remove('hidden');
         if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.add('hidden');
-        const selectGrp = document.getElementById('saveProjectExistingTrackGroup');
+        if (selectGrp) selectGrp.classList.add('hidden');
+      } else if (mode === 'existing') {
+        if (dom.saveProjectUpdateGroup) dom.saveProjectUpdateGroup.classList.add('hidden');
+        if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.add('hidden');
         if (selectGrp) selectGrp.classList.remove('hidden');
-      });
+      } else {
+        if (dom.saveProjectUpdateGroup) dom.saveProjectUpdateGroup.classList.add('hidden');
+        if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.remove('hidden');
+        if (selectGrp) selectGrp.classList.add('hidden');
+      }
     }
+
+    if (dom.radioSaveUpdateTake) dom.radioSaveUpdateTake.addEventListener('change', updateSaveTargetModeUI);
+    if (dom.radioSaveNewTrack) dom.radioSaveNewTrack.addEventListener('change', updateSaveTargetModeUI);
+    if (dom.radioSaveExistingTrack) dom.radioSaveExistingTrack.addEventListener('change', updateSaveTargetModeUI);
 
     // Forms Submissions
     if (dom.formNewTrack) {
