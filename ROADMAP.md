@@ -57,9 +57,10 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - Configurable maintenance/reason messages (e.g. "Temporarily disabled: investigating audio save bug") set in `/admin`.
   - **Hub Card Visibility Toggle**: Configurable setting in `/admin` to choose whether disabled or coming-soon services display as a disabled card on the `/` Hub or remain completely hidden from the Hub interface.
   - **Graceful Direct Route Handoff**: If a user accesses a disabled workspace via bookmark or direct link (`/manager`, `/projects`, `/app`), an informative maintenance/status view displays the configured message rather than an abrupt redirect or broken state.
-  - Future-proof design compatible with upcoming multi-user role tiers (Guest, User, Admin).
+  - **Multi-User Preparation & Current Scope Note**: The configuration schema and `/admin` UI controls are in place for all workspaces. In the current single-tenant release, `/manager` and `/projects` require administrator/user authentication by design (with `/projects` requiring an active user session for POSIX 0700 storage isolation). The per-workspace guest toggles for those workspaces will become effective once the multi-user role tier feature is officially unlocked.
 - [ ] **Multi-User Role & Quota Policies**:
   - Granular per-user storage quotas, tenant directories, and role management (Editor, Viewer, Admin).
+  - Connect granular workspace permissions to role tiers, allowing administrators to configure user-level and guest-level reachability across `/manager` and `/projects`.
 - [ ] **Service Daemon Maintenance Triggers**:
   - Authenticated admin actions to trigger cache cleanup, storage purge, or service restart directly from the web portal.
 - [ ] **Live Audio Processing Metrics**:
