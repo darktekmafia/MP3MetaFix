@@ -1621,7 +1621,7 @@
       stemsState.selectedTakeId = chosenTakeId;
 
       const activeTake = takes.find(t => t.id === chosenTakeId);
-      renderStemsMixer(trackDetail, activeTake);
+      renderStemsMixer(trackDetail.track || trackDetail, activeTake);
     } catch (err) {
       showToast('Error loading takes for stems', 'error');
     }
@@ -1632,6 +1632,8 @@
     if (!dom.stemsChannelsList) return;
     dom.stemsChannelsList.innerHTML = '';
 
+    const trackObj = (track && track.track) ? track.track : track;
+    const trackId = (trackObj && trackObj.id) || stemsState.selectedTrackId;
     const stems = take && take.stems ? Object.values(take.stems) : [];
 
     if (dom.btnDownloadStemPack) {
@@ -1651,7 +1653,7 @@
       stemsState.channelStates.set(stem.id, { isMuted: false, isSolo: false, volume: 1.0 });
 
       // Create audio element for stem
-      const audio = new Audio(`/api/projects/tracks/${track.id}/takes/${take.id}/stems/${stem.id}/stream`);
+      const audio = new Audio(`/api/projects/tracks/${trackId}/takes/${take.id}/stems/${stem.id}/stream`);
       audio.preload = 'metadata';
       audio.addEventListener('loadedmetadata', () => {
         if (audio.duration && audio.duration > stemsState.duration) {
@@ -1752,7 +1754,7 @@
       const dlBtn = document.createElement('a');
       dlBtn.className = 'btn-stem-icon';
       dlBtn.title = 'Download Stem';
-      dlBtn.href = `/api/projects/tracks/${track.id}/takes/${take.id}/stems/${stem.id}/download`;
+      dlBtn.href = `/api/projects/tracks/${trackId}/takes/${take.id}/stems/${stem.id}/download`;
       dlBtn.download = stem.filename;
       dlBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
       controls.appendChild(dlBtn);
@@ -1766,7 +1768,7 @@
       delBtn.addEventListener('click', async () => {
         if (!confirm(`Delete stem "${stem.filename}"?`)) return;
         try {
-          const res = await fetch(`/api/projects/tracks/${track.id}/takes/${take.id}/stems/${stem.id}`, { method: 'DELETE' });
+          const res = await fetch(`/api/projects/tracks/${trackId}/takes/${take.id}/stems/${stem.id}`, { method: 'DELETE' });
           if (res.ok) {
             showToast('Stem deleted', 'info');
             onStemsTrackChanged(take.id);
@@ -2038,7 +2040,7 @@
             .then(res => res.json())
             .then(td => {
               const activeTake = (td.takes || []).find(t => t.id === takeId);
-              renderStemsMixer(td, activeTake);
+              renderStemsMixer(td.track || td || track, activeTake);
             });
         }
       });
