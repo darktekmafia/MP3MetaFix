@@ -2058,4 +2058,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     restoreSessionIfExists();
   });
+
+  // Global Bridge for Subsystems (/manager, /projects)
+  window.restoreSession = restoreSessionIfExists;
+  window.loadSession = loadSession;
+  window.MP3MetaFixApp = {
+    restoreSession: restoreSessionIfExists,
+    loadSession,
+    state,
+  };
 });

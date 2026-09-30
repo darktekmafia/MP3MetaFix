@@ -8,7 +8,7 @@
 
   // --- State ---
   const state = {
-    currentView: 'tracks', // 'tracks' | 'albums'
+    currentView: 'tracks', // 'tracks' | 'albums' | 'editor'
     tracks: [],
     albums: [],
     trackFilter: 'all',
@@ -17,6 +17,7 @@
     albumSearch: '',
     quota: null,
     activeAlbum: null,
+    loadedProjectTake: null,
   };
 
   // --- DOM Elements ---
@@ -26,12 +27,15 @@
     // Views
     dom.viewTracks = document.getElementById('viewTracks');
     dom.viewAlbums = document.getElementById('viewAlbums');
+    dom.viewEditor = document.getElementById('viewEditor');
 
     // Sidebar Nav
     dom.navProjectsTracks = document.getElementById('navProjectsTracks');
     dom.navProjectsAlbums = document.getElementById('navProjectsAlbums');
+    dom.navProjectsEditor = document.getElementById('navProjectsEditor');
     dom.btnNavTracks = document.getElementById('btnNavTracks');
     dom.btnNavAlbums = document.getElementById('btnNavAlbums');
+    dom.btnNavEditor = document.getElementById('btnNavEditor');
     dom.navTracksCount = document.getElementById('navTracksCount');
     dom.navAlbumsCount = document.getElementById('navAlbumsCount');
 
@@ -70,6 +74,19 @@
     dom.uploadStemTakeId = document.getElementById('uploadStemTakeId');
     dom.uploadStemTakeDisplay = document.getElementById('uploadStemTakeDisplay');
 
+    // Save to Project Modal
+    dom.modalSaveToProject = document.getElementById('modalSaveToProject');
+    dom.formSaveToProject = document.getElementById('formSaveToProject');
+    dom.selectSaveTargetTrack = document.getElementById('selectSaveTargetTrack');
+    dom.radioSaveUpdateTake = document.getElementById('radioSaveUpdateTake');
+    dom.labelRadioSaveUpdateTake = document.getElementById('labelRadioSaveUpdateTake');
+    dom.radioSaveNewTrack = document.getElementById('radioSaveNewTrack');
+    dom.radioSaveExistingTrack = document.getElementById('radioSaveExistingTrack');
+    dom.saveProjectUpdateGroup = document.getElementById('saveProjectUpdateGroup');
+    dom.saveProjectUpdateNoticeText = document.getElementById('saveProjectUpdateNoticeText');
+    dom.saveProjectNewTrackFields = document.getElementById('saveProjectNewTrackFields');
+    dom.btnSaveToProject = document.getElementById('btnSaveToProject');
+
     // Album Modals
     dom.modalNewAlbum = document.getElementById('modalNewAlbum');
     dom.formNewAlbum = document.getElementById('formNewAlbum');
@@ -97,16 +114,27 @@
   function switchStudioView(viewName) {
     state.currentView = viewName;
 
-    if (viewName === 'albums') {
+    if (viewName === 'editor') {
       if (dom.viewTracks) dom.viewTracks.classList.add('hidden');
+      if (dom.viewAlbums) dom.viewAlbums.classList.add('hidden');
+      if (dom.viewEditor) dom.viewEditor.classList.remove('hidden');
+      if (dom.navProjectsTracks) dom.navProjectsTracks.classList.remove('active');
+      if (dom.navProjectsAlbums) dom.navProjectsAlbums.classList.remove('active');
+      if (dom.navProjectsEditor) dom.navProjectsEditor.classList.add('active');
+    } else if (viewName === 'albums') {
+      if (dom.viewTracks) dom.viewTracks.classList.add('hidden');
+      if (dom.viewEditor) dom.viewEditor.classList.add('hidden');
       if (dom.viewAlbums) dom.viewAlbums.classList.remove('hidden');
       if (dom.navProjectsTracks) dom.navProjectsTracks.classList.remove('active');
+      if (dom.navProjectsEditor) dom.navProjectsEditor.classList.remove('active');
       if (dom.navProjectsAlbums) dom.navProjectsAlbums.classList.add('active');
       fetchAlbums();
     } else {
       if (dom.viewAlbums) dom.viewAlbums.classList.add('hidden');
+      if (dom.viewEditor) dom.viewEditor.classList.add('hidden');
       if (dom.viewTracks) dom.viewTracks.classList.remove('hidden');
       if (dom.navProjectsAlbums) dom.navProjectsAlbums.classList.remove('active');
+      if (dom.navProjectsEditor) dom.navProjectsEditor.classList.remove('active');
       if (dom.navProjectsTracks) dom.navProjectsTracks.classList.add('active');
       fetchTracks();
     }
@@ -412,7 +440,7 @@
     btnOpenEditor.className = 'btn btn-primary btn-sm';
     btnOpenEditor.title = 'Open in MP3MetaFix Editor';
     btnOpenEditor.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg><span>Open Editor</span>';
-    btnOpenEditor.addEventListener('click', () => loadTakeIntoSession(track.id, take.id, '/manager'));
+    btnOpenEditor.addEventListener('click', () => loadTakeIntoSession(track.id, take.id));
     actions.appendChild(btnOpenEditor);
 
     // Add Stem
@@ -917,9 +945,9 @@
     }
   }
 
-  // --- Session Loader ---
-  async function loadTakeIntoSession(trackId, takeId, targetUrl) {
-    showToast('Promoting take into active editor session...', 'info', 2000);
+  // --- Session Loader & Save to Project ---
+  async function loadTakeIntoSession(trackId, takeId) {
+    showToast('Loading take into Editor...', 'info', 1500);
     try {
       const res = await fetch(`/api/projects/tracks/${trackId}/takes/${takeId}/load-session`, {
         method: 'POST',
@@ -927,20 +955,199 @@
       if (res.ok) {
         const data = await res.json();
         const track = state.tracks.find(t => t.id === trackId);
-        sessionStorage.setItem('mp3metafix_loaded_project_track', JSON.stringify({
+        state.loadedProjectTake = {
           track_id: trackId,
           take_id: takeId,
           track_title: track ? track.title : 'Workspace Track',
           take_label: data.label || 'Master Take',
           filename: data.filename || 'track.mp3',
-        }));
-        window.location.href = targetUrl;
+        };
+        sessionStorage.setItem('mp3metafix_loaded_project_track', JSON.stringify(state.loadedProjectTake));
+        showToast('✨ Track loaded into editor!', 'success');
+        if (typeof window.restoreSession === 'function') {
+          await window.restoreSession();
+        }
+        switchStudioView('editor');
       } else {
         const err = await res.json();
-        showToast(err.detail || 'Failed to load take into session', 'error');
+        showToast(err.detail || 'Failed to load take into editor', 'error');
       }
     } catch (e) {
       showToast('Network error loading take', 'error');
+    }
+  }
+
+  function updateSaveTargetModeUI() {
+    const mode = document.querySelector('input[name="saveProjectTargetMode"]:checked')?.value || 'new';
+    const selectGrp = document.getElementById('saveProjectExistingTrackGroup');
+    if (mode === 'update') {
+      if (dom.saveProjectUpdateGroup) dom.saveProjectUpdateGroup.classList.remove('hidden');
+      if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.add('hidden');
+      if (selectGrp) selectGrp.classList.add('hidden');
+    } else if (mode === 'existing') {
+      if (dom.saveProjectUpdateGroup) dom.saveProjectUpdateGroup.classList.add('hidden');
+      if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.add('hidden');
+      if (selectGrp) selectGrp.classList.remove('hidden');
+    } else {
+      if (dom.saveProjectUpdateGroup) dom.saveProjectUpdateGroup.classList.add('hidden');
+      if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.remove('hidden');
+      if (selectGrp) selectGrp.classList.add('hidden');
+    }
+  }
+
+  async function openSaveToProjectModal() {
+    if (!dom.modalSaveToProject) return;
+    if (dom.formSaveToProject) dom.formSaveToProject.reset();
+
+    // Check if we loaded a project take previously
+    let loadedTake = state.loadedProjectTake;
+    if (!loadedTake) {
+      try {
+        const stored = sessionStorage.getItem('mp3metafix_loaded_project_track');
+        if (stored) loadedTake = JSON.parse(stored);
+      } catch (e) {}
+    }
+
+    // Populate existing tracks dropdown
+    if (dom.selectSaveTargetTrack) {
+      dom.selectSaveTargetTrack.innerHTML = '';
+      state.tracks.forEach(track => {
+        const opt = document.createElement('option');
+        opt.value = track.id;
+        opt.textContent = track.title || 'Untitled Track';
+        if (loadedTake && loadedTake.track_id === track.id) {
+          opt.selected = true;
+        }
+        dom.selectSaveTargetTrack.appendChild(opt);
+      });
+    }
+
+    const selectGrp = document.getElementById('saveProjectExistingTrackGroup');
+
+    if (loadedTake && loadedTake.track_id && loadedTake.take_id) {
+      if (dom.labelRadioSaveUpdateTake) dom.labelRadioSaveUpdateTake.classList.remove('hidden');
+      if (dom.radioSaveUpdateTake) {
+        dom.radioSaveUpdateTake.disabled = false;
+        dom.radioSaveUpdateTake.checked = true;
+      }
+      if (dom.saveProjectUpdateNoticeText) {
+        dom.saveProjectUpdateNoticeText.textContent = `${loadedTake.track_title || 'Workspace Track'} • ${loadedTake.take_label || 'Current Take'}`;
+      }
+      if (dom.saveProjectUpdateGroup) dom.saveProjectUpdateGroup.classList.remove('hidden');
+      if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.add('hidden');
+      if (selectGrp) selectGrp.classList.add('hidden');
+
+      const takeLabelInput = document.getElementById('saveProjectTakeLabel');
+      if (takeLabelInput) takeLabelInput.value = loadedTake.take_label || '';
+    } else {
+      if (dom.labelRadioSaveUpdateTake) dom.labelRadioSaveUpdateTake.classList.add('hidden');
+      if (dom.radioSaveUpdateTake) {
+        dom.radioSaveUpdateTake.disabled = true;
+        dom.radioSaveUpdateTake.checked = false;
+      }
+      if (dom.saveProjectUpdateGroup) dom.saveProjectUpdateGroup.classList.add('hidden');
+
+      if (state.tracks.length === 0) {
+        if (dom.radioSaveNewTrack) dom.radioSaveNewTrack.checked = true;
+        if (dom.radioSaveExistingTrack) dom.radioSaveExistingTrack.disabled = true;
+        if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.remove('hidden');
+        if (selectGrp) selectGrp.classList.add('hidden');
+      } else {
+        if (dom.radioSaveExistingTrack) dom.radioSaveExistingTrack.disabled = false;
+        if (dom.radioSaveNewTrack) dom.radioSaveNewTrack.checked = true;
+        if (dom.saveProjectNewTrackFields) dom.saveProjectNewTrackFields.classList.remove('hidden');
+        if (selectGrp) selectGrp.classList.add('hidden');
+      }
+    }
+
+    // Pre-fill Title from loaded filename or title tag if available
+    const titleInput = document.getElementById('saveProjectTrackTitle');
+    const loadedTitleTag = document.getElementById('inputTitle');
+    const loadedFilename = document.getElementById('loadedFilename');
+    if (titleInput) {
+      titleInput.value = (loadedTitleTag && loadedTitleTag.value) || (loadedFilename && loadedFilename.textContent.replace(/\.[^.]+$/, '')) || '';
+    }
+
+    dom.modalSaveToProject.classList.remove('hidden');
+  }
+
+  function closeSaveToProjectModal() {
+    if (dom.modalSaveToProject) dom.modalSaveToProject.classList.add('hidden');
+  }
+
+  async function handleSaveToProjectSubmit(e) {
+    e.preventDefault();
+    const mode = document.querySelector('input[name="saveProjectTargetMode"]:checked')?.value || 'new';
+    const newTitle = (document.getElementById('saveProjectTrackTitle').value || '').trim();
+    const targetTrackId = dom.selectSaveTargetTrack ? dom.selectSaveTargetTrack.value : null;
+    const takeLabel = (document.getElementById('saveProjectTakeLabel').value || '').trim();
+    const notes = (document.getElementById('saveProjectNotes').value || '').trim();
+    const isMaster = document.getElementById('saveProjectIsMaster').checked;
+
+    let payload = {};
+
+    if (mode === 'update') {
+      let loadedTake = state.loadedProjectTake;
+      if (!loadedTake) {
+        try {
+          const stored = sessionStorage.getItem('mp3metafix_loaded_project_track');
+          if (stored) loadedTake = JSON.parse(stored);
+        } catch (err) {}
+      }
+      if (!loadedTake || !loadedTake.track_id || !loadedTake.take_id) {
+        showToast('No active loaded workspace take to update', 'error');
+        return;
+      }
+      payload = {
+        track_id: loadedTake.track_id,
+        take_id: loadedTake.take_id,
+        take_label: takeLabel || loadedTake.take_label || 'Master Take',
+        notes: notes || null,
+        is_master: isMaster,
+      };
+    } else if (mode === 'existing') {
+      if (!targetTrackId) {
+        showToast('Please select a target track workspace', 'error');
+        return;
+      }
+      payload = {
+        track_id: targetTrackId,
+        take_label: takeLabel || 'Editor Take',
+        notes: notes || null,
+        is_master: isMaster,
+      };
+    } else {
+      if (!newTitle) {
+        showToast('Please enter a track title', 'error');
+        return;
+      }
+      payload = {
+        new_track_title: newTitle,
+        take_label: takeLabel || 'Editor Take',
+        notes: notes || null,
+        is_master: isMaster,
+      };
+    }
+
+    showToast(mode === 'update' ? 'Updating workspace take...' : 'Saving audio into project workspace...', 'info', 2000);
+    try {
+      const res = await fetch('/api/projects/ingest-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        showToast(mode === 'update' ? '✨ Track take updated in workspace!' : '✨ Audio file saved into Project Storage!', 'success');
+        closeSaveToProjectModal();
+        fetchTracks();
+        fetchQuota();
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to save into project storage', 'error');
+      }
+    } catch (err) {
+      showToast('Network error saving to project', 'error');
     }
   }
 
@@ -1217,6 +1424,7 @@
   function setupEvents() {
     if (dom.btnNavTracks) dom.btnNavTracks.addEventListener('click', () => switchStudioView('tracks'));
     if (dom.btnNavAlbums) dom.btnNavAlbums.addEventListener('click', () => switchStudioView('albums'));
+    if (dom.btnNavEditor) dom.btnNavEditor.addEventListener('click', () => switchStudioView('editor'));
 
     if (dom.btnRefreshTracks) dom.btnRefreshTracks.addEventListener('click', () => {
       showToast('Refreshing track workspaces...', 'info', 1000);
@@ -1280,6 +1488,13 @@
       });
     }
 
+    // Save to Project Trigger in Editor
+    if (dom.btnSaveToProject) dom.btnSaveToProject.addEventListener('click', openSaveToProjectModal);
+    if (dom.radioSaveUpdateTake) dom.radioSaveUpdateTake.addEventListener('change', updateSaveTargetModeUI);
+    if (dom.radioSaveNewTrack) dom.radioSaveNewTrack.addEventListener('change', updateSaveTargetModeUI);
+    if (dom.radioSaveExistingTrack) dom.radioSaveExistingTrack.addEventListener('change', updateSaveTargetModeUI);
+    if (dom.formSaveToProject) dom.formSaveToProject.addEventListener('submit', handleSaveToProjectSubmit);
+
     // Forms
     if (dom.formNewTrack) dom.formNewTrack.addEventListener('submit', handleNewTrackSubmit);
     if (dom.formNewAlbum) dom.formNewAlbum.addEventListener('submit', handleNewAlbumSubmit);
@@ -1316,6 +1531,7 @@
           dom.modalNewAlbum,
           dom.modalAlbumDetail,
           dom.modalPickTrackForAlbum,
+          dom.modalSaveToProject,
         ].forEach(m => {
           if (m && !m.classList.contains('hidden')) m.classList.add('hidden');
         });
