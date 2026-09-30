@@ -42,8 +42,10 @@ def setup_auth_environment(tmp_path, monkeypatch):
     test_storage = ProjectStorageManager(root_dir=tmp_path / "tenants")
     monkeypatch.setattr("backend.projects_api.project_storage_manager", test_storage)
 
+    from backend.security import upload_rate_limiter
     login_rate_limiter.failed_attempts.clear()
     login_rate_limiter.blocked_until.clear()
+    upload_rate_limiter.history.clear()
     admin_user = test_auth_mgr.create_initial_admin("admin", "AdminPass123!")
     return {"manager": test_auth_mgr, "admin_user": admin_user}
 
@@ -243,6 +245,46 @@ def test_stem_upload_and_management(client, auth_cookies):
     assert res.json()["status"] == "deleted"
 
     # Clean up track
+    client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+
+
+def test_all_stem_roles_supported(client, auth_cookies):
+    """Test that all StemRole enum variants are accepted upon upload."""
+    from backend.project_models import StemRole
+
+    res = client.post(
+        "/api/projects/tracks",
+        json={"title": "Multi-Stem Suite Track"},
+        cookies=auth_cookies,
+    )
+    assert res.status_code == 201
+    track_id = res.json()["id"]
+
+    res = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        files={"file": ("mix.wav", io.BytesIO(VALID_WAV_HEADER), "audio/wav")},
+        data={"label": "Take 1"},
+        cookies=auth_cookies,
+    )
+    assert res.status_code == 201
+    take_id = res.json()["id"]
+
+    for role in StemRole:
+        stem_res = client.post(
+            f"/api/projects/tracks/{track_id}/takes/{take_id}/stems",
+            files={"file": (f"{role.value}.wav", io.BytesIO(VALID_WAV_HEADER), "audio/wav")},
+            data={"role": role.value},
+            cookies=auth_cookies,
+        )
+        assert stem_res.status_code == 201
+        assert stem_res.json()["role"] == role.value
+
+    # Verify all stems are present in take
+    track_res = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+    assert track_res.status_code == 200
+    stems = track_res.json()["takes"][0]["stems"]
+    assert len(stems) == len(StemRole)
+
     client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
 
 

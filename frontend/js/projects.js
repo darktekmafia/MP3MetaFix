@@ -73,6 +73,8 @@
     dom.uploadStemTrackId = document.getElementById('uploadStemTrackId');
     dom.uploadStemTakeId = document.getElementById('uploadStemTakeId');
     dom.uploadStemTakeDisplay = document.getElementById('uploadStemTakeDisplay');
+    dom.uploadStemRole = document.getElementById('uploadStemRole');
+    dom.uploadStemFileInput = document.getElementById('uploadStemFileInput');
 
     // Save to Project Modal
     dom.modalSaveToProject = document.getElementById('modalSaveToProject');
@@ -1440,12 +1442,37 @@
     }
   }
 
+  function autoDetectStemRoleFromFilename(filename) {
+    if (!filename) return null;
+    const lower = filename.toLowerCase();
+    if (lower.includes('lead vocal') || lower.includes('lead_vocal') || lower.includes('lead_vox') || lower.includes('lead vocals') || lower.includes('lead_voc') || lower.includes('0 lead') || lower.includes('lead-vocal') || lower.includes('lead vox')) return 'lead_vocals';
+    if (lower.includes('backing vocal') || lower.includes('backing_vocal') || lower.includes('backing vocals') || lower.includes('bgv') || lower.includes('harmonies') || lower.includes('1 backing') || lower.includes('backing-vocal') || lower.includes('bkg vocal')) return 'backing_vocals';
+    if (lower.includes('vocal') || lower.includes('vox') || lower.includes('voice') || lower.includes('acapella') || lower.includes('acappella')) return 'vocals';
+    if (lower.includes('percussion') || lower.includes('perc')) return 'percussion';
+    if (lower.includes('drum') || lower.includes('beat') || lower.includes('snare') || lower.includes('kick')) return 'drums';
+    if (lower.includes('bass')) return 'bass';
+    if (lower.includes('acoustic guitar') || lower.includes('acoustic_guitar') || lower.includes('acoustic-guitar')) return 'acoustic_guitar';
+    if (lower.includes('electric guitar') || lower.includes('electric_guitar') || lower.includes('electric-guitar')) return 'electric_guitar';
+    if (lower.includes('guitar') || lower.includes('gtr')) return 'guitar';
+    if (lower.includes('piano')) return 'piano';
+    if (lower.includes('keyboard') || lower.includes('keys') || lower.includes('rhodes') || lower.includes('organ') || lower.includes('clav')) return 'keyboard';
+    if (lower.includes('string') || lower.includes('violin') || lower.includes('cello') || lower.includes('viola')) return 'strings';
+    if (lower.includes('brass') || lower.includes('horn') || lower.includes('trumpet') || lower.includes('trombone') || lower.includes('sax')) return 'brass';
+    if (lower.includes('woodwind') || lower.includes('flute') || lower.includes('clarinet') || lower.includes('oboe')) return 'woodwinds';
+    if (lower.includes('synth') || lower.includes('pad') || lower.includes('lead_synth') || lower.includes('lead synth')) return 'synth';
+    if (lower.includes('fx') || lower.includes('effect') || lower.includes('sfx') || lower.includes('ambience') || lower.includes('sound fx')) return 'fx';
+    if (lower.includes('instrumental') || lower.includes('inst')) return 'instrumental';
+    if (lower.includes('other') || lower.includes('misc') || lower.includes('rest')) return 'other';
+    return null;
+  }
+
+  // --- Upload Stem ---
   async function handleUploadStemSubmit(e) {
     e.preventDefault();
     const trackId = dom.uploadStemTrackId.value;
     const takeId = dom.uploadStemTakeId.value;
-    const fileInput = document.getElementById('uploadStemFileInput');
-    const role = document.getElementById('uploadStemRole').value || 'other';
+    const fileInput = dom.uploadStemFileInput || document.getElementById('uploadStemFileInput');
+    const role = (dom.uploadStemRole ? dom.uploadStemRole.value : document.getElementById('uploadStemRole')?.value) || 'other';
 
     if (!fileInput.files || fileInput.files.length === 0) {
       showToast('Please select a stem audio file', 'error');
@@ -1555,8 +1582,17 @@
     // Forms
     if (dom.formNewTrack) dom.formNewTrack.addEventListener('submit', handleNewTrackSubmit);
     if (dom.formNewAlbum) dom.formNewAlbum.addEventListener('submit', handleNewAlbumSubmit);
-    if (dom.formUploadTake) dom.formUploadTake.addEventListener('submit', handleUploadTakeSubmit);
     if (dom.formUploadStem) dom.formUploadStem.addEventListener('submit', handleUploadStemSubmit);
+    if (dom.uploadStemFileInput) {
+      dom.uploadStemFileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+          const detectedRole = autoDetectStemRoleFromFilename(e.target.files[0].name);
+          if (detectedRole && dom.uploadStemRole) {
+            dom.uploadStemRole.value = detectedRole;
+          }
+        }
+      });
+    }
 
     // Album Sequencer & Artwork
     if (dom.btnAddTrackToSequencer) dom.btnAddTrackToSequencer.addEventListener('click', openPickTrackModal);
