@@ -146,9 +146,61 @@
           </div>
 
           <div class="app-card-footer">
-            <button class="btn btn-secondary btn-block btn-lg btn-disabled" disabled aria-disabled="true" title="MP3MetaManager is currently in development and coming in a future release">
-              <span>Coming Soon &bull; In Development</span>
-            </button>
+            <a href="/manager" class="btn btn-secondary btn-block btn-lg" id="btnLaunchManager">
+              <span>Launch MP3MetaManager</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </a>
+          </div>
+        </div>
+
+        <!-- App 3: MP3MetaProjects -->
+        <div class="card app-card app-card-projects">
+          <div class="app-card-glow"></div>
+          <div class="app-card-header">
+            <div class="app-badge-pill pill-primary">
+              <span class="pill-dot"></span> Track Workspaces • Album Studio
+            </div>
+            <div class="app-icon-wrapper icon-mgr" style="background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.35); color: #34d399;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="28" height="28">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <circle cx="12" cy="12" r="5"></circle>
+                <circle cx="12" cy="12" r="1.5"></circle>
+              </svg>
+            </div>
+          </div>
+
+          <div class="app-card-body">
+            <h3 class="app-title">MP3MetaProjects</h3>
+            <p class="app-tagline">Track Workspaces & Album Release Studio</p>
+            <p class="app-desc">
+              Organize multi-take audio workflows, AI prompt revisions, separated audio stems, and sequence multi-track Album/EP releases with master cover artwork.
+            </p>
+
+            <ul class="app-features-list">
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Multi-Take Track Workspaces & Master Designation</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Separated Stem Explorer (Vocals, Inst, Drums, Bass)</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Album / EP Tracklist Sequencer & Master Artwork</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Storage Quota Management & POSIX 0700 Tenant Isolation</span>
+              </li>
+            </ul>
+          </div>
+
+          <div class="app-card-footer">
+            <a href="/projects" class="btn btn-primary btn-block btn-lg" id="btnLaunchProjects">
+              <span>Launch MP3MetaProjects</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </a>
           </div>
         </div>
       </section>
@@ -162,7 +214,9 @@
         <span class="footer-sep">&bull;</span>
         <a href="/app" class="footer-link">MP3MetaFix</a>
         <span class="footer-sep">&bull;</span>
-        <span class="footer-link-disabled" title="Coming Soon">MP3MetaManager <span class="switcher-badge-soon">Soon</span></span>
+        <a href="/manager" class="footer-link">MP3MetaManager</a>
+        <span class="footer-sep">&bull;</span>
+        <a href="/projects" class="footer-link">MP3MetaProjects</a>
       </div>
     </footer>
   </div>

@@ -5,6 +5,7 @@ import io
 import hmac
 import hashlib
 import uuid
+import secrets
 from pathlib import Path
 from typing import Tuple, Optional
 from PIL import Image
@@ -85,11 +86,67 @@ def verify_signed_session_token(token: str, max_age_seconds: Optional[int] = Non
     return None
 
 
-
 def get_storage_dir_name(session_id: str) -> str:
     """Generate a one-way deterministic SHA-256 hash for the isolated storage directory.
     This decouples physical directory names on disk from both session IDs and client tokens."""
     return hashlib.sha256(f"storage_dir:{SESSION_SECRET_KEY}:{session_id}".encode("utf-8")).hexdigest()[:32]
+
+
+# --- Project Opaque Identifiers & Path Hashers ---
+
+PROJECT_ID_PATTERN = re.compile(r"^(trk|tak|stm|alb)_[A-Za-z0-9_-]{16,32}$")
+
+
+def generate_track_id() -> str:
+    """Generate a high-entropy, opaque URL-safe track workspace identifier."""
+    return f"trk_{secrets.token_urlsafe(16)}"
+
+
+def generate_take_id() -> str:
+    """Generate a high-entropy, opaque URL-safe take identifier."""
+    return f"tak_{secrets.token_urlsafe(16)}"
+
+
+def generate_stem_id() -> str:
+    """Generate a high-entropy, opaque URL-safe stem identifier."""
+    return f"stm_{secrets.token_urlsafe(16)}"
+
+
+def generate_album_id() -> str:
+    """Generate a high-entropy, opaque URL-safe album workspace identifier."""
+    return f"alb_{secrets.token_urlsafe(16)}"
+
+
+def is_valid_project_id(identifier: str, expected_prefix: Optional[str] = None) -> bool:
+    """Validate opaque identifier structure to prevent path traversal or injection."""
+    if not identifier or not isinstance(identifier, str) or len(identifier) > 40:
+        return False
+    if not PROJECT_ID_PATTERN.match(identifier):
+        return False
+    if expected_prefix:
+        if not identifier.startswith(f"{expected_prefix}_"):
+            return False
+    return True
+
+
+def get_tenant_storage_dir_name(user_id: str) -> str:
+    """Generate a decoupled one-way SHA-256 directory name for a tenant/user root."""
+    return hashlib.sha256(f"tenant_storage:{SESSION_SECRET_KEY}:{user_id}".encode("utf-8")).hexdigest()[:32]
+
+
+def get_track_dir_name(track_id: str) -> str:
+    """Generate a decoupled one-way SHA-256 directory name for a track workspace."""
+    return hashlib.sha256(f"track_dir:{SESSION_SECRET_KEY}:{track_id}".encode("utf-8")).hexdigest()[:32]
+
+
+def get_take_dir_name(take_id: str) -> str:
+    """Generate a decoupled one-way SHA-256 directory name for a track take."""
+    return hashlib.sha256(f"take_dir:{SESSION_SECRET_KEY}:{take_id}".encode("utf-8")).hexdigest()[:32]
+
+
+def get_album_dir_name(album_id: str) -> str:
+    """Generate a decoupled one-way SHA-256 directory name for an album workspace."""
+    return hashlib.sha256(f"album_dir:{SESSION_SECRET_KEY}:{album_id}".encode("utf-8")).hexdigest()[:32]
 
 
 def sanitize_filename(filename: str, default: str = "track.mp3", extension: str = ".mp3") -> str:

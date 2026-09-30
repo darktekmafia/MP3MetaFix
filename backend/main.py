@@ -35,6 +35,7 @@ from backend.config import (
     STATIC_DIR,
     APP_DIR,
     MANAGER_DIR,
+    PROJECTS_DIR,
     ADMIN_DIR,
     DOCS_DIR,
     DOCS_STATIC_DIR,
@@ -1302,11 +1303,19 @@ if APP_DIR.is_dir():
 if MANAGER_DIR.is_dir():
     app.mount("/manager", StaticFiles(directory=MANAGER_DIR, html=True), name="manager")
 
+if PROJECTS_DIR.is_dir():
+    app.mount("/projects", StaticFiles(directory=PROJECTS_DIR, html=True), name="projects")
+
 if ADMIN_DIR.is_dir():
     app.mount("/admin", StaticFiles(directory=ADMIN_DIR, html=True), name="admin")
 
 if DOCS_STATIC_DIR.is_dir():
     app.mount("/docs", StaticFiles(directory=DOCS_STATIC_DIR, html=True), name="docs")
+
+# Include Project & Storage Subsystem Routers
+from backend.projects_api import projects_router, storage_router
+app.include_router(projects_router)
+app.include_router(storage_router)
 
 if STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")

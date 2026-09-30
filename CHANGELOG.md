@@ -10,6 +10,11 @@ Historical release entries describe what was recorded at the time. Security comp
 ## [Unreleased]
 
 ### Added
+- **Persistent File & Project Storage Engine (`/projects` & `/manager`)**: Added user-owned persistent storage architecture with self-contained Track Workspaces (`trk_...`), Takes (`tak_...`), Stems (`stm_...`), and Album Releases (`alb_...`) under POSIX `0700` filesystem isolation (`data/storage/tenants/`).
+- **RESTful Project & Storage APIs (`/api/projects`, `/api/storage`)**: Complete suite of endpoints for track CRUD, take/stem audio ingestion, synchronized lyrics format attachment, HTTP 206 audio streaming, RFC 5987 sanitized audio downloads, album tracklist sequencing, cover artwork normalization, and quota telemetry.
+- **Two-Way Session Ingestion & Promotion**: Seamless bridge allowing single-track editor sessions (`/app` and `/manager`) to be saved into persistent project storage (`/api/projects/ingest-session`), or stored project takes to be promoted directly into active editing sessions (`/api/projects/tracks/{id}/takes/{id}/load-session`).
+- **MP3MetaProjects Studio Interface (`/projects`)**: Dedicated studio application featuring Track Workspaces, multi-take manager with master take designation, separated stem explorer (Vocals, Instrumental, Drums, Bass, Synth, FX), and interactive Album Sequencer with master artwork and credits configuration.
+- **Track Workspaces in `/manager` & Telemetry in `/admin`**: Added persistent track library browser, takes drawer, and quota meters to `/manager`, alongside persistent project storage telemetry cards in `/admin`.
 - **Synced Lyrics / SYLT & Tap-to-Sync Studio in `/manager`**: Interactive synchronized lyrics studio for timing creator-owned and self-generated audio tracks. Features live tap-to-sync timestamping (<kbd>Space</kbd> / Tap), jump-to-time audio playback, timestamp nudging ($\pm 100\text{ms}$), live karaoke preview mode with active-line spotlighting and previous-line fade, and full `.lrc` file import/export.
 - **Structural Tag Classification & Karaoke Pacing**: Automatic classification of non-singable structural tags (e.g. `[Intro]`, `[Verse 1]`, `[Chorus]`, `[Guitar Solo]`, `[Outro]`) as distinctive visual pill badges, preserving tag integrity while pacing playback during instrumental breaks.
 - **Mutagen ID3 SYLT Frame Engine & Endpoints**: Added atomic ID3 `SYLT` (Synchronized Lyrics/Text, millisecond format) extraction and serialization to `backend/metadata_engine.py`, alongside new `POST /api/lyrics/parse-lrc` and `POST /api/lyrics/export-lrc` conversion endpoints.
@@ -24,6 +29,7 @@ Historical release entries describe what was recorded at the time. Security comp
 - **Project Vision & Long-Term Direction (`VISION.md`)**: Established the permanent open-source foundational governance commitment, defined core engineering principles (non-destructive tagging, security by design), documented current capabilities, articulated the long-term API-first architectural foundation, and outlined the vision evolution model.
 - **Governance & Development Transparency (`GOVERNANCE.md`)**: Disclosed the solo founder stewardship and AI/LLM-assisted implementation model, multi-layered verification and engineering rigor, equal contributor voice, mature proposal docket lifecycle, and cataloged open governance design questions (succession, voting rules, quorum) as explicitly TBD.
 - **Roadmap Governance Track (`ROADMAP.md`)**: Added dedicated milestones for formal initial vision specification, community governance transition planning, proposal docket tooling, and release-candidate branch integration.
+- **MP3MetaProjects Studio Guide (`docs/projects/README.md`)**: Documented multi-take workflows, separated stems, album release sequencing, POSIX `0700` isolation, and RESTful project APIs.
 
 ## [0.5.3] - 2026-09-25
 

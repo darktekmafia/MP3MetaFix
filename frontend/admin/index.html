@@ -42,10 +42,14 @@
             <span class="switcher-icon">⚡</span>
             <span class="switcher-label">MP3MetaFix</span>
           </a>
-          <span class="switcher-link switcher-link-disabled" title="MP3MetaManager (Coming Soon &bull; In Active Development)" aria-disabled="true">
+          <a href="/manager" class="switcher-link" title="MP3MetaManager (Desktop Workspace & Synced Lyrics)">
             <span class="switcher-icon">🗂️</span>
-            <span class="switcher-label">MetaManager <span class="switcher-badge-soon">Soon</span></span>
-          </span>
+            <span class="switcher-label">MetaManager</span>
+          </a>
+          <a href="/projects" class="switcher-link" title="MP3MetaProjects (Track & Album Studio)">
+            <span class="switcher-icon">🎛️</span>
+            <span class="switcher-label">MetaProjects</span>
+          </a>
           <a href="/" class="switcher-link" title="Gateway Hub">
             <span class="switcher-icon">🏠</span>
             <span class="switcher-label">Hub</span>
@@ -215,8 +219,31 @@
               <div class="t-meter-fill meter-storage" id="statStorageMeter" style="width: 0%"></div>
             </div>
             <div class="t-details-row">
-              <span>Quota Used:</span>
+              <span>Temp Quota:</span>
               <span class="t-val-code" id="statStorageQuota">0% of 2048MB</span>
+            </div>
+          </div>
+
+          <!-- Card 5: Persistent Project Workspaces -->
+          <div class="card telemetry-card">
+            <div class="t-card-header">
+              <div class="t-icon t-icon-storage" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                </svg>
+              </div>
+              <div>
+                <h4 class="t-title">Project Storage</h4>
+                <span class="t-sub" id="statProjectsCount">0 Tracks • 0 Takes</span>
+              </div>
+            </div>
+            <div class="t-val-main" id="statProjectsStorageSize">0 MB</div>
+            <div class="t-meter-track">
+              <div class="t-meter-fill meter-storage" id="statProjectsStorageMeter" style="width: 0%; background: linear-gradient(90deg, #38bdf8, #0ea5e9);"></div>
+            </div>
+            <div class="t-details-row">
+              <span>Tenant Quota:</span>
+              <span class="t-val-code" id="statProjectsStorageQuota">0% of 1000MB</span>
             </div>
           </div>
         </div>

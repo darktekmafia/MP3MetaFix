@@ -42,10 +42,14 @@
             <span class="switcher-icon">⚡</span>
             <span class="switcher-label">MP3MetaFix</span>
           </a>
-          <span class="switcher-link active switcher-link-disabled" title="MP3MetaManager (Desktop Workspace)" aria-disabled="true">
+          <a href="/manager" class="switcher-link active" title="MP3MetaManager (Desktop Workspace)">
             <span class="switcher-icon">🗂️</span>
-            <span class="switcher-label">MetaManager <span class="switcher-badge-soon">Soon</span></span>
-          </span>
+            <span class="switcher-label">MetaManager</span>
+          </a>
+          <a href="/projects" class="switcher-link" title="MP3MetaProjects (Track & Album Studio)">
+            <span class="switcher-icon">🎛️</span>
+            <span class="switcher-label">MetaProjects</span>
+          </a>
           <a href="/" class="switcher-link" title="Gateway Hub & System Overview">
             <span class="switcher-icon">🏠</span>
             <span class="switcher-label">Hub</span>
@@ -113,6 +117,19 @@
         </div>
 
         <div class="sidebar-section">
+          <div class="sidebar-heading">Projects & Storage</div>
+          <ul class="sidebar-nav-list">
+            <li class="sidebar-nav-item" id="navItemStorage">
+              <button class="sidebar-nav-btn" id="btnNavStorage" title="Persistent Track Workspaces, Takes & Stems">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                <span>Track Workspaces</span>
+                <span class="nav-count-badge" id="navStorageCount">0</span>
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <div class="sidebar-section">
           <div class="sidebar-heading">Tools & Automation <span class="switcher-badge-soon">Soon</span></div>
           <ul class="sidebar-nav-list">
             <li class="sidebar-nav-item">
@@ -128,6 +145,17 @@
               </button>
             </li>
           </ul>
+        </div>
+
+        <!-- Storage Quota Telemetry in Sidebar -->
+        <div class="sidebar-quota-container" id="sidebarQuotaContainer">
+          <div class="quota-header">
+            <span class="quota-label">Storage Quota</span>
+            <span class="quota-usage" id="sidebarQuotaText">0 MB / 1000 MB</span>
+          </div>
+          <div class="quota-bar-track">
+            <div class="quota-bar-fill" id="sidebarQuotaBar" style="width: 0%"></div>
+          </div>
         </div>
       </aside>
 
@@ -197,6 +225,12 @@
               <button id="btnSunoEnrich" class="btn btn-suno hidden" title="Extract tags, structured lyrics & cover art from Suno.com">
                 <span class="suno-btn-sparkle">✨</span>
                 <span><span class="btn-txt-full">Suno Sync</span><span class="btn-txt-short">Suno</span></span>
+              </button>
+              <button id="btnSaveToProject" class="btn btn-secondary" title="Save current audio file into persistent Project Workspace">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                </svg>
+                <span><span class="btn-txt-full">Save to Project</span><span class="btn-txt-short">Project</span></span>
               </button>
               <button id="btnNewFile" class="btn btn-secondary" title="Upload a different audio file">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -657,6 +691,67 @@
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- Persistent Track Workspaces & Storage Panel -->
+        <div id="panelStorageView" class="storage-panel-view hidden">
+          <!-- Storage Toolbar -->
+          <div class="storage-toolbar">
+            <div class="storage-search-group">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <input type="text" id="storageSearchInput" class="form-input storage-search-input" placeholder="Search tracks by title, artist, BPM, or notes...">
+            </div>
+            
+            <div class="storage-filter-pills" role="tablist">
+              <button type="button" class="storage-filter-pill active" data-filter="all">All Tracks</button>
+              <button type="button" class="storage-filter-pill" data-filter="draft">Drafts</button>
+              <button type="button" class="storage-filter-pill" data-filter="in_progress">In Progress</button>
+              <button type="button" class="storage-filter-pill" data-filter="completed">Completed</button>
+              <button type="button" class="storage-filter-pill" data-filter="archived">Archived</button>
+            </div>
+
+            <div class="storage-toolbar-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btnRefreshStorage" title="Refresh tracks and quota">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <polyline points="23 4 23 10 17 10"></polyline>
+                  <polyline points="1 20 1 14 7 14"></polyline>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                <span>Refresh</span>
+              </button>
+              <button type="button" class="btn btn-primary btn-sm" id="btnNewTrack" title="Create a new Track Workspace">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                <span>New Track</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Empty State (hidden by default) -->
+          <div id="storageEmptyState" class="storage-empty-state hidden">
+            <div class="empty-icon-wrap">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                <circle cx="12" cy="13" r="3"></circle>
+              </svg>
+            </div>
+            <h3 class="empty-title">No Track Workspaces Found</h3>
+            <p class="empty-desc">Create your first Track Workspace to manage multiple takes, separated stems, production notes, and lyrics versions.</p>
+            <button type="button" class="btn btn-primary btn-sm" id="btnEmptyNewTrack">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              <span>Create Track Workspace</span>
+            </button>
+          </div>
+
+          <!-- Track Workspaces Container -->
+          <div id="storageTracksContainer" class="storage-tracks-container">
+            <!-- Dynamic cards created safely via storage_manager.js -->
           </div>
         </div>
       </section>
@@ -1194,11 +1289,259 @@
     </div>
   </div>
 
+  <!-- Save to Project Workspace Modal -->
+  <div id="modalSaveToProject" class="modal-overlay hidden" role="dialog" aria-labelledby="modalSaveToProjectTitle" aria-modal="true">
+    <div class="modal-card modal-md">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </div>
+          <div>
+            <h2 id="modalSaveToProjectTitle" class="modal-title">Save to Project Workspace</h2>
+            <p class="modal-subtitle">Save current loaded audio into your persistent track workspace</p>
+          </div>
+        </div>
+        <button class="btn-close" data-close-modal="modalSaveToProject" aria-label="Close modal">&times;</button>
+      </div>
+
+      <form id="formSaveToProject" class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Destination Track Workspace</label>
+          <div class="radio-group-horizontal" style="display: flex; gap: 1.5rem; margin-bottom: 0.75rem;">
+            <label class="radio-label" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+              <input type="radio" name="saveProjectTargetMode" id="radioSaveNewTrack" value="new" checked>
+              <span>Create New Track</span>
+            </label>
+            <label class="radio-label" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+              <input type="radio" name="saveProjectTargetMode" id="radioSaveExistingTrack" value="existing">
+              <span>Add Take to Existing Track</span>
+            </label>
+          </div>
+        </div>
+
+        <div id="saveProjectNewTrackFields" class="form-group">
+          <label for="saveProjectTrackTitle" class="form-label">Track Title *</label>
+          <input type="text" id="saveProjectTrackTitle" class="form-input" placeholder="e.g. Neon Horizon" required>
+        </div>
+
+        <div id="saveProjectExistingTrackGroup" class="form-group hidden">
+          <label for="selectSaveTargetTrack" class="form-label">Select Existing Track Workspace *</label>
+          <select id="selectSaveTargetTrack" class="form-select">
+            <option value="">-- Choose Track Workspace --</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="saveProjectTakeLabel" class="form-label">Take Label</label>
+          <input type="text" id="saveProjectTakeLabel" class="form-input" placeholder="e.g. Master Mix, Take 2, Vocal Ref">
+        </div>
+
+        <div class="form-group">
+          <label for="saveProjectNotes" class="form-label">Production / Take Notes</label>
+          <textarea id="saveProjectNotes" class="form-textarea" rows="3" placeholder="Optional notes for this take..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="toggle-switch-compact" style="display: flex; align-items: center; gap: 0.5rem;">
+            <input type="checkbox" id="saveProjectIsMaster" checked>
+            <span class="compact-slider"></span>
+            <span class="compact-label" style="font-weight: 500;">Set as Master Take</span>
+          </label>
+        </div>
+
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem;">
+          <button type="button" class="btn btn-secondary" data-close-modal="modalSaveToProject">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btnSubmitSaveToProject">Save to Workspace</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- New Track Modal -->
+  <div id="modalNewTrack" class="modal-overlay hidden" role="dialog" aria-labelledby="modalNewTrackTitle" aria-modal="true">
+    <div class="modal-card modal-md">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+            </svg>
+          </div>
+          <div>
+            <h2 id="modalNewTrackTitle" class="modal-title">New Track Workspace</h2>
+            <p class="modal-subtitle">Create a dedicated multi-take workspace for your song</p>
+          </div>
+        </div>
+        <button class="btn-close" data-close-modal="modalNewTrack" aria-label="Close modal">&times;</button>
+      </div>
+
+      <form id="formNewTrack" class="modal-body">
+        <div class="form-group">
+          <label for="newTrackTitle" class="form-label">Track Title *</label>
+          <input type="text" id="newTrackTitle" class="form-input" placeholder="e.g. Midnight Reverie" required>
+        </div>
+
+        <div class="form-row-2">
+          <div class="form-group">
+            <label for="newTrackArtist" class="form-label">Artist / Creator</label>
+            <input type="text" id="newTrackArtist" class="form-input" placeholder="e.g. CyberPulse">
+          </div>
+          <div class="form-group">
+            <label for="newTrackStatus" class="form-label">Status</label>
+            <select id="newTrackStatus" class="form-select">
+              <option value="draft" selected>Draft</option>
+              <option value="in_progress">In Progress</option>
+              <option value="completed">Completed</option>
+              <option value="archived">Archived</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row-2">
+          <div class="form-group">
+            <label for="newTrackBpm" class="form-label">BPM</label>
+            <input type="number" id="newTrackBpm" class="form-input" placeholder="e.g. 128" min="20" max="300">
+          </div>
+          <div class="form-group">
+            <label for="newTrackKey" class="form-label">Musical Key</label>
+            <input type="text" id="newTrackKey" class="form-input" placeholder="e.g. F# Minor">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="newTrackNotes" class="form-label">Production / Workspace Notes</label>
+          <textarea id="newTrackNotes" class="form-textarea" rows="3" placeholder="Song structure notes, reference tracks, mixing goals..."></textarea>
+        </div>
+
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem;">
+          <button type="button" class="btn btn-secondary" data-close-modal="modalNewTrack">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Track</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Upload Take Modal -->
+  <div id="modalUploadTake" class="modal-overlay hidden" role="dialog" aria-labelledby="modalUploadTakeTitle" aria-modal="true">
+    <div class="modal-card modal-md">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <path d="M9 18V5l12-2v13"></path>
+              <circle cx="6" cy="18" r="3"></circle>
+              <circle cx="18" cy="16" r="3"></circle>
+            </svg>
+          </div>
+          <div>
+            <h2 id="modalUploadTakeTitle" class="modal-title">Upload Audio Take</h2>
+            <p class="modal-subtitle">Add a new version or recording to: <strong id="uploadTakeTitleDisplay" style="color: var(--clr-primary, #38bdf8);"></strong></p>
+          </div>
+        </div>
+        <button class="btn-close" data-close-modal="modalUploadTake" aria-label="Close modal">&times;</button>
+      </div>
+
+      <form id="formUploadTake" class="modal-body">
+        <input type="hidden" id="uploadTakeTrackId">
+
+        <div class="form-group">
+          <label for="uploadTakeFileInput" class="form-label">Audio File (MP3, M4A, WAV) *</label>
+          <input type="file" id="uploadTakeFileInput" class="form-input" accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/wav,audio/x-wav" required>
+        </div>
+
+        <div class="form-group">
+          <label for="uploadTakeLabel" class="form-label">Take Label</label>
+          <input type="text" id="uploadTakeLabel" class="form-input" placeholder="e.g. Take 3 (Vocal Boost), Suno v3.5 Gen">
+        </div>
+
+        <div class="form-group">
+          <label for="uploadTakePrompt" class="form-label">AI Prompt / Generation Metadata</label>
+          <textarea id="uploadTakePrompt" class="form-textarea" rows="2" placeholder="Optional AI style prompt, model version, seed..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="uploadTakeNotes" class="form-label">Take / Revision Notes</label>
+          <textarea id="uploadTakeNotes" class="form-textarea" rows="2" placeholder="Notes on performance, mix adjustments, differences..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="toggle-switch-compact" style="display: flex; align-items: center; gap: 0.5rem;">
+            <input type="checkbox" id="uploadTakeIsMaster">
+            <span class="compact-slider"></span>
+            <span class="compact-label" style="font-weight: 500;">Set as Master Take</span>
+          </label>
+        </div>
+
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem;">
+          <button type="button" class="btn btn-secondary" data-close-modal="modalUploadTake">Cancel</button>
+          <button type="submit" class="btn btn-primary">Upload Take</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Upload Stem Modal -->
+  <div id="modalUploadStem" class="modal-overlay hidden" role="dialog" aria-labelledby="modalUploadStemTitle" aria-modal="true">
+    <div class="modal-card modal-md">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <path d="M12 20h9"></path>
+              <line x1="12" y1="4" x2="12" y2="20"></line>
+              <line x1="6" y1="8" x2="6" y2="20"></line>
+              <line x1="18" y1="12" x2="18" y2="20"></line>
+            </svg>
+          </div>
+          <div>
+            <h2 id="modalUploadStemTitle" class="modal-title">Upload Separated Stem</h2>
+            <p class="modal-subtitle">Attach separated audio stem to take: <strong id="uploadStemTakeDisplay" style="color: var(--clr-primary, #38bdf8);"></strong></p>
+          </div>
+        </div>
+        <button class="btn-close" data-close-modal="modalUploadStem" aria-label="Close modal">&times;</button>
+      </div>
+
+      <form id="formUploadStem" class="modal-body">
+        <input type="hidden" id="uploadStemTrackId">
+        <input type="hidden" id="uploadStemTakeId">
+
+        <div class="form-group">
+          <label for="uploadStemRole" class="form-label">Stem Instrument / Role *</label>
+          <select id="uploadStemRole" class="form-select" required>
+            <option value="vocals">Vocals</option>
+            <option value="instrumental">Instrumental / Backing</option>
+            <option value="drums">Drums / Percussion</option>
+            <option value="bass">Bass</option>
+            <option value="guitar">Guitar</option>
+            <option value="synth">Synth / Keys</option>
+            <option value="fx">FX / Ambience</option>
+            <option value="backing_vocals">Backing Vocals</option>
+            <option value="other">Other Stem</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="uploadStemFileInput" class="form-label">Stem Audio File (MP3, M4A, WAV) *</label>
+          <input type="file" id="uploadStemFileInput" class="form-input" accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/wav,audio/x-wav" required>
+        </div>
+
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem;">
+          <button type="button" class="btn btn-secondary" data-close-modal="modalUploadStem">Cancel</button>
+          <button type="submit" class="btn btn-primary">Upload Stem</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Toast Notification Container -->
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
   <script src="/js/auth.js?v=0.5.3"></script>
   <script src="/js/app.js?v=0.5.3"></script>
   <script src="/js/lyrics.js?v=0.5.3"></script>
+  <script src="/js/storage_manager.js?v=0.5.3"></script>
 </body>
 </html>

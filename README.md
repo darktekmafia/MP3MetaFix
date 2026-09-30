@@ -18,9 +18,9 @@ MP3MetaFix organizes music editing into tailored workspace interfaces:
 |---|---|---|---|
 | 🏠 **Gateway Hub** | `/` | **Active** | Central dispatcher and workspace selector with status indicators and maintenance notices. |
 | 📱 **MP3MetaFix Editor** | `/app` | **Active** | Mobile-first single-track editor with live retina waveforms, APIC cover art studio, Suno AI metadata extraction, and comment presets. Optimized for touchscreens ($\ge 320\text{px}$) and desktop browsers. |
-| 🗂️ **MP3MetaManager** | `/manager` | *Active Development (Editor & Synced Lyrics Live)* | Desktop power-user workspace featuring embedded single-track editor, Synced Lyrics (SYLT / LRC) studio with live tap-to-sync, live karaoke visualizer, and planned batch spreadsheet tagging. |
-| 🎛️ **MP3Projects Studio** | `/projects` | *Under Development (Planned)* | Multi-track album sequencing, stem pack bundling, persistent project sessions, and structured release ZIP packaging. |
-| 🛡️ **Admin Control Center** | `/admin` | **Active** | Administrator dashboard for system diagnostics (CPU, RAM, disk, quotas), guest access controls, Quick Settings pinning, and authorized update management. |
+| 🗂️ **MP3MetaManager** | `/manager` | *Active Development (Editor, Synced Lyrics & Projects Live)* | Desktop power-user workspace featuring embedded single-track editor, Synced Lyrics (SYLT / LRC) studio with live tap-to-sync, live karaoke visualizer, persistent track workspaces, and planned batch spreadsheet tagging. |
+| 🎛️ **MP3Projects Studio** | `/projects` | *Active Development (Track & Album Studio Live)* | Multi-take version tracking, separated audio stem explorer (Vocals, Inst, Drums, Bass), album tracklist sequencing with master cover artwork, and POSIX `0700` tenant storage. |
+| 🛡️ **Admin Control Center** | `/admin` | **Active** | Administrator dashboard for system diagnostics (CPU, RAM, disk, quotas), persistent project storage telemetry, guest access controls, Quick Settings pinning, and authorized update management. |
 | 📖 **Documentation Portal** | `/docs` | **Active** | Full interactive documentation reader and in-app context help with architecture, guides, and API reference. |
 
 

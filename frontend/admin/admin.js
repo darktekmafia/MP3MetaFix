@@ -91,6 +91,27 @@
         document.getElementById('statStorageQuota').textContent = `${data.app_storage.temp_storage_used_percent}% of ${data.app_storage.max_temp_storage_mb}MB`;
       }
 
+      // Persistent Projects Storage Quota
+      try {
+        const qRes = await fetch('/api/storage/quota');
+        if (qRes.ok) {
+          const qData = await qRes.json();
+          const usedMb = (qData.used_bytes / (1024 * 1024)).toFixed(1);
+          const limitMb = (qData.limit_bytes / (1024 * 1024)).toFixed(0);
+          const statProjectsCount = document.getElementById('statProjectsCount');
+          const statProjectsStorageSize = document.getElementById('statProjectsStorageSize');
+          const statProjectsStorageMeter = document.getElementById('statProjectsStorageMeter');
+          const statProjectsStorageQuota = document.getElementById('statProjectsStorageQuota');
+
+          if (statProjectsCount) statProjectsCount.textContent = `${qData.tracks_count || 0} Tracks • ${qData.takes_count || 0} Takes`;
+          if (statProjectsStorageSize) statProjectsStorageSize.textContent = `${usedMb} MB`;
+          if (statProjectsStorageMeter) statProjectsStorageMeter.style.width = `${Math.min(100, qData.percent_used)}%`;
+          if (statProjectsStorageQuota) statProjectsStorageQuota.textContent = `${qData.percent_used}% of ${limitMb}MB`;
+        }
+      } catch (qErr) {
+        console.warn('Could not fetch project storage quota in admin:', qErr);
+      }
+
       // Network & Runtime
       if (data.network) {
         document.getElementById('statEnvBind').textContent = `${data.network.host}:${data.network.port}`;
