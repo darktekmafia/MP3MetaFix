@@ -306,7 +306,7 @@ class ProjectStorageManager:
                 changed_fields.append(k)
                 data[k] = v
 
-        if changed_fields or summary_text:
+        if changed_fields:
             new_rev = int(data.get("revision", 1)) + 1
             data["revision"] = new_rev
             summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
@@ -316,7 +316,7 @@ class ProjectStorageManager:
                 "revision": new_rev,
                 "timestamp": time.time(),
                 "change_summary": summary,
-                "changed_fields": changed_fields if changed_fields else ["metadata"],
+                "changed_fields": changed_fields,
             })
 
         data["updated_at"] = time.time()
@@ -506,7 +506,7 @@ class ProjectStorageManager:
                 changed_fields.append(k)
                 data[k] = v
 
-        if changed_fields or summary_text:
+        if changed_fields:
             new_rev = int(data.get("revision", 1)) + 1
             data["revision"] = new_rev
             summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
@@ -516,7 +516,7 @@ class ProjectStorageManager:
                 "revision": new_rev,
                 "timestamp": time.time(),
                 "change_summary": summary,
-                "changed_fields": changed_fields if changed_fields else ["metadata"],
+                "changed_fields": changed_fields,
             })
 
         data["updated_at"] = time.time()
@@ -972,7 +972,7 @@ class ProjectStorageManager:
                     for i, tid in enumerate(updates["track_ids"])
                 ]
 
-        if changed_fields or summary_text:
+        if changed_fields:
             new_rev = int(data.get("revision", 1)) + 1
             data["revision"] = new_rev
             summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
@@ -982,7 +982,7 @@ class ProjectStorageManager:
                 "revision": new_rev,
                 "timestamp": time.time(),
                 "change_summary": summary,
-                "changed_fields": changed_fields if changed_fields else ["metadata"],
+                "changed_fields": changed_fields,
             })
 
         data["updated_at"] = time.time()
