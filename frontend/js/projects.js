@@ -143,7 +143,7 @@
   }
 
   // --- View Switcher ---
-  function switchStudioView(viewName) {
+  function switchStudioView(viewName, optTrackId, optTakeId) {
     state.currentView = viewName;
 
     if (viewName === 'editor') {
@@ -174,7 +174,7 @@
       if (dom.navProjectsAlbums) dom.navProjectsAlbums.classList.remove('active');
       if (dom.navProjectsEditor) dom.navProjectsEditor.classList.remove('active');
       if (dom.navProjectsStems) dom.navProjectsStems.classList.add('active');
-      initStemsManagerView();
+      initStemsManagerView(optTrackId, optTakeId);
     } else {
       if (dom.viewAlbums) dom.viewAlbums.classList.add('hidden');
       if (dom.viewEditor) dom.viewEditor.classList.add('hidden');
@@ -559,14 +559,32 @@
     }
 
     // Stems Rack
-    const stems = take.stems ? Object.values(take.stems) : [];
+    const stems = take.stems ? (Array.isArray(take.stems) ? take.stems : Object.values(take.stems)) : [];
     if (stems.length > 0) {
       const stemsRack = document.createElement('div');
       stemsRack.className = 'stems-rack';
 
       const stemsHeading = document.createElement('div');
       stemsHeading.className = 'stems-rack-heading';
-      stemsHeading.textContent = `Separated Stems (${stems.length}):`;
+      stemsHeading.style.display = 'flex';
+      stemsHeading.style.alignItems = 'center';
+      stemsHeading.style.justifyContent = 'space-between';
+
+      const headingText = document.createElement('span');
+      headingText.textContent = `Separated Stems (${stems.length}):`;
+      stemsHeading.appendChild(headingText);
+
+      const btnOpenInStems = document.createElement('button');
+      btnOpenInStems.type = 'button';
+      btnOpenInStems.className = 'btn btn-secondary btn-xs';
+      btnOpenInStems.style.fontSize = '0.75rem';
+      btnOpenInStems.style.padding = '2px 8px';
+      btnOpenInStems.textContent = '🎛 Open in Stems Studio';
+      btnOpenInStems.addEventListener('click', (e) => {
+        e.stopPropagation();
+        switchStudioView('stems', track.id, take.id);
+      });
+      stemsHeading.appendChild(btnOpenInStems);
       stemsRack.appendChild(stemsHeading);
 
       const stemsList = document.createElement('div');
@@ -578,13 +596,25 @@
 
         const roleSpan = document.createElement('span');
         roleSpan.className = 'stem-role-label';
-        roleSpan.textContent = stem.role.toUpperCase();
+        roleSpan.textContent = (stem.role || 'other').toUpperCase();
         stemBadge.appendChild(roleSpan);
 
         const nameSpan = document.createElement('span');
         nameSpan.className = 'stem-name-label';
         nameSpan.textContent = stem.filename;
         stemBadge.appendChild(nameSpan);
+
+        // Download Stem Link
+        const dlBtn = document.createElement('a');
+        dlBtn.className = 'stem-delete-btn';
+        dlBtn.title = 'Download Stem';
+        dlBtn.href = `/api/projects/tracks/${track.id}/takes/${take.id}/stems/${stem.id}/download`;
+        dlBtn.download = stem.filename;
+        dlBtn.style.textDecoration = 'none';
+        dlBtn.style.color = 'inherit';
+        dlBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
+        dlBtn.addEventListener('click', (e) => e.stopPropagation());
+        stemBadge.appendChild(dlBtn);
 
         const delBtn = document.createElement('button');
         delBtn.className = 'stem-delete-btn';
@@ -1561,7 +1591,10 @@
     animFrame: null,
   };
 
-  function initStemsManagerView(targetTrackId, targetTakeId) {
+  async function initStemsManagerView(targetTrackId, targetTakeId) {
+    if (!state.tracks || state.tracks.length === 0) {
+      await fetchTracks();
+    }
     populateStemsTrackSelect(targetTrackId, targetTakeId);
   }
 
@@ -1569,7 +1602,7 @@
     if (!dom.stemsTrackSelect) return;
     dom.stemsTrackSelect.innerHTML = '<option value="">Select Track Workspace...</option>';
 
-    state.tracks.forEach(t => {
+    (state.tracks || []).forEach(t => {
       const opt = document.createElement('option');
       opt.value = t.id;
       opt.textContent = `${t.title || 'Untitled Track'} (${t.takes_count || 0} takes)`;
@@ -1578,7 +1611,7 @@
 
     if (preferredTrackId && state.tracks.some(t => t.id === preferredTrackId)) {
       dom.stemsTrackSelect.value = preferredTrackId;
-    } else if (state.tracks.length > 0) {
+    } else if (state.tracks && state.tracks.length > 0) {
       dom.stemsTrackSelect.value = state.tracks[0].id;
     }
 
@@ -1606,7 +1639,8 @@
       takes.forEach(take => {
         const opt = document.createElement('option');
         opt.value = take.id;
-        const stemCount = Object.keys(take.stems || {}).length;
+        const stemList = take.stems ? (Array.isArray(take.stems) ? take.stems : Object.values(take.stems)) : [];
+        const stemCount = stemList.length;
         opt.textContent = `${take.label || 'Take'} ${take.is_master ? '★ MASTER' : ''} (${stemCount} stem${stemCount === 1 ? '' : 's'})`;
         dom.stemsTakeSelect.appendChild(opt);
       });
@@ -1615,8 +1649,13 @@
       if (preferredTakeId && takes.some(t => t.id === preferredTakeId)) {
         chosenTakeId = preferredTakeId;
       } else if (takes.length > 0) {
-        const masterTake = takes.find(t => t.is_master);
-        chosenTakeId = masterTake ? masterTake.id : takes[0].id;
+        // Prioritize take with stems if master has no stems
+        const hasStems = (t) => t.stems && (Array.isArray(t.stems) ? t.stems.length > 0 : Object.keys(t.stems).length > 0);
+        const takeWithStems = takes.find(t => t.is_master && hasStems(t))
+          || takes.find(t => hasStems(t))
+          || takes.find(t => t.is_master)
+          || takes[0];
+        chosenTakeId = takeWithStems ? takeWithStems.id : takes[0].id;
       }
 
       dom.stemsTakeSelect.value = chosenTakeId || '';
@@ -1636,7 +1675,7 @@
 
     const trackObj = (track && track.track) ? track.track : track;
     const trackId = (trackObj && trackObj.id) || stemsState.selectedTrackId;
-    const stems = take && take.stems ? Object.values(take.stems) : [];
+    const stems = take && take.stems ? (Array.isArray(take.stems) ? take.stems : Object.values(take.stems)) : [];
 
     if (dom.btnDownloadStemPack) {
       dom.btnDownloadStemPack.disabled = stems.length === 0;
@@ -2094,13 +2133,13 @@
       dom.stemsTakeSelect.addEventListener('change', () => {
         const takeId = dom.stemsTakeSelect.value;
         stemsState.selectedTakeId = takeId;
-        const track = state.tracks.find(t => t.id === stemsState.selectedTrackId);
-        if (track) {
-          fetch(`/api/projects/tracks/${track.id}`)
+        const trackId = stemsState.selectedTrackId || (dom.stemsTrackSelect ? dom.stemsTrackSelect.value : null);
+        if (trackId) {
+          fetch(`/api/projects/tracks/${trackId}`)
             .then(res => res.json())
             .then(td => {
               const activeTake = (td.takes || []).find(t => t.id === takeId);
-              renderStemsMixer(td.track || td || track, activeTake);
+              renderStemsMixer(td.track || td, activeTake);
             });
         }
       });

@@ -516,7 +516,7 @@
     }
 
     // Stems Rack (if take has stems)
-    const stems = take.stems ? Object.values(take.stems) : [];
+    const stems = take.stems ? (Array.isArray(take.stems) ? take.stems : Object.values(take.stems)) : [];
     if (stems.length > 0) {
       const stemsRack = document.createElement('div');
       stemsRack.className = 'stems-rack';
@@ -537,7 +537,8 @@
       btnOpenInStems.style.fontSize = '0.75rem';
       btnOpenInStems.style.padding = '2px 8px';
       btnOpenInStems.textContent = '🎛 Open in Stems Studio';
-      btnOpenInStems.addEventListener('click', () => {
+      btnOpenInStems.addEventListener('click', (e) => {
+        if (e) e.stopPropagation();
         switchView('stems', track.id, take.id);
       });
       stemsHeading.appendChild(btnOpenInStems);
@@ -1095,7 +1096,8 @@
       takes.forEach(take => {
         const opt = document.createElement('option');
         opt.value = take.id;
-        const stemCount = Object.keys(take.stems || {}).length;
+        const stemList = take.stems ? (Array.isArray(take.stems) ? take.stems : Object.values(take.stems)) : [];
+        const stemCount = stemList.length;
         opt.textContent = `${take.label || 'Take'} ${take.is_master ? '★ MASTER' : ''} (${stemCount} stem${stemCount === 1 ? '' : 's'})`;
         dom.stemsTakeSelect.appendChild(opt);
       });
@@ -1104,8 +1106,13 @@
       if (preferredTakeId && takes.some(t => t.id === preferredTakeId)) {
         chosenTakeId = preferredTakeId;
       } else if (takes.length > 0) {
-        const masterTake = takes.find(t => t.is_master);
-        chosenTakeId = masterTake ? masterTake.id : takes[0].id;
+        // Prioritize take with stems if master has no stems
+        const hasStems = (t) => t.stems && (Array.isArray(t.stems) ? t.stems.length > 0 : Object.keys(t.stems).length > 0);
+        const takeWithStems = takes.find(t => t.is_master && hasStems(t))
+          || takes.find(t => hasStems(t))
+          || takes.find(t => t.is_master)
+          || takes[0];
+        chosenTakeId = takeWithStems ? takeWithStems.id : takes[0].id;
       }
 
       dom.stemsTakeSelect.value = chosenTakeId || '';
@@ -1125,7 +1132,7 @@
 
     const trackObj = (track && track.track) ? track.track : track;
     const trackId = (trackObj && trackObj.id) || stemsState.selectedTrackId;
-    const stems = take && take.stems ? Object.values(take.stems) : [];
+    const stems = take && take.stems ? (Array.isArray(take.stems) ? take.stems : Object.values(take.stems)) : [];
 
     if (dom.btnDownloadStemPack) {
       dom.btnDownloadStemPack.disabled = stems.length === 0;
@@ -1679,13 +1686,13 @@
       dom.stemsTakeSelect.addEventListener('change', () => {
         const takeId = dom.stemsTakeSelect.value;
         stemsState.selectedTakeId = takeId;
-        const track = storageState.tracks.find(t => t.id === stemsState.selectedTrackId);
-        if (track) {
-          fetch(`/api/projects/tracks/${track.id}`)
+        const trackId = stemsState.selectedTrackId || (dom.stemsTrackSelect ? dom.stemsTrackSelect.value : null);
+        if (trackId) {
+          fetch(`/api/projects/tracks/${trackId}`)
             .then(res => res.json())
             .then(td => {
               const activeTake = (td.takes || []).find(t => t.id === takeId);
-              renderStemsMixer(td.track || td || track, activeTake);
+              renderStemsMixer(td.track || td, activeTake);
             });
         }
       });
