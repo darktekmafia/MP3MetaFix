@@ -483,3 +483,56 @@ def test_storage_quota_response_fields(client, auth_cookies):
     assert "percent_used" in data
     assert data["limit_bytes"] == data["max_quota_bytes"]
     assert data["percent_used"] == data["used_percent"]
+
+
+def test_album_tracklist_sequencing_and_synchronization(client, auth_cookies):
+    """Verify adding, sequencing, and saving tracks to an album persists across API lookups."""
+    # Create two tracks
+    res1 = client.post("/api/projects/tracks", json={"title": "Track One"}, cookies=auth_cookies)
+    trk1_id = res1.json()["id"]
+    res2 = client.post("/api/projects/tracks", json={"title": "Track Two"}, cookies=auth_cookies)
+    trk2_id = res2.json()["id"]
+
+    # Create album
+    res_alb = client.post("/api/projects/albums", json={"title": "Sequenced Album"}, cookies=auth_cookies)
+    assert res_alb.status_code == 201
+    alb_id = res_alb.json()["id"]
+
+    # Update album with sequenced tracks list
+    tracks_payload = [
+        {"track_number": 1, "disc_number": 1, "track_id": trk1_id, "take_id": None, "custom_title": "Custom Track One"},
+        {"track_number": 2, "disc_number": 1, "track_id": trk2_id, "take_id": None, "custom_title": None},
+    ]
+    res_patch = client.patch(
+        f"/api/projects/albums/{alb_id}",
+        json={"tracks": tracks_payload},
+        cookies=auth_cookies,
+    )
+    assert res_patch.status_code == 200
+    data = res_patch.json()
+    assert len(data["tracks"]) == 2
+    assert data["tracks"][0]["track_id"] == trk1_id
+    assert data["tracks"][0]["custom_title"] == "Custom Track One"
+    assert data["tracks"][1]["track_id"] == trk2_id
+    assert data["track_ids"] == [trk1_id, trk2_id]
+
+    # Verify GET /albums/{id}
+    res_get = client.get(f"/api/projects/albums/{alb_id}", cookies=auth_cookies)
+    assert res_get.status_code == 200
+    get_data = res_get.json()
+    assert len(get_data["tracks"]) == 2
+    assert get_data["track_ids"] == [trk1_id, trk2_id]
+
+    # Test patch with track_ids format
+    res_patch_ids = client.patch(
+        f"/api/projects/albums/{alb_id}",
+        json={"track_ids": [trk2_id, trk1_id]},
+        cookies=auth_cookies,
+    )
+    assert res_patch_ids.status_code == 200
+    ids_data = res_patch_ids.json()
+    assert len(ids_data["tracks"]) == 2
+    assert ids_data["tracks"][0]["track_id"] == trk2_id
+    assert ids_data["tracks"][0]["track_number"] == 1
+    assert ids_data["tracks"][1]["track_id"] == trk1_id
+    assert ids_data["tracks"][1]["track_number"] == 2

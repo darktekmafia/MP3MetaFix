@@ -772,8 +772,33 @@ class ProjectStorageManager:
 
         data = album.model_dump()
         for k, v in updates.items():
-            if v is not None and k in data and k not in ("id", "created_at", "has_cover"):
+            if v is not None and k not in ("id", "created_at", "has_cover"):
                 data[k] = v
+
+        # Normalize tracks if tracks or track_ids updated
+        if "tracks" in updates and updates["tracks"] is not None:
+            raw_tracks = updates["tracks"]
+            norm_tracks = []
+            for i, item in enumerate(raw_tracks):
+                if isinstance(item, dict):
+                    norm_tracks.append({
+                        "track_number": item.get("track_number", i + 1),
+                        "disc_number": item.get("disc_number", 1),
+                        "track_id": item["track_id"],
+                        "take_id": item.get("take_id"),
+                        "custom_title": item.get("custom_title"),
+                    })
+                elif hasattr(item, "model_dump"):
+                    norm_tracks.append(item.model_dump())
+            data["tracks"] = norm_tracks
+            data["track_ids"] = [t["track_id"] for t in norm_tracks]
+        elif "track_ids" in updates and updates["track_ids"] is not None:
+            data["track_ids"] = list(updates["track_ids"])
+            data["tracks"] = [
+                {"track_number": i + 1, "disc_number": 1, "track_id": tid, "take_id": None, "custom_title": None}
+                for i, tid in enumerate(updates["track_ids"])
+            ]
+
         data["updated_at"] = time.time()
 
         with file_lock(manifest_path):

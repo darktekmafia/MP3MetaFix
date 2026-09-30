@@ -139,8 +139,18 @@ class AlbumMetadata(BaseModel):
     status: WorkspaceStatus = Field(default=WorkspaceStatus.DRAFT)
     has_cover: bool = Field(default=False)
     tracks: List[AlbumTrackEntry] = Field(default_factory=list)
+    track_ids: List[str] = Field(default_factory=list)
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.track_ids and self.tracks:
+            self.track_ids = [t.track_id for t in self.tracks]
+        elif not self.tracks and self.track_ids:
+            self.tracks = [
+                AlbumTrackEntry(track_number=i + 1, disc_number=1, track_id=tid)
+                for i, tid in enumerate(self.track_ids)
+            ]
 
 
 class AlbumCreateRequest(BaseModel):
@@ -160,6 +170,14 @@ class AlbumUpdateRequest(BaseModel):
     credits: Optional[str] = Field(default=None, max_length=10000)
     status: Optional[WorkspaceStatus] = Field(default=None)
     tracks: Optional[List[AlbumTrackEntry]] = Field(default=None)
+    track_ids: Optional[List[str]] = Field(default=None)
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.tracks is None and self.track_ids is not None:
+            self.tracks = [
+                AlbumTrackEntry(track_number=i + 1, disc_number=1, track_id=tid)
+                for i, tid in enumerate(self.track_ids)
+            ]
 
 
 # --- Storage Quota Models ---

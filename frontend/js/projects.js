@@ -602,7 +602,7 @@
       metaDetails.appendChild(genreSpan);
     }
 
-    const count = (album.track_ids || []).length;
+    const count = (album.tracks || album.track_ids || []).length;
     const countSpan = document.createElement('span');
     countSpan.className = 'meta-pill meta-pill-takes';
     countSpan.textContent = `🎵 ${count} Track${count === 1 ? '' : 's'}`;
@@ -652,6 +652,21 @@
       const album = await res.json();
       state.activeAlbum = album;
 
+      // Ensure tracks array is normalized
+      if (!Array.isArray(state.activeAlbum.tracks)) {
+        if (Array.isArray(state.activeAlbum.track_ids)) {
+          state.activeAlbum.tracks = state.activeAlbum.track_ids.map((tid, i) => ({
+            track_number: i + 1,
+            disc_number: 1,
+            track_id: tid,
+            take_id: null,
+            custom_title: null,
+          }));
+        } else {
+          state.activeAlbum.tracks = [];
+        }
+      }
+
       dom.albumDetailId.value = album.id;
       dom.editAlbumTitle.value = album.title || '';
       dom.editAlbumArtist.value = album.album_artist || '';
@@ -660,7 +675,7 @@
       dom.editAlbumCatalog.value = album.catalog_number || '';
 
       // Check Artwork
-      if (album.cover_artwork_filename) {
+      if (album.has_cover) {
         dom.albumDetailArtwork.src = `/api/projects/albums/${album.id}/artwork?t=${Date.now()}`;
         dom.albumDetailArtwork.classList.remove('hidden');
         dom.albumDetailPlaceholder.classList.add('hidden');
@@ -670,7 +685,7 @@
         dom.albumDetailPlaceholder.classList.remove('hidden');
       }
 
-      renderSequencerTable(album);
+      renderSequencerTable(state.activeAlbum);
 
       if (dom.modalAlbumDetail) dom.modalAlbumDetail.classList.remove('hidden');
     } catch (e) {
@@ -682,10 +697,10 @@
     if (!dom.albumSequencerTbody) return;
     dom.albumSequencerTbody.innerHTML = '';
 
-    const trackIds = album.track_ids || [];
-    if (dom.albumTrackCountDisplay) dom.albumTrackCountDisplay.textContent = trackIds.length;
+    const tracks = album.tracks || [];
+    if (dom.albumTrackCountDisplay) dom.albumTrackCountDisplay.textContent = tracks.length;
 
-    if (trackIds.length === 0) {
+    if (tracks.length === 0) {
       const emptyTr = document.createElement('tr');
       const emptyTd = document.createElement('td');
       emptyTd.colSpan = 5;
@@ -696,20 +711,21 @@
       return;
     }
 
-    trackIds.forEach((trackId, index) => {
+    tracks.forEach((entry, index) => {
+      const trackId = typeof entry === 'string' ? entry : entry.track_id;
       const track = state.tracks.find(t => t.id === trackId);
       const tr = document.createElement('tr');
 
       // # Track num
       const tdNum = document.createElement('td');
       tdNum.className = 'font-mono text-dim';
-      tdNum.textContent = String(index + 1).padStart(2, '0');
+      tdNum.textContent = String(entry.track_number || (index + 1)).padStart(2, '0');
       tr.appendChild(tdNum);
 
       // Title
       const tdTitle = document.createElement('td');
       tdTitle.className = 'font-bold';
-      tdTitle.textContent = track ? track.title : `[Track ${trackId.slice(0, 8)}]`;
+      tdTitle.textContent = (entry.custom_title) || (track ? track.title : `[Track ${trackId.slice(0, 8)}]`);
       tr.appendChild(tdTitle);
 
       // Artist
@@ -721,7 +737,7 @@
       // Disc #
       const tdDisc = document.createElement('td');
       tdDisc.className = 'font-mono text-dim';
-      tdDisc.textContent = '1';
+      tdDisc.textContent = String(entry.disc_number || 1);
       tr.appendChild(tdDisc);
 
       // Actions
@@ -740,7 +756,7 @@
       }
 
       // Move Down
-      if (index < trackIds.length - 1) {
+      if (index < tracks.length - 1) {
         const btnDown = document.createElement('button');
         btnDown.className = 'btn btn-ghost btn-xs';
         btnDown.title = 'Move Down';
@@ -765,24 +781,37 @@
   }
 
   function moveAlbumTrack(currentIndex, offset) {
-    if (!state.activeAlbum || !state.activeAlbum.track_ids) return;
-    const ids = [...state.activeAlbum.track_ids];
+    if (!state.activeAlbum || !state.activeAlbum.tracks) return;
+    const tracks = [...state.activeAlbum.tracks];
     const targetIndex = currentIndex + offset;
-    if (targetIndex < 0 || targetIndex >= ids.length) return;
+    if (targetIndex < 0 || targetIndex >= tracks.length) return;
 
-    const temp = ids[currentIndex];
-    ids[currentIndex] = ids[targetIndex];
-    ids[targetIndex] = temp;
+    const temp = tracks[currentIndex];
+    tracks[currentIndex] = tracks[targetIndex];
+    tracks[targetIndex] = temp;
 
-    state.activeAlbum.track_ids = ids;
+    // Re-index track numbers
+    tracks.forEach((t, i) => {
+      t.track_number = i + 1;
+    });
+
+    state.activeAlbum.tracks = tracks;
+    state.activeAlbum.track_ids = tracks.map(t => t.track_id);
     renderSequencerTable(state.activeAlbum);
   }
 
   function removeAlbumTrack(index) {
-    if (!state.activeAlbum || !state.activeAlbum.track_ids) return;
-    const ids = [...state.activeAlbum.track_ids];
-    ids.splice(index, 1);
-    state.activeAlbum.track_ids = ids;
+    if (!state.activeAlbum || !state.activeAlbum.tracks) return;
+    const tracks = [...state.activeAlbum.tracks];
+    tracks.splice(index, 1);
+
+    // Re-index track numbers
+    tracks.forEach((t, i) => {
+      t.track_number = i + 1;
+    });
+
+    state.activeAlbum.tracks = tracks;
+    state.activeAlbum.track_ids = tracks.map(t => t.track_id);
     renderSequencerTable(state.activeAlbum);
   }
 
@@ -790,7 +819,7 @@
     if (!dom.selectPickTrack) return;
     dom.selectPickTrack.innerHTML = '<option value="">-- Choose Track --</option>';
 
-    const currentTrackIds = new Set((state.activeAlbum && state.activeAlbum.track_ids) || []);
+    const currentTrackIds = new Set((state.activeAlbum && state.activeAlbum.tracks ? state.activeAlbum.tracks.map(t => t.track_id) : []));
 
     state.tracks.forEach(t => {
       if (!currentTrackIds.has(t.id)) {
@@ -812,8 +841,16 @@
     }
     if (!state.activeAlbum) return;
 
-    if (!state.activeAlbum.track_ids) state.activeAlbum.track_ids = [];
-    state.activeAlbum.track_ids.push(trackId);
+    if (!Array.isArray(state.activeAlbum.tracks)) state.activeAlbum.tracks = [];
+    const nextTrackNum = state.activeAlbum.tracks.length + 1;
+    state.activeAlbum.tracks.push({
+      track_number: nextTrackNum,
+      disc_number: 1,
+      track_id: trackId,
+      take_id: null,
+      custom_title: null,
+    });
+    state.activeAlbum.track_ids = state.activeAlbum.tracks.map(t => t.track_id);
 
     if (dom.modalPickTrackForAlbum) dom.modalPickTrackForAlbum.classList.add('hidden');
     renderSequencerTable(state.activeAlbum);
@@ -828,8 +865,7 @@
       album_artist: dom.editAlbumArtist.value.trim() || null,
       year: dom.editAlbumYear.value ? parseInt(dom.editAlbumYear.value, 10) : null,
       genre: dom.editAlbumGenre.value.trim() || null,
-      catalog_number: dom.editAlbumCatalog.value.trim() || null,
-      track_ids: state.activeAlbum.track_ids || [],
+      tracks: state.activeAlbum.tracks || [],
     };
 
     try {
