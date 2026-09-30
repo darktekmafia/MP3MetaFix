@@ -16,8 +16,12 @@ class WorkspaceStatus(str, Enum):
 class StemRole(str, Enum):
     VOCALS = "vocals"
     INSTRUMENTAL = "instrumental"
-    BASS = "bass"
     DRUMS = "drums"
+    BASS = "bass"
+    GUITAR = "guitar"
+    SYNTH = "synth"
+    FX = "fx"
+    BACKING_VOCALS = "backing_vocals"
     OTHER = "other"
 
 

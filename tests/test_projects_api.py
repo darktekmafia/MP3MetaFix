@@ -204,7 +204,7 @@ def test_stem_upload_and_management(client, auth_cookies):
     )
     take_id = res.json()["id"]
 
-    # Upload Stem
+    # Upload Vocals Stem
     res = client.post(
         f"/api/projects/tracks/{track_id}/takes/{take_id}/stems",
         files={"file": ("vocals_isolated.wav", io.BytesIO(VALID_WAV_HEADER), "audio/wav")},
@@ -215,6 +215,16 @@ def test_stem_upload_and_management(client, auth_cookies):
     stem = res.json()
     stem_id = stem["id"]
     assert stem["role"] == "vocals"
+
+    # Upload Guitar Stem
+    res_guitar = client.post(
+        f"/api/projects/tracks/{track_id}/takes/{take_id}/stems",
+        files={"file": ("lead_guitar.wav", io.BytesIO(VALID_WAV_HEADER), "audio/wav")},
+        data={"role": "guitar"},
+        cookies=auth_cookies,
+    )
+    assert res_guitar.status_code == 201
+    assert res_guitar.json()["role"] == "guitar"
 
     # Stream stem
     res = client.get(
