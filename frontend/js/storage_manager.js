@@ -1031,6 +1031,481 @@
     }
   }
 
+  // --- Stems Manager Controller State & Logic ---
+  const stemsState = {
+    selectedTrackId: null,
+    selectedTakeId: null,
+    stagedFiles: [],
+    audioElements: new Map(), // stemId -> Audio
+    channelStates: new Map(), // stemId -> { isMuted: false, isSolo: false, volume: 1.0 }
+    isPlaying: false,
+    masterVolume: 1.0,
+    duration: 0,
+    isUpdatingSeek: false,
+    animFrame: null,
+  };
+
+  async function initStemsManagerView(targetTrackId, targetTakeId) {
+    if (storageState.tracks.length === 0) {
+      await fetchStorageData();
+    }
+    populateStemsTrackSelect(targetTrackId, targetTakeId);
+  }
+
+  function populateStemsTrackSelect(preferredTrackId, preferredTakeId) {
+    if (!dom.stemsTrackSelect) return;
+    dom.stemsTrackSelect.innerHTML = '<option value="">Select Track Workspace...</option>';
+
+    storageState.tracks.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = `${t.title || 'Untitled Track'} (${t.takes_count || 0} takes)`;
+      dom.stemsTrackSelect.appendChild(opt);
+    });
+
+    if (preferredTrackId && storageState.tracks.some(t => t.id === preferredTrackId)) {
+      dom.stemsTrackSelect.value = preferredTrackId;
+    } else if (storageState.tracks.length > 0) {
+      dom.stemsTrackSelect.value = storageState.tracks[0].id;
+    }
+
+    onStemsTrackChanged(preferredTakeId);
+  }
+
+  async function onStemsTrackChanged(preferredTakeId) {
+    const trackId = dom.stemsTrackSelect ? dom.stemsTrackSelect.value : null;
+    stemsState.selectedTrackId = trackId;
+
+    if (!dom.stemsTakeSelect) return;
+    dom.stemsTakeSelect.innerHTML = '<option value="">Select Take...</option>';
+
+    if (!trackId) {
+      renderStemsMixer(null, null);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/projects/tracks/${trackId}`);
+      if (!res.ok) throw new Error('Failed to load track details');
+      const trackDetail = await res.json();
+      const takes = trackDetail.takes || [];
+
+      takes.forEach(take => {
+        const opt = document.createElement('option');
+        opt.value = take.id;
+        const stemCount = Object.keys(take.stems || {}).length;
+        opt.textContent = `${take.label || 'Take'} ${take.is_master ? '★ MASTER' : ''} (${stemCount} stem${stemCount === 1 ? '' : 's'})`;
+        dom.stemsTakeSelect.appendChild(opt);
+      });
+
+      let chosenTakeId = null;
+      if (preferredTakeId && takes.some(t => t.id === preferredTakeId)) {
+        chosenTakeId = preferredTakeId;
+      } else if (takes.length > 0) {
+        const masterTake = takes.find(t => t.is_master);
+        chosenTakeId = masterTake ? masterTake.id : takes[0].id;
+      }
+
+      dom.stemsTakeSelect.value = chosenTakeId || '';
+      stemsState.selectedTakeId = chosenTakeId;
+
+      const activeTake = takes.find(t => t.id === chosenTakeId);
+      renderStemsMixer(trackDetail.track || trackDetail, activeTake);
+    } catch (err) {
+      showToast('Error loading takes for stems', 'error');
+    }
+  }
+
+  function renderStemsMixer(track, take) {
+    stopAllStems();
+    if (!dom.stemsChannelsList) return;
+    dom.stemsChannelsList.innerHTML = '';
+
+    const trackObj = (track && track.track) ? track.track : track;
+    const trackId = (trackObj && trackObj.id) || stemsState.selectedTrackId;
+    const stems = take && take.stems ? Object.values(take.stems) : [];
+
+    if (dom.btnDownloadStemPack) {
+      dom.btnDownloadStemPack.disabled = stems.length === 0;
+    }
+
+    if (stems.length === 0) {
+      if (dom.stemsMixerSection) dom.stemsMixerSection.classList.add('hidden');
+      if (dom.stemsEmptyState) dom.stemsEmptyState.classList.remove('hidden');
+      return;
+    }
+
+    if (dom.stemsMixerSection) dom.stemsMixerSection.classList.remove('hidden');
+    if (dom.stemsEmptyState) dom.stemsEmptyState.classList.add('hidden');
+
+    stems.forEach(stem => {
+      stemsState.channelStates.set(stem.id, { isMuted: false, isSolo: false, volume: 1.0 });
+
+      // Create audio element for stem
+      const audio = new Audio(`/api/projects/tracks/${trackId}/takes/${take.id}/stems/${stem.id}/stream`);
+      audio.preload = 'metadata';
+      audio.addEventListener('loadedmetadata', () => {
+        if (audio.duration && audio.duration > stemsState.duration) {
+          stemsState.duration = audio.duration;
+          updateStemsMasterTimeDisplay(0, stemsState.duration);
+        }
+      });
+      audio.addEventListener('ended', () => {
+        stemsState.isPlaying = false;
+        if (dom.btnMasterStemPlay) dom.btnMasterStemPlay.textContent = '▶';
+      });
+      stemsState.audioElements.set(stem.id, audio);
+
+      // Create Channel Card UI
+      const card = document.createElement('div');
+      card.className = 'stem-channel-card';
+      card.id = `stemCard_${stem.id}`;
+
+      // Left Info
+      const left = document.createElement('div');
+      left.className = 'stem-channel-left';
+
+      const roleBadge = document.createElement('span');
+      roleBadge.className = 'stem-channel-role';
+      roleBadge.textContent = (stem.role || 'other').replace('_', ' ').toUpperCase();
+      left.appendChild(roleBadge);
+
+      const meta = document.createElement('div');
+      meta.className = 'stem-channel-meta';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'stem-channel-name';
+      nameEl.textContent = stem.filename || `stem_${stem.role}`;
+      meta.appendChild(nameEl);
+
+      const sizeEl = document.createElement('span');
+      sizeEl.className = 'stem-channel-filesize';
+      const mb = (stem.size_bytes / (1024 * 1024)).toFixed(1);
+      sizeEl.textContent = `${mb} MB • ${(stem.format || '').toUpperCase().replace('.', '')}`;
+      meta.appendChild(sizeEl);
+
+      left.appendChild(meta);
+      card.appendChild(left);
+
+      // Controls
+      const controls = document.createElement('div');
+      controls.className = 'stem-channel-controls';
+
+      // Mute button
+      const muteBtn = document.createElement('button');
+      muteBtn.type = 'button';
+      muteBtn.className = 'btn-stem-mute';
+      muteBtn.textContent = 'M';
+      muteBtn.title = 'Mute Stem';
+      muteBtn.addEventListener('click', () => {
+        const st = stemsState.channelStates.get(stem.id);
+        if (!st) return;
+        st.isMuted = !st.isMuted;
+        muteBtn.classList.toggle('active', st.isMuted);
+        card.classList.toggle('muted', st.isMuted);
+        applyStemAudibility();
+      });
+      controls.appendChild(muteBtn);
+
+      // Solo button
+      const soloBtn = document.createElement('button');
+      soloBtn.type = 'button';
+      soloBtn.className = 'btn-stem-solo';
+      soloBtn.textContent = 'S';
+      soloBtn.title = 'Solo Stem';
+      soloBtn.addEventListener('click', () => {
+        const st = stemsState.channelStates.get(stem.id);
+        if (!st) return;
+        st.isSolo = !st.isSolo;
+        soloBtn.classList.toggle('active', st.isSolo);
+        applyStemAudibility();
+      });
+      controls.appendChild(soloBtn);
+
+      // Volume slider
+      const volSlider = document.createElement('input');
+      volSlider.type = 'range';
+      volSlider.className = 'stem-channel-vol';
+      volSlider.min = '0';
+      volSlider.max = '1';
+      volSlider.step = '0.05';
+      volSlider.value = '1';
+      volSlider.title = 'Stem Volume';
+      volSlider.addEventListener('input', (e) => {
+        const st = stemsState.channelStates.get(stem.id);
+        if (!st) return;
+        st.volume = parseFloat(e.target.value);
+        applyStemAudibility();
+      });
+      controls.appendChild(volSlider);
+
+      // Download button
+      const dlBtn = document.createElement('a');
+      dlBtn.className = 'btn-stem-icon';
+      dlBtn.title = 'Download Stem';
+      dlBtn.href = `/api/projects/tracks/${trackId}/takes/${take.id}/stems/${stem.id}/download`;
+      dlBtn.download = stem.filename;
+      dlBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
+      controls.appendChild(dlBtn);
+
+      // Delete button
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'btn-stem-icon btn-danger';
+      delBtn.title = 'Delete Stem';
+      delBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
+      delBtn.addEventListener('click', async () => {
+        if (!confirm(`Delete stem "${stem.filename}"?`)) return;
+        try {
+          const res = await fetch(`/api/projects/tracks/${trackId}/takes/${take.id}/stems/${stem.id}`, { method: 'DELETE' });
+          if (res.ok) {
+            showToast('Stem deleted', 'info');
+            onStemsTrackChanged(take.id);
+            fetchStorageData();
+          } else {
+            showToast('Failed to delete stem', 'error');
+          }
+        } catch (e) {
+          showToast('Network error deleting stem', 'error');
+        }
+      });
+      controls.appendChild(delBtn);
+
+      card.appendChild(controls);
+      dom.stemsChannelsList.appendChild(card);
+    });
+  }
+
+  function applyStemAudibility() {
+    let hasSolo = false;
+    for (const [, st] of stemsState.channelStates) {
+      if (st.isSolo) {
+        hasSolo = true;
+        break;
+      }
+    }
+
+    for (const [stemId, audio] of stemsState.audioElements) {
+      const st = stemsState.channelStates.get(stemId);
+      if (!st) continue;
+      let audible = true;
+      if (hasSolo) {
+        audible = st.isSolo && !st.isMuted;
+      } else {
+        audible = !st.isMuted;
+      }
+      audio.volume = audible ? (st.volume * stemsState.masterVolume) : 0;
+    }
+  }
+
+  function stopAllStems() {
+    stemsState.isPlaying = false;
+    if (dom.btnMasterStemPlay) dom.btnMasterStemPlay.textContent = '▶';
+    for (const [, audio] of stemsState.audioElements) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+    stemsState.audioElements.clear();
+    stemsState.channelStates.clear();
+    stemsState.duration = 0;
+    if (stemsState.animFrame) {
+      cancelAnimationFrame(stemsState.animFrame);
+      stemsState.animFrame = null;
+    }
+  }
+
+  function toggleMasterStemPlay() {
+    if (stemsState.audioElements.size === 0) return;
+
+    if (stemsState.isPlaying) {
+      stemsState.isPlaying = false;
+      if (dom.btnMasterStemPlay) dom.btnMasterStemPlay.textContent = '▶';
+      for (const [, audio] of stemsState.audioElements) {
+        audio.pause();
+      }
+    } else {
+      stemsState.isPlaying = true;
+      if (dom.btnMasterStemPlay) dom.btnMasterStemPlay.textContent = '❚❚';
+      applyStemAudibility();
+      for (const [, audio] of stemsState.audioElements) {
+        audio.play().catch(() => {});
+      }
+      syncStemPlaybackLoop();
+    }
+  }
+
+  function syncStemPlaybackLoop() {
+    if (!stemsState.isPlaying) return;
+
+    let maxTime = 0;
+    for (const [, audio] of stemsState.audioElements) {
+      if (audio.currentTime > maxTime) maxTime = audio.currentTime;
+    }
+
+    if (!stemsState.isUpdatingSeek && dom.stemsMasterSeek && stemsState.duration > 0) {
+      dom.stemsMasterSeek.value = (maxTime / stemsState.duration) * 100;
+      updateStemsMasterTimeDisplay(maxTime, stemsState.duration);
+    }
+
+    stemsState.animFrame = requestAnimationFrame(syncStemPlaybackLoop);
+  }
+
+  function updateStemsMasterTimeDisplay(curr, total) {
+    if (!dom.stemsMasterTimeDisplay) return;
+    const format = (s) => {
+      const m = Math.floor(s / 60);
+      const sec = Math.floor(s % 60);
+      return `${m}:${sec.toString().padStart(2, '0')}`;
+    };
+    dom.stemsMasterTimeDisplay.textContent = `${format(curr)} / ${format(total)}`;
+  }
+
+  function handleStemsBatchFiles(files) {
+    if (!files || files.length === 0) return;
+    Array.from(files).forEach(file => {
+      const detectedRole = autoDetectStemRoleFromFilename(file.name) || 'other';
+      stemsState.stagedFiles.push({
+        id: 'stg_' + Math.random().toString(36).substring(2, 9),
+        file,
+        name: file.name,
+        size: file.size,
+        role: detectedRole,
+      });
+    });
+    renderStagedStemsList();
+  }
+
+  function renderStagedStemsList() {
+    if (!dom.stemsStagingList || !dom.stemsStagingContainer) return;
+    if (stemsState.stagedFiles.length === 0) {
+      dom.stemsStagingContainer.classList.add('hidden');
+      return;
+    }
+
+    dom.stemsStagingContainer.classList.remove('hidden');
+    if (dom.stemsStagedCount) dom.stemsStagedCount.textContent = stemsState.stagedFiles.length;
+    dom.stemsStagingList.innerHTML = '';
+
+    const stemRolesList = [
+      ['vocals', 'Vocals'],
+      ['lead_vocals', 'Lead Vocals'],
+      ['backing_vocals', 'Backing Vocals'],
+      ['drums', 'Drums'],
+      ['percussion', 'Percussion'],
+      ['bass', 'Bass'],
+      ['guitar', 'Guitar'],
+      ['acoustic_guitar', 'Acoustic Guitar'],
+      ['electric_guitar', 'Electric Guitar'],
+      ['keyboard', 'Keyboard'],
+      ['piano', 'Piano'],
+      ['synth', 'Synth / Keys'],
+      ['strings', 'Strings'],
+      ['brass', 'Brass'],
+      ['woodwinds', 'Woodwinds'],
+      ['fx', 'FX / Ambience'],
+      ['instrumental', 'Instrumental / Backing'],
+      ['other', 'Other Stem'],
+    ];
+
+    stemsState.stagedFiles.forEach(stg => {
+      const row = document.createElement('div');
+      row.className = 'stems-staging-row';
+
+      const info = document.createElement('div');
+      info.className = 'stems-staging-file-info';
+
+      const name = document.createElement('span');
+      name.className = 'stems-staging-filename';
+      name.textContent = stg.name;
+      info.appendChild(name);
+
+      const size = document.createElement('span');
+      size.className = 'stems-staging-filesize';
+      size.textContent = `${(stg.size / (1024 * 1024)).toFixed(1)} MB`;
+      info.appendChild(size);
+
+      row.appendChild(info);
+
+      const right = document.createElement('div');
+      right.style.display = 'flex';
+      right.style.alignItems = 'center';
+      right.style.gap = '0.5rem';
+
+      const select = document.createElement('select');
+      select.className = 'stems-staging-role-select';
+      stemRolesList.forEach(([val, label]) => {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = label;
+        if (stg.role === val) opt.selected = true;
+        select.appendChild(opt);
+      });
+      select.addEventListener('change', (e) => {
+        stg.role = e.target.value;
+      });
+      right.appendChild(select);
+
+      const remBtn = document.createElement('button');
+      remBtn.type = 'button';
+      remBtn.className = 'stems-staging-remove-btn';
+      remBtn.textContent = '×';
+      remBtn.title = 'Remove file';
+      remBtn.addEventListener('click', () => {
+        stemsState.stagedFiles = stemsState.stagedFiles.filter(item => item.id !== stg.id);
+        renderStagedStemsList();
+      });
+      right.appendChild(remBtn);
+
+      row.appendChild(right);
+      dom.stemsStagingList.appendChild(row);
+    });
+  }
+
+  async function uploadAllStagedStems() {
+    const trackId = dom.stemsTrackSelect ? dom.stemsTrackSelect.value : null;
+    const takeId = dom.stemsTakeSelect ? dom.stemsTakeSelect.value : null;
+
+    if (!trackId || !takeId) {
+      showToast('Please select a target track workspace and take first', 'error');
+      return;
+    }
+    if (stemsState.stagedFiles.length === 0) {
+      showToast('No stems staged for upload', 'error');
+      return;
+    }
+
+    const total = stemsState.stagedFiles.length;
+    showToast(`Uploading ${total} separated stem${total === 1 ? '' : 's'}...`, 'info', 3000);
+
+    let successCount = 0;
+    for (let i = 0; i < stemsState.stagedFiles.length; i++) {
+      const item = stemsState.stagedFiles[i];
+      const formData = new FormData();
+      formData.append('file', item.file);
+      formData.append('role', item.role);
+
+      try {
+        const res = await fetch(`/api/projects/tracks/${trackId}/takes/${takeId}/stems`, {
+          method: 'POST',
+          body: formData,
+        });
+        if (res.ok) successCount++;
+      } catch (e) {}
+    }
+
+    if (successCount === total) {
+      showToast(`✨ All ${total} stems uploaded successfully!`, 'success');
+    } else {
+      showToast(`Uploaded ${successCount} of ${total} stems`, 'info');
+    }
+
+    stemsState.stagedFiles = [];
+    renderStagedStemsList();
+    if (dom.stemsBatchUploadSection) dom.stemsBatchUploadSection.classList.add('hidden');
+    onStemsTrackChanged(takeId);
+    fetchStorageData();
+  }
+
   // --- Setup Event Listeners ---
   function setupEvents() {
     // Sidebar Navigation
@@ -1042,6 +1517,9 @@
     }
     if (dom.btnNavStorage) {
       dom.btnNavStorage.addEventListener('click', () => switchView('storage'));
+    }
+    if (dom.btnNavStems) {
+      dom.btnNavStems.addEventListener('click', () => switchView('stems'));
     }
 
     // Refresh & New Buttons
@@ -1128,481 +1606,6 @@
     }
     if (dom.formSaveToProject) {
       dom.formSaveToProject.addEventListener('submit', handleSaveToProjectSubmit);
-    }
-
-    // Stems Manager Controller State & Logic
-    const stemsState = {
-      selectedTrackId: null,
-      selectedTakeId: null,
-      stagedFiles: [],
-      audioElements: new Map(), // stemId -> Audio
-      channelStates: new Map(), // stemId -> { isMuted: false, isSolo: false, volume: 1.0 }
-      isPlaying: false,
-      masterVolume: 1.0,
-      duration: 0,
-      isUpdatingSeek: false,
-      animFrame: null,
-    };
-
-    async function initStemsManagerView(targetTrackId, targetTakeId) {
-      if (storageState.tracks.length === 0) {
-        await fetchStorageData();
-      }
-      populateStemsTrackSelect(targetTrackId, targetTakeId);
-    }
-
-    function populateStemsTrackSelect(preferredTrackId, preferredTakeId) {
-      if (!dom.stemsTrackSelect) return;
-      dom.stemsTrackSelect.innerHTML = '<option value="">Select Track Workspace...</option>';
-
-      storageState.tracks.forEach(t => {
-        const opt = document.createElement('option');
-        opt.value = t.id;
-        opt.textContent = `${t.title || 'Untitled Track'} (${t.takes_count || 0} takes)`;
-        dom.stemsTrackSelect.appendChild(opt);
-      });
-
-      if (preferredTrackId && storageState.tracks.some(t => t.id === preferredTrackId)) {
-        dom.stemsTrackSelect.value = preferredTrackId;
-      } else if (storageState.tracks.length > 0) {
-        dom.stemsTrackSelect.value = storageState.tracks[0].id;
-      }
-
-      onStemsTrackChanged(preferredTakeId);
-    }
-
-    async function onStemsTrackChanged(preferredTakeId) {
-      const trackId = dom.stemsTrackSelect ? dom.stemsTrackSelect.value : null;
-      stemsState.selectedTrackId = trackId;
-
-      if (!dom.stemsTakeSelect) return;
-      dom.stemsTakeSelect.innerHTML = '<option value="">Select Take...</option>';
-
-      if (!trackId) {
-        renderStemsMixer(null, null);
-        return;
-      }
-
-      try {
-        const res = await fetch(`/api/projects/tracks/${trackId}`);
-        if (!res.ok) throw new Error('Failed to load track details');
-        const trackDetail = await res.json();
-        const takes = trackDetail.takes || [];
-
-        takes.forEach(take => {
-          const opt = document.createElement('option');
-          opt.value = take.id;
-          const stemCount = Object.keys(take.stems || {}).length;
-          opt.textContent = `${take.label || 'Take'} ${take.is_master ? '★ MASTER' : ''} (${stemCount} stem${stemCount === 1 ? '' : 's'})`;
-          dom.stemsTakeSelect.appendChild(opt);
-        });
-
-        let chosenTakeId = null;
-        if (preferredTakeId && takes.some(t => t.id === preferredTakeId)) {
-          chosenTakeId = preferredTakeId;
-        } else if (takes.length > 0) {
-          const masterTake = takes.find(t => t.is_master);
-          chosenTakeId = masterTake ? masterTake.id : takes[0].id;
-        }
-
-        dom.stemsTakeSelect.value = chosenTakeId || '';
-        stemsState.selectedTakeId = chosenTakeId;
-
-        const activeTake = takes.find(t => t.id === chosenTakeId);
-        renderStemsMixer(trackDetail.track || trackDetail, activeTake);
-      } catch (err) {
-        showToast('Error loading takes for stems', 'error');
-      }
-    }
-
-    function renderStemsMixer(track, take) {
-      stopAllStems();
-      if (!dom.stemsChannelsList) return;
-      dom.stemsChannelsList.innerHTML = '';
-
-      const trackObj = (track && track.track) ? track.track : track;
-      const trackId = (trackObj && trackObj.id) || stemsState.selectedTrackId;
-      const stems = take && take.stems ? Object.values(take.stems) : [];
-
-      if (dom.btnDownloadStemPack) {
-        dom.btnDownloadStemPack.disabled = stems.length === 0;
-      }
-
-      if (stems.length === 0) {
-        if (dom.stemsMixerSection) dom.stemsMixerSection.classList.add('hidden');
-        if (dom.stemsEmptyState) dom.stemsEmptyState.classList.remove('hidden');
-        return;
-      }
-
-      if (dom.stemsMixerSection) dom.stemsMixerSection.classList.remove('hidden');
-      if (dom.stemsEmptyState) dom.stemsEmptyState.classList.add('hidden');
-
-      stems.forEach(stem => {
-        stemsState.channelStates.set(stem.id, { isMuted: false, isSolo: false, volume: 1.0 });
-
-        // Create audio element for stem
-        const audio = new Audio(`/api/projects/tracks/${trackId}/takes/${take.id}/stems/${stem.id}/stream`);
-        audio.preload = 'metadata';
-        audio.addEventListener('loadedmetadata', () => {
-          if (audio.duration && audio.duration > stemsState.duration) {
-            stemsState.duration = audio.duration;
-            updateStemsMasterTimeDisplay(0, stemsState.duration);
-          }
-        });
-        audio.addEventListener('ended', () => {
-          stemsState.isPlaying = false;
-          if (dom.btnMasterStemPlay) dom.btnMasterStemPlay.textContent = '▶';
-        });
-        stemsState.audioElements.set(stem.id, audio);
-
-        // Create Channel Card UI
-        const card = document.createElement('div');
-        card.className = 'stem-channel-card';
-        card.id = `stemCard_${stem.id}`;
-
-        // Left Info
-        const left = document.createElement('div');
-        left.className = 'stem-channel-left';
-
-        const roleBadge = document.createElement('span');
-        roleBadge.className = 'stem-channel-role';
-        roleBadge.textContent = (stem.role || 'other').replace('_', ' ').toUpperCase();
-        left.appendChild(roleBadge);
-
-        const meta = document.createElement('div');
-        meta.className = 'stem-channel-meta';
-
-        const nameEl = document.createElement('span');
-        nameEl.className = 'stem-channel-name';
-        nameEl.textContent = stem.filename || `stem_${stem.role}`;
-        meta.appendChild(nameEl);
-
-        const sizeEl = document.createElement('span');
-        sizeEl.className = 'stem-channel-filesize';
-        const mb = (stem.size_bytes / (1024 * 1024)).toFixed(1);
-        sizeEl.textContent = `${mb} MB • ${(stem.format || '').toUpperCase().replace('.', '')}`;
-        meta.appendChild(sizeEl);
-
-        left.appendChild(meta);
-        card.appendChild(left);
-
-        // Controls
-        const controls = document.createElement('div');
-        controls.className = 'stem-channel-controls';
-
-        // Mute button
-        const muteBtn = document.createElement('button');
-        muteBtn.type = 'button';
-        muteBtn.className = 'btn-stem-mute';
-        muteBtn.textContent = 'M';
-        muteBtn.title = 'Mute Stem';
-        muteBtn.addEventListener('click', () => {
-          const st = stemsState.channelStates.get(stem.id);
-          if (!st) return;
-          st.isMuted = !st.isMuted;
-          muteBtn.classList.toggle('active', st.isMuted);
-          card.classList.toggle('muted', st.isMuted);
-          applyStemAudibility();
-        });
-        controls.appendChild(muteBtn);
-
-        // Solo button
-        const soloBtn = document.createElement('button');
-        soloBtn.type = 'button';
-        soloBtn.className = 'btn-stem-solo';
-        soloBtn.textContent = 'S';
-        soloBtn.title = 'Solo Stem';
-        soloBtn.addEventListener('click', () => {
-          const st = stemsState.channelStates.get(stem.id);
-          if (!st) return;
-          st.isSolo = !st.isSolo;
-          soloBtn.classList.toggle('active', st.isSolo);
-          applyStemAudibility();
-        });
-        controls.appendChild(soloBtn);
-
-        // Volume slider
-        const volSlider = document.createElement('input');
-        volSlider.type = 'range';
-        volSlider.className = 'stem-channel-vol';
-        volSlider.min = '0';
-        volSlider.max = '1';
-        volSlider.step = '0.05';
-        volSlider.value = '1';
-        volSlider.title = 'Stem Volume';
-        volSlider.addEventListener('input', (e) => {
-          const st = stemsState.channelStates.get(stem.id);
-          if (!st) return;
-          st.volume = parseFloat(e.target.value);
-          applyStemAudibility();
-        });
-        controls.appendChild(volSlider);
-
-        // Download button
-        const dlBtn = document.createElement('a');
-        dlBtn.className = 'btn-stem-icon';
-        dlBtn.title = 'Download Stem';
-        dlBtn.href = `/api/projects/tracks/${trackId}/takes/${take.id}/stems/${stem.id}/download`;
-        dlBtn.download = stem.filename;
-        dlBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
-        controls.appendChild(dlBtn);
-
-        // Delete button
-        const delBtn = document.createElement('button');
-        delBtn.type = 'button';
-        delBtn.className = 'btn-stem-icon btn-danger';
-        delBtn.title = 'Delete Stem';
-        delBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
-        delBtn.addEventListener('click', async () => {
-          if (!confirm(`Delete stem "${stem.filename}"?`)) return;
-          try {
-            const res = await fetch(`/api/projects/tracks/${trackId}/takes/${take.id}/stems/${stem.id}`, { method: 'DELETE' });
-            if (res.ok) {
-              showToast('Stem deleted', 'info');
-              onStemsTrackChanged(take.id);
-              fetchStorageData();
-            } else {
-              showToast('Failed to delete stem', 'error');
-            }
-          } catch (e) {
-            showToast('Network error deleting stem', 'error');
-          }
-        });
-        controls.appendChild(delBtn);
-
-        card.appendChild(controls);
-        dom.stemsChannelsList.appendChild(card);
-      });
-    }
-
-    function applyStemAudibility() {
-      let hasSolo = false;
-      for (const [, st] of stemsState.channelStates) {
-        if (st.isSolo) {
-          hasSolo = true;
-          break;
-        }
-      }
-
-      for (const [stemId, audio] of stemsState.audioElements) {
-        const st = stemsState.channelStates.get(stemId);
-        if (!st) continue;
-        let audible = true;
-        if (hasSolo) {
-          audible = st.isSolo && !st.isMuted;
-        } else {
-          audible = !st.isMuted;
-        }
-        audio.volume = audible ? (st.volume * stemsState.masterVolume) : 0;
-      }
-    }
-
-    function stopAllStems() {
-      stemsState.isPlaying = false;
-      if (dom.btnMasterStemPlay) dom.btnMasterStemPlay.textContent = '▶';
-      for (const [, audio] of stemsState.audioElements) {
-        audio.pause();
-        audio.currentTime = 0;
-      }
-      stemsState.audioElements.clear();
-      stemsState.channelStates.clear();
-      stemsState.duration = 0;
-      if (stemsState.animFrame) {
-        cancelAnimationFrame(stemsState.animFrame);
-        stemsState.animFrame = null;
-      }
-    }
-
-    function toggleMasterStemPlay() {
-      if (stemsState.audioElements.size === 0) return;
-
-      if (stemsState.isPlaying) {
-        stemsState.isPlaying = false;
-        if (dom.btnMasterStemPlay) dom.btnMasterStemPlay.textContent = '▶';
-        for (const [, audio] of stemsState.audioElements) {
-          audio.pause();
-        }
-      } else {
-        stemsState.isPlaying = true;
-        if (dom.btnMasterStemPlay) dom.btnMasterStemPlay.textContent = '❚❚';
-        applyStemAudibility();
-        for (const [, audio] of stemsState.audioElements) {
-          audio.play().catch(() => {});
-        }
-        syncStemPlaybackLoop();
-      }
-    }
-
-    function syncStemPlaybackLoop() {
-      if (!stemsState.isPlaying) return;
-
-      let maxTime = 0;
-      for (const [, audio] of stemsState.audioElements) {
-        if (audio.currentTime > maxTime) maxTime = audio.currentTime;
-      }
-
-      if (!stemsState.isUpdatingSeek && dom.stemsMasterSeek && stemsState.duration > 0) {
-        dom.stemsMasterSeek.value = (maxTime / stemsState.duration) * 100;
-        updateStemsMasterTimeDisplay(maxTime, stemsState.duration);
-      }
-
-      stemsState.animFrame = requestAnimationFrame(syncStemPlaybackLoop);
-    }
-
-    function updateStemsMasterTimeDisplay(curr, total) {
-      if (!dom.stemsMasterTimeDisplay) return;
-      const format = (s) => {
-        const m = Math.floor(s / 60);
-        const sec = Math.floor(s % 60);
-        return `${m}:${sec.toString().padStart(2, '0')}`;
-      };
-      dom.stemsMasterTimeDisplay.textContent = `${format(curr)} / ${format(total)}`;
-    }
-
-    function handleStemsBatchFiles(files) {
-      if (!files || files.length === 0) return;
-      Array.from(files).forEach(file => {
-        const detectedRole = autoDetectStemRoleFromFilename(file.name) || 'other';
-        stemsState.stagedFiles.push({
-          id: 'stg_' + Math.random().toString(36).substring(2, 9),
-          file,
-          name: file.name,
-          size: file.size,
-          role: detectedRole,
-        });
-      });
-      renderStagedStemsList();
-    }
-
-    function renderStagedStemsList() {
-      if (!dom.stemsStagingList || !dom.stemsStagingContainer) return;
-      if (stemsState.stagedFiles.length === 0) {
-        dom.stemsStagingContainer.classList.add('hidden');
-        return;
-      }
-
-      dom.stemsStagingContainer.classList.remove('hidden');
-      if (dom.stemsStagedCount) dom.stemsStagedCount.textContent = stemsState.stagedFiles.length;
-      dom.stemsStagingList.innerHTML = '';
-
-      const stemRolesList = [
-        ['vocals', 'Vocals'],
-        ['lead_vocals', 'Lead Vocals'],
-        ['backing_vocals', 'Backing Vocals'],
-        ['drums', 'Drums'],
-        ['percussion', 'Percussion'],
-        ['bass', 'Bass'],
-        ['guitar', 'Guitar'],
-        ['acoustic_guitar', 'Acoustic Guitar'],
-        ['electric_guitar', 'Electric Guitar'],
-        ['keyboard', 'Keyboard'],
-        ['piano', 'Piano'],
-        ['synth', 'Synth / Keys'],
-        ['strings', 'Strings'],
-        ['brass', 'Brass'],
-        ['woodwinds', 'Woodwinds'],
-        ['fx', 'FX / Ambience'],
-        ['instrumental', 'Instrumental / Backing'],
-        ['other', 'Other Stem'],
-      ];
-
-      stemsState.stagedFiles.forEach(stg => {
-        const row = document.createElement('div');
-        row.className = 'stems-staging-row';
-
-        const info = document.createElement('div');
-        info.className = 'stems-staging-file-info';
-
-        const name = document.createElement('span');
-        name.className = 'stems-staging-filename';
-        name.textContent = stg.name;
-        info.appendChild(name);
-
-        const size = document.createElement('span');
-        size.className = 'stems-staging-filesize';
-        size.textContent = `${(stg.size / (1024 * 1024)).toFixed(1)} MB`;
-        info.appendChild(size);
-
-        row.appendChild(info);
-
-        const right = document.createElement('div');
-        right.style.display = 'flex';
-        right.style.alignItems = 'center';
-        right.style.gap = '0.5rem';
-
-        const select = document.createElement('select');
-        select.className = 'stems-staging-role-select';
-        stemRolesList.forEach(([val, label]) => {
-          const opt = document.createElement('option');
-          opt.value = val;
-          opt.textContent = label;
-          if (stg.role === val) opt.selected = true;
-          select.appendChild(opt);
-        });
-        select.addEventListener('change', (e) => {
-          stg.role = e.target.value;
-        });
-        right.appendChild(select);
-
-        const remBtn = document.createElement('button');
-        remBtn.type = 'button';
-        remBtn.className = 'stems-staging-remove-btn';
-        remBtn.textContent = '×';
-        remBtn.title = 'Remove file';
-        remBtn.addEventListener('click', () => {
-          stemsState.stagedFiles = stemsState.stagedFiles.filter(item => item.id !== stg.id);
-          renderStagedStemsList();
-        });
-        right.appendChild(remBtn);
-
-        row.appendChild(right);
-        dom.stemsStagingList.appendChild(row);
-      });
-    }
-
-    async function uploadAllStagedStems() {
-      const trackId = dom.stemsTrackSelect ? dom.stemsTrackSelect.value : null;
-      const takeId = dom.stemsTakeSelect ? dom.stemsTakeSelect.value : null;
-
-      if (!trackId || !takeId) {
-        showToast('Please select a target track workspace and take first', 'error');
-        return;
-      }
-      if (stemsState.stagedFiles.length === 0) {
-        showToast('No stems staged for upload', 'error');
-        return;
-      }
-
-      const total = stemsState.stagedFiles.length;
-      showToast(`Uploading ${total} separated stem${total === 1 ? '' : 's'}...`, 'info', 3000);
-
-      let successCount = 0;
-      for (let i = 0; i < stemsState.stagedFiles.length; i++) {
-        const item = stemsState.stagedFiles[i];
-        const formData = new FormData();
-        formData.append('file', item.file);
-        formData.append('role', item.role);
-
-        try {
-          const res = await fetch(`/api/projects/tracks/${trackId}/takes/${takeId}/stems`, {
-            method: 'POST',
-            body: formData,
-          });
-          if (res.ok) successCount++;
-        } catch (e) {}
-      }
-
-      if (successCount === total) {
-        showToast(`✨ All ${total} stems uploaded successfully!`, 'success');
-      } else {
-        showToast(`Uploaded ${successCount} of ${total} stems`, 'info');
-      }
-
-      stemsState.stagedFiles = [];
-      renderStagedStemsList();
-      if (dom.stemsBatchUploadSection) dom.stemsBatchUploadSection.classList.add('hidden');
-      onStemsTrackChanged(takeId);
-      fetchStorageData();
     }
 
     // Stems Panel Events
