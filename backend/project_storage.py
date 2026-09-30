@@ -153,6 +153,8 @@ class ProjectStorageManager:
             max_quota_bytes=max_quota,
             max_quota_mb=max_quota_mb,
             used_percent=used_percent,
+            limit_bytes=max_quota,
+            percent_used=used_percent,
             tracks_count=tracks_count,
             takes_count=takes_count,
             albums_count=albums_count,

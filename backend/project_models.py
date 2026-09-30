@@ -171,6 +171,8 @@ class StorageQuotaStats(BaseModel):
     max_quota_bytes: int = Field(default=0, ge=0)
     max_quota_mb: float = Field(default=0.0, ge=0.0)
     used_percent: float = Field(default=0.0, ge=0.0)
+    limit_bytes: int = Field(default=0, ge=0)
+    percent_used: float = Field(default=0.0, ge=0.0)
     tracks_count: int = Field(default=0, ge=0)
     takes_count: int = Field(default=0, ge=0)
     albums_count: int = Field(default=0, ge=0)

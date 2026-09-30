@@ -148,11 +148,13 @@
 
   function renderQuota() {
     if (!state.quota || !dom.projectsQuotaText || !dom.projectsQuotaBar) return;
-    const usedMb = (state.quota.used_bytes / (1024 * 1024)).toFixed(1);
-    const limitMb = (state.quota.limit_bytes / (1024 * 1024)).toFixed(0);
+    const usedBytes = state.quota.used_bytes || 0;
+    const limitBytes = state.quota.max_quota_bytes || state.quota.limit_bytes || 0;
+    const usedMb = state.quota.used_mb !== undefined ? state.quota.used_mb.toFixed(1) : (usedBytes / (1024 * 1024)).toFixed(1);
+    const limitMb = state.quota.max_quota_mb !== undefined ? state.quota.max_quota_mb.toFixed(0) : (limitBytes / (1024 * 1024)).toFixed(0);
     dom.projectsQuotaText.textContent = `${usedMb} MB / ${limitMb} MB`;
     
-    const pct = Math.min(state.quota.percent_used, 100);
+    const pct = Math.min(state.quota.used_percent !== undefined ? state.quota.used_percent : (state.quota.percent_used || 0), 100);
     dom.projectsQuotaBar.style.width = `${pct}%`;
     dom.projectsQuotaBar.className = 'quota-bar-fill';
     if (pct > 90) {

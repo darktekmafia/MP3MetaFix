@@ -95,9 +95,11 @@
       try {
         const qRes = await fetch('/api/storage/quota');
         if (qRes.ok) {
-          const qData = await qRes.json();
-          const usedMb = (qData.used_bytes / (1024 * 1024)).toFixed(1);
-          const limitMb = (qData.limit_bytes / (1024 * 1024)).toFixed(0);
+          const usedBytes = qData.used_bytes || 0;
+          const limitBytes = qData.max_quota_bytes || qData.limit_bytes || 0;
+          const usedMb = qData.used_mb !== undefined ? qData.used_mb.toFixed(1) : (usedBytes / (1024 * 1024)).toFixed(1);
+          const limitMb = qData.max_quota_mb !== undefined ? qData.max_quota_mb.toFixed(0) : (limitBytes / (1024 * 1024)).toFixed(0);
+          const percentUsed = qData.used_percent !== undefined ? qData.used_percent : (qData.percent_used || 0);
           const statProjectsCount = document.getElementById('statProjectsCount');
           const statProjectsStorageSize = document.getElementById('statProjectsStorageSize');
           const statProjectsStorageMeter = document.getElementById('statProjectsStorageMeter');
@@ -105,8 +107,8 @@
 
           if (statProjectsCount) statProjectsCount.textContent = `${qData.tracks_count || 0} Tracks • ${qData.takes_count || 0} Takes`;
           if (statProjectsStorageSize) statProjectsStorageSize.textContent = `${usedMb} MB`;
-          if (statProjectsStorageMeter) statProjectsStorageMeter.style.width = `${Math.min(100, qData.percent_used)}%`;
-          if (statProjectsStorageQuota) statProjectsStorageQuota.textContent = `${qData.percent_used}% of ${limitMb}MB`;
+          if (statProjectsStorageMeter) statProjectsStorageMeter.style.width = `${Math.min(100, percentUsed)}%`;
+          if (statProjectsStorageQuota) statProjectsStorageQuota.textContent = `${percentUsed}% of ${limitMb}MB`;
         }
       } catch (qErr) {
         console.warn('Could not fetch project storage quota in admin:', qErr);

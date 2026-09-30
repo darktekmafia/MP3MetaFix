@@ -450,3 +450,36 @@ def test_load_take_into_session(client, auth_cookies):
     res_session = client.get("/api/session", cookies={SESSION_COOKIE_NAME: session_cookie, **auth_cookies})
     assert res_session.status_code == 200
     assert res_session.json()["active"] is True
+
+
+def test_take_upload_exceeding_256kb_allowed_by_middleware(client, auth_cookies):
+    """Verify uploads >256KB are not rejected by default body limit in RequestLimitsMiddleware."""
+    res = client.post("/api/projects/tracks", json={"title": "Large File Track"}, cookies=auth_cookies)
+    track_id = res.json()["id"]
+
+    # 512 KB synthetic MP3
+    large_audio = VALID_MP3_HEADER + (b"\x00" * (512 * 1024))
+    files = {"file": ("large.mp3", io.BytesIO(large_audio), "audio/mpeg")}
+    res = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        files=files,
+        cookies=auth_cookies,
+    )
+    assert res.status_code == 201
+    assert res.json()["size_bytes"] > 500000
+
+
+def test_storage_quota_response_fields(client, auth_cookies):
+    """Verify /api/storage/quota response provides all expected telemetry fields."""
+    res = client.get("/api/storage/quota", cookies=auth_cookies)
+    assert res.status_code == 200
+    data = res.json()
+    assert "used_bytes" in data
+    assert "used_mb" in data
+    assert "max_quota_bytes" in data
+    assert "max_quota_mb" in data
+    assert "used_percent" in data
+    assert "limit_bytes" in data
+    assert "percent_used" in data
+    assert data["limit_bytes"] == data["max_quota_bytes"]
+    assert data["percent_used"] == data["used_percent"]
