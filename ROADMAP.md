@@ -49,6 +49,9 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - Keep the installed application version visible in the header for guests and signed-in users, using a read-only local version/health response. Displaying or clicking it does not trigger a remote update check.
   - Removed automatic and manual update checks, update prompts, and update-check controls from `/app`, `/manager`, and the public hub. Confined update discovery and installation controls exclusively to `/admin`, gated by administrator authentication.
   - Verified guest startup, refresh, session restore, and version-display interactions never request `/api/updates/check`, eliminating unauthenticated 401 triggers while preserving authorized administrator update management.
+- [ ] **Public & Guest Access to In-App Help & Documentation**:
+  - Make the in-app Help Modal and `/docs` documentation portal directly accessible to unauthenticated visitors and guest mode users across all workspace headers, navigation drawers, and footer bars without requiring an active user login.
+  - Ensure documentation API endpoints (`GET /api/docs/list`, `GET /api/docs/{doc_id}`) remain open for public reading while strictly preserving path-traversal safeguards and tenant isolation.
 - [ ] **Granular Workspace Access Controls & Maintenance Mode**:
   - Administrator toggles in `/admin` to enable/disable guest and user access individually for `/app`, `/manager`, and `/projects`.
   - Configurable maintenance/reason messages (e.g. "Temporarily disabled: investigating audio save bug") set in `/admin`.
