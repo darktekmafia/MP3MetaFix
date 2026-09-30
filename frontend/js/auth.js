@@ -235,6 +235,78 @@
     container.appendChild(userPill);
     container.appendChild(dropdown);
 
+    // Sync Mobile Drawer Auth Card (if present on page)
+    const mobileAuthContainer = document.getElementById('mobileDrawerAuth');
+    if (mobileAuthContainer) {
+      mobileAuthContainer.innerHTML = '';
+      if (!AuthState.authenticated) {
+        const guestCard = document.createElement('div');
+        guestCard.className = 'drawer-user-card';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'auth-avatar avatar-guest';
+        avatar.textContent = 'G';
+
+        const info = document.createElement('div');
+        info.className = 'drawer-user-info';
+        const name = document.createElement('div');
+        name.className = 'drawer-user-name';
+        name.textContent = 'Guest Mode';
+        const role = document.createElement('span');
+        role.className = 'auth-role-tag role-guest';
+        role.textContent = 'Public Access';
+        info.appendChild(name);
+        info.appendChild(role);
+
+        const loginBtn = document.createElement('button');
+        loginBtn.type = 'button';
+        loginBtn.className = 'btn btn-primary btn-sm';
+        loginBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg><span>Sign In</span>';
+        loginBtn.addEventListener('click', () => {
+          closeMobileDrawer();
+          openModal('loginModal');
+        });
+
+        guestCard.appendChild(avatar);
+        guestCard.appendChild(info);
+        guestCard.appendChild(loginBtn);
+        mobileAuthContainer.appendChild(guestCard);
+      } else {
+        const userCard = document.createElement('div');
+        userCard.className = 'drawer-user-card';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'auth-avatar';
+        avatar.textContent = (AuthState.username || 'U').charAt(0).toUpperCase();
+
+        const info = document.createElement('div');
+        info.className = 'drawer-user-info';
+        const name = document.createElement('div');
+        name.className = 'drawer-user-name';
+        name.textContent = AuthState.username;
+        const role = document.createElement('span');
+        role.className = `auth-role-tag role-${AuthState.role === 'admin' ? 'admin' : 'user'}`;
+        role.textContent = AuthState.role === 'admin' ? 'Admin' : 'User';
+        info.appendChild(name);
+        info.appendChild(role);
+
+        const logoutBtn = document.createElement('button');
+        logoutBtn.type = 'button';
+        logoutBtn.className = 'btn btn-secondary btn-sm';
+        logoutBtn.title = 'Sign Out';
+        logoutBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg><span>Sign Out</span>';
+        logoutBtn.addEventListener('click', () => {
+          closeMobileDrawer();
+          handleLogout();
+        });
+
+        userCard.appendChild(avatar);
+        userCard.appendChild(info);
+        userCard.appendChild(logoutBtn);
+        mobileAuthContainer.appendChild(userCard);
+      }
+    }
+
     // Dynamic Admin-only DOM elements visibility
     document.querySelectorAll('.admin-only').forEach((el) => {
       if (AuthState.role === 'admin') {
@@ -772,9 +844,54 @@
       });
     }
 
-    // Global Modal Escape & Backdrop handling for Settings/Login
+    // Mobile Navigation Drawer Controller
+    const mobileNavToggle = document.getElementById('mobileNavToggle');
+    if (mobileNavToggle) {
+      mobileNavToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openMobileDrawer();
+      });
+    }
+
+    const btnCloseDrawer = document.getElementById('btnCloseMobileDrawer');
+    if (btnCloseDrawer) {
+      btnCloseDrawer.addEventListener('click', closeMobileDrawer);
+    }
+
+    const drawerBackdrop = document.getElementById('mobileDrawerBackdrop');
+    if (drawerBackdrop) {
+      drawerBackdrop.addEventListener('click', closeMobileDrawer);
+    }
+
+    const btnMobileSettings = document.getElementById('btnMobileQuickSettings');
+    if (btnMobileSettings) {
+      btnMobileSettings.addEventListener('click', () => {
+        closeMobileDrawer();
+        openSettingsModal();
+      });
+    }
+
+    const btnMobileHelp = document.getElementById('btnMobileHelpDocs');
+    if (btnMobileHelp) {
+      btnMobileHelp.addEventListener('click', () => {
+        closeMobileDrawer();
+        openHelpModal();
+      });
+    }
+
+    document.querySelectorAll('#mobileNavDrawer .drawer-nav-item').forEach((link) => {
+      link.addEventListener('click', () => {
+        closeMobileDrawer();
+      });
+    });
+
+    // Global Modal & Drawer Escape key handling
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        const mobileDrawer = document.getElementById('mobileNavDrawer');
+        if (mobileDrawer && !mobileDrawer.classList.contains('hidden')) {
+          closeMobileDrawer();
+        }
         const settingsModal = document.getElementById('settingsModal');
         if (settingsModal && !settingsModal.classList.contains('hidden')) {
           closeModal('settingsModal');
@@ -807,6 +924,37 @@
     // Initial Status Handshake
     checkAuthStatus();
   });
+
+  // Mobile Drawer Helpers
+  function openMobileDrawer() {
+    const drawer = document.getElementById('mobileNavDrawer');
+    const toggle = document.getElementById('mobileNavToggle');
+    if (!drawer) return;
+    drawer.classList.remove('hidden');
+    requestAnimationFrame(() => {
+      drawer.classList.add('open');
+    });
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', 'true');
+    }
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeMobileDrawer() {
+    const drawer = document.getElementById('mobileNavDrawer');
+    const toggle = document.getElementById('mobileNavToggle');
+    if (!drawer || drawer.classList.contains('hidden')) return;
+    drawer.classList.remove('open');
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', 'false');
+    }
+    document.body.style.overflow = '';
+    setTimeout(() => {
+      if (!drawer.classList.contains('open')) {
+        drawer.classList.add('hidden');
+      }
+    }, 250);
+  }
 
   // --- In-App Help Modal Controller ---
   let cachedDocsList = null;
