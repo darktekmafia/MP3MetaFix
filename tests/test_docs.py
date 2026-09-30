@@ -59,3 +59,32 @@ def test_docs_portal_static_page():
     # Also test without trailing slash
     res2 = client.get("/docs")
     assert res2.status_code in (200, 307)
+
+
+def test_asset_tags_and_version_synchronization():
+    """Verify that all frontend HTML script and link asset tags match VERSION."""
+    import re
+    from pathlib import Path
+    from backend.config import BASE_DIR, VERSION
+
+    version_file = BASE_DIR / "VERSION"
+    assert version_file.exists(), "VERSION file missing"
+    current_ver = version_file.read_text().strip()
+    assert current_ver == VERSION
+
+    frontend_dir = BASE_DIR / "frontend"
+    html_files = list(frontend_dir.glob("**/*.html"))
+    assert len(html_files) >= 5, "Frontend HTML templates missing"
+
+    asset_tag_pattern = re.compile(r'(?:src|href)=["\'](/[^"\']+\.(?:js|css))\?v=([^"\']+)["\']')
+
+    for html_file in html_files:
+        content = html_file.read_text()
+        matches = asset_tag_pattern.findall(content)
+        assert len(matches) > 0, f"No versioned assets found in {html_file.name}"
+        for asset_path, asset_ver in matches:
+            assert asset_ver == current_ver, (
+                f"Asset version mismatch in {html_file.relative_to(BASE_DIR)}: "
+                f"{asset_path}?v={asset_ver} (expected ?v={current_ver})"
+            )
+

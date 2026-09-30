@@ -101,7 +101,7 @@ Before any changes are committed or merged:
 3. **Mandatory Pre-Merge Release Gate (Before Merging `development` → `main`)**:
    - When `development` is approved for a new release, the documentation MUST be finalized on `development` before merging into `main`:
      - Convert `## [Unreleased]` in [CHANGELOG.md](../CHANGELOG.md) to the release heading: `## [X.Y.Z] - YYYY-MM-DD`.
-     - Synchronize version strings across [VERSION](../VERSION), [backend/config.py](../backend/config.py), [frontend/index.html](../frontend/index.html), and [install.sh](../install.sh).
+     - Synchronize version strings across [VERSION](../VERSION), [backend/config.py](../backend/config.py), [frontend/index.html](../frontend/index.html), [install.sh](../install.sh), and all <script> and <link> asset tags (?v=X.Y.Z) across frontend/**/*.html.
      - Audit all public docs to verify they accurately reflect the release-ready product state.
      - Execute the test suite (`./.venv/bin/pytest`) with 0 failures.
      - Commit the release preparation on `development` (`chore(release): prepare vX.Y.Z`).
