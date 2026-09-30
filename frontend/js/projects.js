@@ -54,6 +54,8 @@
     dom.stemsStagedCount = document.getElementById('stemsStagedCount');
     dom.btnClearStagedStems = document.getElementById('btnClearStagedStems');
     dom.btnUploadAllStagedStems = document.getElementById('btnUploadAllStagedStems');
+    dom.stemsUploadProgressBarContainer = document.getElementById('stemsUploadProgressBarContainer');
+    dom.stemsUploadProgressBar = document.getElementById('stemsUploadProgressBar');
     dom.stemsStagingList = document.getElementById('stemsStagingList');
     dom.stemsMixerSection = document.getElementById('stemsMixerSection');
     dom.btnMasterStemPlay = document.getElementById('btnMasterStemPlay');
@@ -1767,6 +1769,14 @@
       delBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
       delBtn.addEventListener('click', async () => {
         if (!confirm(`Delete stem "${stem.filename}"?`)) return;
+        const existingAudio = stemsState.audioElements.get(stem.id);
+        if (existingAudio) {
+          existingAudio.pause();
+          existingAudio.src = '';
+          existingAudio.load();
+          stemsState.audioElements.delete(stem.id);
+          stemsState.channelStates.delete(stem.id);
+        }
         try {
           const res = await fetch(`/api/projects/tracks/${trackId}/takes/${take.id}/stems/${stem.id}`, { method: 'DELETE' });
           if (res.ok) {
@@ -1815,7 +1825,8 @@
     if (dom.btnMasterStemPlay) dom.btnMasterStemPlay.textContent = '▶';
     for (const [, audio] of stemsState.audioElements) {
       audio.pause();
-      audio.currentTime = 0;
+      audio.src = '';
+      audio.load();
     }
     stemsState.audioElements.clear();
     stemsState.channelStates.clear();
@@ -1957,6 +1968,12 @@
       });
       right.appendChild(select);
 
+      const statusSpan = document.createElement('span');
+      statusSpan.id = `stgStatus_${stg.id}`;
+      statusSpan.className = 'stems-staging-row-status ready';
+      statusSpan.textContent = 'Ready';
+      right.appendChild(statusSpan);
+
       const remBtn = document.createElement('button');
       remBtn.type = 'button';
       remBtn.className = 'stems-staging-remove-btn';
@@ -1987,11 +2004,26 @@
     }
 
     const total = stemsState.stagedFiles.length;
-    showToast(`Uploading ${total} separated stem${total === 1 ? '' : 's'}...`, 'info', 3000);
+    if (dom.btnUploadAllStagedStems) {
+      dom.btnUploadAllStagedStems.disabled = true;
+      dom.btnUploadAllStagedStems.textContent = `Uploading (0/${total})...`;
+    }
+    if (dom.btnClearStagedStems) dom.btnClearStagedStems.disabled = true;
+    if (dom.stemsUploadProgressBarContainer) dom.stemsUploadProgressBarContainer.classList.remove('hidden');
+    if (dom.stemsUploadProgressBar) dom.stemsUploadProgressBar.style.width = '0%';
 
     let successCount = 0;
     for (let i = 0; i < stemsState.stagedFiles.length; i++) {
       const item = stemsState.stagedFiles[i];
+      if (dom.btnUploadAllStagedStems) {
+        dom.btnUploadAllStagedStems.textContent = `Uploading (${i + 1}/${total})...`;
+      }
+      const statusEl = document.getElementById(`stgStatus_${item.id}`);
+      if (statusEl) {
+        statusEl.className = 'stems-staging-row-status uploading';
+        statusEl.textContent = '⏳ Uploading...';
+      }
+
       const formData = new FormData();
       formData.append('file', item.file);
       formData.append('role', item.role);
@@ -2001,8 +2033,28 @@
           method: 'POST',
           body: formData,
         });
-        if (res.ok) successCount++;
-      } catch (e) {}
+        if (res.ok) {
+          successCount++;
+          if (statusEl) {
+            statusEl.className = 'stems-staging-row-status success';
+            statusEl.textContent = '✅ Uploaded';
+          }
+        } else {
+          if (statusEl) {
+            statusEl.className = 'stems-staging-row-status error';
+            statusEl.textContent = '❌ Failed';
+          }
+        }
+      } catch (e) {
+        if (statusEl) {
+          statusEl.className = 'stems-staging-row-status error';
+          statusEl.textContent = '❌ Error';
+        }
+      }
+
+      if (dom.stemsUploadProgressBar) {
+        dom.stemsUploadProgressBar.style.width = `${Math.round(((i + 1) / total) * 100)}%`;
+      }
     }
 
     if (successCount === total) {
@@ -2010,6 +2062,14 @@
     } else {
       showToast(`Uploaded ${successCount} of ${total} stems`, 'info');
     }
+
+    if (dom.btnUploadAllStagedStems) {
+      dom.btnUploadAllStagedStems.disabled = false;
+      dom.btnUploadAllStagedStems.textContent = 'Upload All Stems';
+    }
+    if (dom.btnClearStagedStems) dom.btnClearStagedStems.disabled = false;
+    if (dom.stemsUploadProgressBarContainer) dom.stemsUploadProgressBarContainer.classList.add('hidden');
+    if (dom.stemsUploadProgressBar) dom.stemsUploadProgressBar.style.width = '0%';
 
     stemsState.stagedFiles = [];
     renderStagedStemsList();

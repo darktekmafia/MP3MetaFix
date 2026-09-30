@@ -6013,6 +6013,53 @@ input:focus-visible + .switch-slider {
   line-height: 1;
 }
 
+.stems-progress-bar-container {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 0.25rem;
+}
+
+.stems-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #6366f1, #a855f7, #38bdf8);
+  border-radius: 999px;
+  transition: width 0.25s ease-out;
+}
+
+.stems-staging-row-status {
+  font-size: 0.72rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.stems-staging-row-status.ready {
+  color: var(--text-dim, #94a3b8);
+}
+
+.stems-staging-row-status.uploading {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.stems-staging-row-status.success {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.12);
+}
+
+.stems-staging-row-status.error {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+}
+
 /* Mixer Transport Bar */
 .stems-mixer-transport {
   display: flex;
