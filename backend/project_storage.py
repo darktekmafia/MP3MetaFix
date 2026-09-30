@@ -764,6 +764,34 @@ class ProjectStorageManager:
                     return path
         return None
 
+    def get_stem_pack_zip(self, user_id: str, track_id: str, take_id: str) -> Optional[tuple[str, bytes]]:
+        """Return (zip_filename, zip_bytes) containing all stems for a take."""
+        track = self.get_track(user_id, track_id)
+        take = self.get_take(user_id, track_id, take_id)
+        if not track or not take or not take.stems:
+            return None
+
+        import io
+        import zipfile
+        import re
+
+        clean_track = re.sub(r'[\s/\\:*?"<>|]+', '_', track.title).strip('_') or "track"
+        clean_take = re.sub(r'[\s/\\:*?"<>|]+', '_', take.label).strip('_') or "take"
+        zip_filename = f"{clean_track}_{clean_take}_stems.zip"
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for stem_id, stem in take.stems.items():
+                stem_path = self.get_stem_audio_path(user_id, track_id, take_id, stem_id)
+                if stem_path and stem_path.is_file():
+                    safe_stem_name = re.sub(r'[\s/\\:*?"<>|]+', '_', stem.filename).strip('_')
+                    if not safe_stem_name:
+                        safe_stem_name = f"{stem.role}_{stem_id[:8]}{stem.format}"
+                    zf.write(stem_path, arcname=safe_stem_name)
+
+        buf.seek(0)
+        return zip_filename, buf.getvalue()
+
     # --- Lyrics Management for Takes ---
 
     def save_take_lyrics(

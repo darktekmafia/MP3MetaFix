@@ -547,6 +547,58 @@ async def stream_stem_audio(
     return serve_audio_range_stream(stem_path, request)
 
 
+@projects_router.get("/tracks/{track_id}/takes/{take_id}/stems/{stem_id}/download")
+async def download_stem_audio(
+    track_id: str,
+    take_id: str,
+    stem_id: str,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    """Download individual stem audio with sanitized RFC 5987 Content-Disposition filename."""
+    take = project_storage_manager.get_take(user["id"], track_id, take_id)
+    if not take or stem_id not in take.stems:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stem not found.")
+    stem = take.stems[stem_id]
+    stem_path = project_storage_manager.get_stem_audio_path(user["id"], track_id, take_id, stem_id)
+    if not stem_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stem audio not found.")
+
+    ascii_name = stem.filename.encode("ascii", "ignore").decode("ascii") or "stem.wav"
+    encoded_name = urllib.parse.quote(stem.filename)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+    }
+    return FileResponse(
+        path=stem_path,
+        media_type=audio_format(stem_path)["mime_type"],
+        headers=headers,
+    )
+
+
+@projects_router.get("/tracks/{track_id}/takes/{take_id}/stems/download-pack")
+async def download_stem_pack(
+    track_id: str,
+    take_id: str,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    """Download all stems for a take packaged in a single ZIP archive."""
+    result = project_storage_manager.get_stem_pack_zip(user["id"], track_id, take_id)
+    if not result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No stems found for this take.")
+
+    zip_filename, zip_bytes = result
+    ascii_name = zip_filename.encode("ascii", "ignore").decode("ascii") or "stems.zip"
+    encoded_name = urllib.parse.quote(zip_filename)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+    }
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers=headers,
+    )
+
+
 # --- Album Workspace Endpoints ---
 
 @projects_router.get("/albums", response_model=List[AlbumMetadata])

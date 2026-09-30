@@ -1,6 +1,7 @@
 """Integration tests for MP3Projects and File Storage REST API endpoints."""
 
 import io
+import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
@@ -243,6 +244,72 @@ def test_stem_upload_and_management(client, auth_cookies):
     )
     assert res.status_code == 200
     assert res.json()["status"] == "deleted"
+
+    # Clean up track
+    client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+
+
+def test_stem_downloads_and_zip_pack(client, auth_cookies):
+    """Test individual stem download and full take stem pack ZIP generation."""
+    res = client.post("/api/projects/tracks", json={"title": "Zip Test Track"}, cookies=auth_cookies)
+    track_id = res.json()["id"]
+
+    res = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        files={"file": ("main_mix.wav", io.BytesIO(VALID_WAV_HEADER), "audio/wav")},
+        data={"label": "Take 1"},
+        cookies=auth_cookies,
+    )
+    take_id = res.json()["id"]
+
+    # Upload Vocals stem
+    res_vox = client.post(
+        f"/api/projects/tracks/{track_id}/takes/{take_id}/stems",
+        files={"file": ("lead_vox.wav", io.BytesIO(VALID_WAV_HEADER), "audio/wav")},
+        data={"role": "lead_vocals"},
+        cookies=auth_cookies,
+    )
+    assert res_vox.status_code == 201
+    vox_id = res_vox.json()["id"]
+
+    # Upload Bass stem
+    res_bass = client.post(
+        f"/api/projects/tracks/{track_id}/takes/{take_id}/stems",
+        files={"file": ("electric_bass.wav", io.BytesIO(VALID_WAV_HEADER), "audio/wav")},
+        data={"role": "bass"},
+        cookies=auth_cookies,
+    )
+    assert res_bass.status_code == 201
+    bass_id = res_bass.json()["id"]
+
+    # Test single stem download
+    res_dl = client.get(
+        f"/api/projects/tracks/{track_id}/takes/{take_id}/stems/{vox_id}/download",
+        cookies=auth_cookies,
+    )
+    assert res_dl.status_code == 200
+    assert "attachment" in res_dl.headers["content-disposition"]
+    assert res_dl.content == VALID_WAV_HEADER
+
+    # Test stem pack ZIP download
+    res_zip = client.get(
+        f"/api/projects/tracks/{track_id}/takes/{take_id}/stems/download-pack",
+        cookies=auth_cookies,
+    )
+    assert res_zip.status_code == 200
+    assert res_zip.headers["content-type"] == "application/zip"
+    assert "stems.zip" in res_zip.headers["content-disposition"]
+
+    # Open and verify ZIP archive contents
+    with zipfile.ZipFile(io.BytesIO(res_zip.content), "r") as zf:
+        namelist = zf.namelist()
+        assert len(namelist) == 2
+        # Check files exist in zip
+        assert any("lead_vocals" in name or "lead_vox" in name for name in namelist)
+        assert any("bass" in name for name in namelist)
+        # Verify content of extracted member
+        for name in namelist:
+            assert zf.read(name) == VALID_WAV_HEADER
 
     # Clean up track
     client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
