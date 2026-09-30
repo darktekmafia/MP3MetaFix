@@ -33,6 +33,7 @@ Historical release entries describe what was recorded at the time. Security comp
 - **Project Vision & Long-Term Direction (`VISION.md`)**: Established the permanent open-source foundational governance commitment, defined core engineering principles (non-destructive tagging, security by design), documented current capabilities, articulated the long-term API-first architectural foundation, and outlined the vision evolution model.
 - **Governance & Development Transparency (`GOVERNANCE.md`)**: Disclosed the solo founder stewardship and AI/LLM-assisted implementation model, multi-layered verification and engineering rigor, equal contributor voice, mature proposal docket lifecycle, and cataloged open governance design questions (succession, voting rules, quorum) as explicitly TBD.
 - **Roadmap Governance Track (`ROADMAP.md`)**: Added dedicated milestones for formal initial vision specification, community governance transition planning, proposal docket tooling, and release-candidate branch integration.
+- **Self-Contained Workspace Section Architecture Rule (`AGENTS.md`, `docs/development_workflow.md`)**: Formalized Rule 10 requiring that each workspace section (`/app`, `/manager`, `/projects`) house its own features and workflows in-place, prohibiting cross-section redirects that fragment user focus and interrupt production workflows.
 - **MP3MetaProjects Studio Guide (`docs/projects/README.md`)**: Documented multi-take workflows, separated stems, album release sequencing, POSIX `0700` isolation, and RESTful project APIs.
 
 ## [0.5.3] - 2026-09-25
