@@ -95,6 +95,7 @@
       try {
         const qRes = await fetch('/api/storage/quota');
         if (qRes.ok) {
+          const qData = await qRes.json();
           const usedBytes = qData.used_bytes || 0;
           const limitBytes = qData.max_quota_bytes || qData.limit_bytes || 0;
           const usedMb = qData.used_mb !== undefined ? qData.used_mb.toFixed(1) : (usedBytes / (1024 * 1024)).toFixed(1);
