@@ -3601,21 +3601,17 @@ button {
 }
 
 @media (max-width: 768px) {
-  .app-container {
-    padding: 0.75rem 0.75rem 2.5rem;
-    box-sizing: border-box;
-    width: 100%;
-    max-width: 100%;
-    overflow-x: hidden;
-  }
-  .app-body .app-container {
+  .app-container,
+  .manager-container,
+  .hub-container,
+  .admin-container {
     padding: 0.65rem 0.75rem 2.5rem;
     box-sizing: border-box;
     width: 100%;
     max-width: 100%;
     overflow-x: hidden;
   }
-  .app-body .app-header {
+  .app-header {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
@@ -3627,44 +3623,24 @@ button {
     box-sizing: border-box;
     width: 100%;
   }
-  .app-body .app-switcher-nav {
+  .app-switcher-nav {
     display: none !important;
   }
-  .app-body .header-auth-container {
-    display: none;
+  .header-auth-container {
+    display: none !important;
   }
-  .app-body .mobile-nav-toggle {
+  .mobile-nav-toggle {
     display: inline-flex;
   }
-  .app-body .header-badges {
+  .header-badges {
     display: flex;
     align-items: center;
     gap: 0.35rem;
     margin-left: auto;
     flex-shrink: 0;
   }
-  .app-header {
-    flex-wrap: wrap;
-    gap: 0.65rem;
-    padding: 0.75rem 0.85rem;
-    margin-bottom: 1.25rem;
-    box-sizing: border-box;
-    width: 100%;
-  }
-  .app-switcher-nav {
-    order: 3;
-    width: 100%;
-    justify-content: center;
-  }
-  .app-switcher-pill {
-    width: 100%;
-    justify-content: space-around;
-  }
-  .switcher-link {
-    flex: 1;
-    justify-content: center;
-    padding: 0.35rem 0.5rem;
-    font-size: 0.78rem;
+  .header-badges .pill-coming-soon {
+    display: none !important;
   }
   .hub-apps-grid {
     grid-template-columns: 1fr;
@@ -4005,70 +3981,39 @@ button {
 }
 
 @media (max-width: 480px) {
-  .app-container {
+  .app-container,
+  .manager-container,
+  .hub-container,
+  .admin-container {
     padding: 0.5rem 0.5rem 1.75rem;
     box-sizing: border-box;
     width: 100%;
     max-width: 100%;
     overflow-x: hidden;
   }
-  .hub-container {
-    padding: 0.65rem 0.65rem 1.75rem;
-    box-sizing: border-box;
-    width: 100%;
-    max-width: 100%;
-  }
-  .app-body .app-header {
+  .app-header {
     padding: 0.5rem 0.65rem;
     box-sizing: border-box;
     width: 100%;
     gap: 0.35rem;
   }
-  .app-body .brand-group {
+  .app-header .brand-subtitle {
+    display: none !important;
+  }
+  .brand-group {
     gap: 0.45rem;
     min-width: 0;
     flex-shrink: 1;
   }
-  .app-body .brand-logo-container img {
+  .brand-logo-container img {
     width: 28px;
     height: 28px;
   }
-  .app-body .brand-title {
+  .brand-title {
     font-size: 1.12rem;
     white-space: nowrap;
-  }
-  .app-body .header-badges {
-    gap: 0.25rem;
-    flex-shrink: 0;
-  }
-  .app-body .badge {
-    font-size: 0.62rem;
-    padding: 0.15rem 0.35rem;
-  }
-  .app-body .mobile-nav-toggle {
-    width: 36px;
-    height: 36px;
-    min-width: 36px;
-    min-height: 36px;
-  }
-  .app-header {
-    padding: 0.55rem 0.65rem;
-    box-sizing: border-box;
-    width: 100%;
-  }
-  .app-header .brand-subtitle {
-    display: none;
-  }
-  .brand-group {
-    gap: 0.5rem;
-    min-width: 0;
-  }
-  .brand-logo-container img {
-    width: 30px;
-    height: 30px;
-  }
-  .brand-title {
-    font-size: 1.15rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .sub-full {
     display: none;
@@ -4078,11 +4023,17 @@ button {
   }
   .header-badges {
     gap: 0.25rem;
-    min-width: 0;
+    flex-shrink: 0;
   }
   .badge {
-    font-size: 0.65rem;
-    padding: 0.15rem 0.4rem;
+    font-size: 0.62rem;
+    padding: 0.15rem 0.35rem;
+  }
+  .mobile-nav-toggle {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
   }
   .hub-hero-title {
     font-size: 1.35rem;
@@ -4219,8 +4170,8 @@ button {
 }
 
 @media (max-width: 360px) {
-  .app-body .badge-version {
-    display: none;
+  .badge-version {
+    display: none !important;
   }
   .telemetry-grid {
     grid-template-columns: 1fr;
