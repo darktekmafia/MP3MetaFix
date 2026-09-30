@@ -306,7 +306,7 @@ class ProjectStorageManager:
                 changed_fields.append(k)
                 data[k] = v
 
-        if changed_fields:
+        if changed_fields or summary_text:
             new_rev = int(data.get("revision", 1)) + 1
             data["revision"] = new_rev
             summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
@@ -316,7 +316,7 @@ class ProjectStorageManager:
                 "revision": new_rev,
                 "timestamp": time.time(),
                 "change_summary": summary,
-                "changed_fields": changed_fields,
+                "changed_fields": changed_fields if changed_fields else ["metadata"],
             })
 
         data["updated_at"] = time.time()
@@ -422,8 +422,16 @@ class ProjectStorageManager:
             atomic_json(manifest_path, take_meta.model_dump())
 
         # If marked as master or if this is the first take, update track's primary_take_id
-        if is_master or track.primary_take_id is None:
-            self.update_track(user_id, track_id, {"primary_take_id": take_id})
+        if track.primary_take_id is None:
+            track_manifest = self._get_track_dir(user_id, track_id) / "track.json"
+            if track_manifest.is_file():
+                tdata = track.model_dump()
+                tdata["primary_take_id"] = take_id
+                tdata["updated_at"] = time.time()
+                with file_lock(track_manifest):
+                    atomic_json(track_manifest, tdata)
+        elif is_master:
+            self.update_track(user_id, track_id, {"primary_take_id": take_id}, change_summary=f"Set master take to {take_meta.label}")
 
         return take_meta
 
@@ -498,7 +506,7 @@ class ProjectStorageManager:
                 changed_fields.append(k)
                 data[k] = v
 
-        if changed_fields:
+        if changed_fields or summary_text:
             new_rev = int(data.get("revision", 1)) + 1
             data["revision"] = new_rev
             summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
@@ -508,7 +516,7 @@ class ProjectStorageManager:
                 "revision": new_rev,
                 "timestamp": time.time(),
                 "change_summary": summary,
-                "changed_fields": changed_fields,
+                "changed_fields": changed_fields if changed_fields else ["metadata"],
             })
 
         data["updated_at"] = time.time()
@@ -542,8 +550,9 @@ class ProjectStorageManager:
         label: Optional[str] = None,
         notes: Optional[str] = None,
         is_master: Optional[bool] = None,
+        change_summary: Optional[str] = None,
     ) -> TakeMetadata:
-        """Update an existing take's audio file and metadata in place."""
+        """Update an existing take's audio file and metadata in place with revision tracking."""
         take = self.get_take(user_id, track_id, take_id)
         if not take:
             raise ValueError(f"Take {take_id} not found in track {track_id}")
@@ -599,11 +608,12 @@ class ProjectStorageManager:
         data["revision"] = new_rev
         if "revisions" not in data or not isinstance(data["revisions"], list):
             data["revisions"] = []
+        summary = change_summary or (notes if notes else "Updated take audio in place")
         data["revisions"].append({
             "revision": new_rev,
             "timestamp": time.time(),
-            "change_summary": "Updated take audio in place",
-            "changed_fields": ["audio"],
+            "change_summary": summary,
+            "changed_fields": ["audio"] if not notes else ["audio", "notes"],
         })
         data["updated_at"] = time.time()
 
@@ -962,7 +972,7 @@ class ProjectStorageManager:
                     for i, tid in enumerate(updates["track_ids"])
                 ]
 
-        if changed_fields:
+        if changed_fields or summary_text:
             new_rev = int(data.get("revision", 1)) + 1
             data["revision"] = new_rev
             summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
@@ -972,7 +982,7 @@ class ProjectStorageManager:
                 "revision": new_rev,
                 "timestamp": time.time(),
                 "change_summary": summary,
-                "changed_fields": changed_fields,
+                "changed_fields": changed_fields if changed_fields else ["metadata"],
             })
 
         data["updated_at"] = time.time()

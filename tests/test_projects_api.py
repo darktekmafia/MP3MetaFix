@@ -641,3 +641,57 @@ def test_revision_tracking_api(client, auth_cookies):
     client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
     client.delete(f"/api/projects/albums/{album_id}", cookies=auth_cookies)
 
+
+def test_ingest_session_updates_track_revision(client, auth_cookies):
+    """Verify that updating a take from the editor increments both the take and track revisions."""
+    # Create Track
+    res = client.post("/api/projects/tracks", json={"title": "Ingest Rev Track"}, cookies=auth_cookies)
+    assert res.status_code == 201
+    track_id = res.json()["id"]
+
+    # Upload Take
+    files = {"file": ("song.mp3", io.BytesIO(VALID_MP3_HEADER), "audio/mpeg")}
+    res = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        files=files,
+        data={"label": "Take 1"},
+        cookies=auth_cookies,
+    )
+    take_id = res.json()["id"]
+
+    # Load take into session
+    res_load = client.post(
+        f"/api/projects/tracks/{track_id}/takes/{take_id}/load-session",
+        cookies=auth_cookies,
+    )
+    session_cookie = res_load.cookies[SESSION_COOKIE_NAME]
+
+    # Ingest session with Update Take mode and revision notes
+    res_ingest = client.post(
+        "/api/projects/ingest-session",
+        json={
+            "track_id": track_id,
+            "take_id": take_id,
+            "take_label": "Take 1 (Revised)",
+            "notes": "Added track and disc information",
+            "is_master": True,
+        },
+        cookies={SESSION_COOKIE_NAME: session_cookie, **auth_cookies},
+    )
+    assert res_ingest.status_code == 201
+    updated_take = res_ingest.json()
+    assert updated_take["revision"] == 2
+    assert updated_take["revisions"][-1]["change_summary"] == "Added track and disc information"
+
+    # Verify that the parent track's revision was also incremented
+    res_track = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+    assert res_track.status_code == 200
+    track_data = res_track.json()["track"]
+    assert track_data["revision"] == 2
+    assert len(track_data["revisions"]) == 2
+    assert track_data["revisions"][-1]["change_summary"] == "Added track and disc information"
+
+    # Clean up
+    client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+
+

@@ -689,6 +689,23 @@ async def ingest_session(
     ext = audio_path.suffix.lower()
     original_filename = session_info.get("original_filename", f"track{ext}")
 
+    # Extract normalized tags from updated audio file
+    tags = {}
+    try:
+        from backend.metadata_engine import extract_metadata_and_artwork
+        meta = extract_metadata_and_artwork(audio_path)
+        tags = meta.get("tags", {})
+    except Exception:
+        pass
+
+    key_tag = tags.get("initial_key") or tags.get("key")
+    bpm_val = None
+    if tags.get("bpm"):
+        try:
+            bpm_val = int(float(str(tags["bpm"]).strip()))
+        except (ValueError, TypeError):
+            bpm_val = None
+
     # Case 1: Update existing take in place
     if payload.track_id and payload.take_id:
         existing_track = project_storage_manager.get_track(user["id"], payload.track_id)
@@ -708,7 +725,34 @@ async def ingest_session(
                 label=payload.take_label or existing_take.label,
                 notes=payload.notes if payload.notes is not None else existing_take.notes,
                 is_master=payload.is_master,
+                change_summary=payload.notes,
             )
+
+            # Synchronize parent track workspace tags and increment revision
+            track_updates = {}
+            if tags.get("title") and tags.get("title") != existing_track.title:
+                track_updates["title"] = tags.get("title")
+            if tags.get("artist") and tags.get("artist") != existing_track.artist:
+                track_updates["artist"] = tags.get("artist")
+            if bpm_val is not None and bpm_val != existing_track.bpm:
+                track_updates["bpm"] = bpm_val
+            if key_tag and key_tag != existing_track.musical_key:
+                track_updates["musical_key"] = key_tag
+            if tags.get("lyrics") and tags.get("lyrics") != existing_track.master_lyrics:
+                track_updates["master_lyrics"] = tags.get("lyrics")
+            if payload.notes and payload.notes != existing_track.notes:
+                track_updates["notes"] = payload.notes
+            if payload.is_master:
+                track_updates["primary_take_id"] = payload.take_id
+
+            summary = payload.notes or f"Updated {take.label}"
+            project_storage_manager.update_track(
+                user_id=user["id"],
+                track_id=payload.track_id,
+                updates=track_updates,
+                change_summary=summary,
+            )
+
             return take
         except ProjectStorageQuotaExceeded as e:
             raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
@@ -716,12 +760,17 @@ async def ingest_session(
     # Case 2 & 3: Add new take to existing track or create new track
     target_track_id = payload.track_id
     if not target_track_id:
-        title = payload.new_track_title or Path(original_filename).stem
+        title = payload.new_track_title or tags.get("title") or Path(original_filename).stem
+        artist = tags.get("artist")
         new_track = project_storage_manager.create_track(
             user_id=user["id"],
             title=title,
+            artist=artist,
             status=WorkspaceStatus.IN_PROGRESS,
             notes=payload.notes,
+            bpm=bpm_val,
+            musical_key=key_tag,
+            master_lyrics=tags.get("lyrics"),
         )
         target_track_id = new_track.id
     else:
@@ -740,6 +789,31 @@ async def ingest_session(
             notes=payload.notes,
             is_master=payload.is_master,
         )
+
+        if payload.track_id:
+            # Sync parent track workspace metadata
+            track_updates = {}
+            if tags.get("title") and tags.get("title") != existing_track.title:
+                track_updates["title"] = tags.get("title")
+            if tags.get("artist") and tags.get("artist") != existing_track.artist:
+                track_updates["artist"] = tags.get("artist")
+            if bpm_val is not None and bpm_val != existing_track.bpm:
+                track_updates["bpm"] = bpm_val
+            if key_tag and key_tag != existing_track.musical_key:
+                track_updates["musical_key"] = key_tag
+            if tags.get("lyrics") and tags.get("lyrics") != existing_track.master_lyrics:
+                track_updates["master_lyrics"] = tags.get("lyrics")
+            if payload.is_master:
+                track_updates["primary_take_id"] = take.id
+
+            summary = payload.notes or f"Added take: {take.label}"
+            project_storage_manager.update_track(
+                user_id=user["id"],
+                track_id=target_track_id,
+                updates=track_updates,
+                change_summary=summary,
+            )
+
         return take
     except ProjectStorageQuotaExceeded as e:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
