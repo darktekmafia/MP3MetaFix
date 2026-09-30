@@ -877,7 +877,10 @@
             </svg>
           </div>
           <div>
-            <h2 id="modalAlbumDetailTitle" class="modal-title">Album Sequencer & Master Credits</h2>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <h2 id="modalAlbumDetailTitle" class="modal-title">Album Sequencer & Master Credits</h2>
+              <span id="albumDetailRevisionPill" class="revision-pill">Rev 1</span>
+            </div>
             <p class="modal-subtitle">Sequence tracks, upload master artwork, and configure metadata</p>
           </div>
         </div>
@@ -959,6 +962,19 @@
                 <!-- Injected dynamically with safe DOM nodes -->
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- Revision History Section -->
+        <div id="albumRevisionContainer" class="revision-history-container hidden">
+          <div class="revision-history-header">
+            <div class="revision-history-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+              <span>Revision History</span>
+            </div>
+          </div>
+          <div id="albumRevisionList" class="revision-history-list">
+            <!-- Dynamically populated with safe textContent -->
           </div>
         </div>
 

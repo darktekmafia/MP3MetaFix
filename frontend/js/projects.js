@@ -92,6 +92,9 @@
     dom.formNewAlbum = document.getElementById('formNewAlbum');
     dom.modalAlbumDetail = document.getElementById('modalAlbumDetail');
     dom.albumDetailId = document.getElementById('albumDetailId');
+    dom.albumDetailRevisionPill = document.getElementById('albumDetailRevisionPill');
+    dom.albumRevisionContainer = document.getElementById('albumRevisionContainer');
+    dom.albumRevisionList = document.getElementById('albumRevisionList');
     dom.albumDetailArtwork = document.getElementById('albumDetailArtwork');
     dom.albumDetailPlaceholder = document.getElementById('albumDetailPlaceholder');
     dom.inputAlbumCoverFile = document.getElementById('inputAlbumCoverFile');
@@ -270,6 +273,11 @@
     titleEl.textContent = track.title || 'Untitled Track';
     titleRow.appendChild(titleEl);
 
+    const revBadge = document.createElement('span');
+    revBadge.className = 'revision-pill';
+    revBadge.textContent = `Rev ${track.revision || 1}`;
+    titleRow.appendChild(revBadge);
+
     const statusBadge = document.createElement('span');
     statusBadge.className = `status-pill status-${track.status || 'draft'}`;
     statusBadge.textContent = (track.status || 'draft').replace('_', ' ').toUpperCase();
@@ -411,6 +419,11 @@
     labelEl.className = 'take-label';
     labelEl.textContent = take.label || 'Take';
     titleGroup.appendChild(labelEl);
+
+    const takeRevBadge = document.createElement('span');
+    takeRevBadge.className = 'revision-pill';
+    takeRevBadge.textContent = `Rev ${take.revision || 1}`;
+    titleGroup.appendChild(takeRevBadge);
 
     if (take.is_master) {
       const masterBadge = document.createElement('span');
@@ -599,6 +612,11 @@
     titleEl.textContent = album.title || 'Untitled Album';
     titleRow.appendChild(titleEl);
 
+    const revBadge = document.createElement('span');
+    revBadge.className = 'revision-pill';
+    revBadge.textContent = `Rev ${album.revision || 1}`;
+    titleRow.appendChild(revBadge);
+
     const statusBadge = document.createElement('span');
     statusBadge.className = `status-pill status-${album.status || 'draft'}`;
     statusBadge.textContent = (album.status || 'draft').replace('_', ' ').toUpperCase();
@@ -696,6 +714,9 @@
       }
 
       dom.albumDetailId.value = album.id;
+      if (dom.albumDetailRevisionPill) {
+        dom.albumDetailRevisionPill.textContent = `Rev ${album.revision || 1}`;
+      }
       dom.editAlbumTitle.value = album.title || '';
       dom.editAlbumArtist.value = album.album_artist || '';
       dom.editAlbumYear.value = album.year || '';
@@ -711,6 +732,42 @@
         dom.albumDetailArtwork.src = '';
         dom.albumDetailArtwork.classList.add('hidden');
         dom.albumDetailPlaceholder.classList.remove('hidden');
+      }
+
+      // Render Revision History
+      if (dom.albumRevisionContainer && dom.albumRevisionList) {
+        dom.albumRevisionList.innerHTML = '';
+        const revs = Array.isArray(album.revisions) ? album.revisions : [];
+        if (revs.length > 0) {
+          dom.albumRevisionContainer.classList.remove('hidden');
+          // Show newest revisions first
+          [...revs].reverse().forEach(r => {
+            const item = document.createElement('div');
+            item.className = 'revision-history-item';
+
+            const badge = document.createElement('span');
+            badge.className = 'revision-pill';
+            badge.textContent = `Rev ${r.revision}`;
+            item.appendChild(badge);
+
+            const summary = document.createElement('span');
+            summary.className = 'revision-history-summary';
+            summary.textContent = r.change_summary || 'Updated album';
+            item.appendChild(summary);
+
+            const dateSpan = document.createElement('span');
+            dateSpan.className = 'revision-history-date';
+            if (r.timestamp) {
+              const d = new Date(r.timestamp * 1000);
+              dateSpan.textContent = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            }
+            item.appendChild(dateSpan);
+
+            dom.albumRevisionList.appendChild(item);
+          });
+        } else {
+          dom.albumRevisionContainer.classList.add('hidden');
+        }
       }
 
       renderSequencerTable(state.activeAlbum);

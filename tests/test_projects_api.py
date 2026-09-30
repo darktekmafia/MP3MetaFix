@@ -594,3 +594,50 @@ def test_album_tracklist_sequencing_and_synchronization(client, auth_cookies):
     assert ids_data["tracks"][0]["track_number"] == 1
     assert ids_data["tracks"][1]["track_id"] == trk1_id
     assert ids_data["tracks"][1]["track_number"] == 2
+
+
+def test_revision_tracking_api(client, auth_cookies):
+    """Test revision incrementing and revision history over REST endpoints."""
+    # 1. Create Track
+    res = client.post("/api/projects/tracks", json={"title": "Rev Track API"}, cookies=auth_cookies)
+    assert res.status_code == 201
+    track = res.json()
+    track_id = track["id"]
+    assert track["revision"] == 1
+    assert len(track["revisions"]) == 1
+
+    # 2. Patch Track with change summary
+    patch_res = client.patch(
+        f"/api/projects/tracks/{track_id}",
+        json={"title": "Rev Track API v2", "bpm": 128, "change_summary": "Adjusted tempo and title"},
+        cookies=auth_cookies,
+    )
+    assert patch_res.status_code == 200
+    patched_track = patch_res.json()
+    assert patched_track["revision"] == 2
+    assert len(patched_track["revisions"]) == 2
+    assert patched_track["revisions"][1]["change_summary"] == "Adjusted tempo and title"
+    assert "bpm" in patched_track["revisions"][1]["changed_fields"]
+
+    # 3. Create Album and test revision
+    alb_res = client.post("/api/projects/albums", json={"title": "Rev Album API"}, cookies=auth_cookies)
+    assert alb_res.status_code == 201
+    album = alb_res.json()
+    album_id = album["id"]
+    assert album["revision"] == 1
+
+    alb_patch = client.patch(
+        f"/api/projects/albums/{album_id}",
+        json={"genre": "Ambient", "year": 2026, "change_summary": "Added genre and release year"},
+        cookies=auth_cookies,
+    )
+    assert alb_patch.status_code == 200
+    patched_alb = alb_patch.json()
+    assert patched_alb["revision"] == 2
+    assert len(patched_alb["revisions"]) == 2
+    assert patched_alb["revisions"][1]["change_summary"] == "Added genre and release year"
+
+    # Clean up
+    client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+    client.delete(f"/api/projects/albums/{album_id}", cookies=auth_cookies)
+

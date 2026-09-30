@@ -381,3 +381,82 @@ def test_quota_stats_and_overflow_protection(custom_storage, monkeypatch):
             audio_bytes=b"Y" * 600,
             original_filename="overflow.mp3",
         )
+
+
+def test_track_and_take_revision_tracking(custom_storage):
+    """Verify revision tracking on track metadata and take metadata updates."""
+    user_id = "rev_user_1"
+    track = custom_storage.create_track(user_id=user_id, title="Initial Title", artist="Initial Artist")
+    assert track.revision == 1
+    assert len(track.revisions) == 1
+    assert track.revisions[0].revision == 1
+    assert track.revisions[0].change_summary == "Initial track workspace creation"
+
+    # Update track title and notes
+    updated = custom_storage.update_track(
+        user_id,
+        track.id,
+        {"title": "Revised Title", "notes": "Added notes"},
+        change_summary="Updated title and added production notes",
+    )
+    assert updated.revision == 2
+    assert len(updated.revisions) == 2
+    assert updated.revisions[1].revision == 2
+    assert updated.revisions[1].change_summary == "Updated title and added production notes"
+    assert set(updated.revisions[1].changed_fields) == {"title", "notes"}
+
+    # No-op update should not bump revision
+    noop = custom_storage.update_track(user_id, track.id, {"title": "Revised Title"})
+    assert noop.revision == 2
+    assert len(noop.revisions) == 2
+
+    # Create Take
+    take = custom_storage.create_take(
+        user_id=user_id,
+        track_id=track.id,
+        audio_bytes=b"DUMMY_AUDIO_DATA_FOR_TAKE_REV",
+        original_filename="take1.mp3",
+        label="Take 1",
+    )
+    assert take.revision == 1
+    assert len(take.revisions) == 1
+
+    # Update Take metadata without replacing audio
+    updated_take = custom_storage.update_take(
+        user_id,
+        track.id,
+        take.id,
+        {"label": "Take 1 (Master Mix)", "style_tags": "synthwave, cyberpunk"},
+    )
+    assert updated_take.revision == 2
+    assert len(updated_take.revisions) == 2
+    assert updated_take.revisions[1].revision == 2
+    assert set(updated_take.revisions[1].changed_fields) == {"label", "style_tags"}
+
+
+def test_album_revision_tracking(custom_storage):
+    """Verify revision tracking on album metadata, artwork, and sequencing."""
+    user_id = "rev_user_album"
+    album = custom_storage.create_album(user_id=user_id, title="Album Rev 1", album_artist="Artist 1")
+    assert album.revision == 1
+    assert len(album.revisions) == 1
+
+    # Update album metadata
+    updated_album = custom_storage.update_album(
+        user_id,
+        album.id,
+        {"year": 2026, "genre": "Electronic"},
+        change_summary="Added release year and genre",
+    )
+    assert updated_album.revision == 2
+    assert len(updated_album.revisions) == 2
+    assert updated_album.revisions[1].change_summary == "Added release year and genre"
+
+    # Upload cover art bumps revision
+    custom_storage.save_album_cover(user_id, album.id, b"FAKE_JPEG_IMAGE_BYTES", extension=".jpg")
+    refetched = custom_storage.get_album(user_id, album.id)
+    assert refetched.revision == 3
+    assert len(refetched.revisions) == 3
+    assert refetched.revisions[2].change_summary == "Updated album cover artwork"
+    assert refetched.revisions[2].changed_fields == ["cover_art"]
+

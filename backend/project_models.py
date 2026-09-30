@@ -27,6 +27,15 @@ class LyricsFormat(str, Enum):
     SYLT = "sylt"
 
 
+# --- Revision Tracking Model ---
+
+class RevisionEntry(BaseModel):
+    revision: int = Field(..., ge=1)
+    timestamp: float = Field(default_factory=time.time)
+    change_summary: str = Field(..., max_length=500)
+    changed_fields: List[str] = Field(default_factory=list)
+
+
 # --- Stem Models ---
 
 class StemMetadata(BaseModel):
@@ -48,6 +57,8 @@ class TakeMetadata(BaseModel):
     size_bytes: int = Field(default=0, ge=0)
     duration_seconds: float = Field(default=0.0, ge=0.0)
     is_master: bool = Field(default=False)
+    revision: int = Field(default=1, ge=1)
+    revisions: List[RevisionEntry] = Field(default_factory=list)
     prompt: Optional[str] = Field(default=None, max_length=5000)
     style_tags: Optional[str] = Field(default=None, max_length=500)
     seed: Optional[str] = Field(default=None, max_length=100)
@@ -74,6 +85,7 @@ class TakeUpdateRequest(BaseModel):
     seed: Optional[str] = Field(default=None, max_length=100)
     notes: Optional[str] = Field(default=None, max_length=10000)
     is_master: Optional[bool] = Field(default=None)
+    change_summary: Optional[str] = Field(default=None, max_length=500)
 
 
 # --- Track Workspace Models ---
@@ -83,6 +95,8 @@ class TrackMetadata(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     artist: Optional[str] = Field(default=None, max_length=200)
     status: WorkspaceStatus = Field(default=WorkspaceStatus.DRAFT)
+    revision: int = Field(default=1, ge=1)
+    revisions: List[RevisionEntry] = Field(default_factory=list)
     primary_take_id: Optional[str] = Field(default=None, max_length=40)
     master_lyrics: Optional[str] = Field(default=None, max_length=50000)
     notes: Optional[str] = Field(default=None, max_length=10000)
@@ -112,6 +126,7 @@ class TrackUpdateRequest(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=10000)
     bpm: Optional[int] = Field(default=None, ge=1, le=500)
     musical_key: Optional[str] = Field(default=None, max_length=20)
+    change_summary: Optional[str] = Field(default=None, max_length=500)
 
 
 class TrackDetailResponse(BaseModel):
@@ -137,6 +152,8 @@ class AlbumMetadata(BaseModel):
     genre: Optional[str] = Field(default=None, max_length=100)
     credits: Optional[str] = Field(default=None, max_length=10000)
     status: WorkspaceStatus = Field(default=WorkspaceStatus.DRAFT)
+    revision: int = Field(default=1, ge=1)
+    revisions: List[RevisionEntry] = Field(default_factory=list)
     has_cover: bool = Field(default=False)
     tracks: List[AlbumTrackEntry] = Field(default_factory=list)
     track_ids: List[str] = Field(default_factory=list)
@@ -171,6 +188,7 @@ class AlbumUpdateRequest(BaseModel):
     status: Optional[WorkspaceStatus] = Field(default=None)
     tracks: Optional[List[AlbumTrackEntry]] = Field(default=None)
     track_ids: Optional[List[str]] = Field(default=None)
+    change_summary: Optional[str] = Field(default=None, max_length=500)
 
     def model_post_init(self, __context: Any) -> None:
         if self.tracks is None and self.track_ids is not None:

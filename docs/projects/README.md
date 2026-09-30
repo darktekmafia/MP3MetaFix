@@ -24,7 +24,11 @@ Unlike single-track quick tagging (`/app`) or directory batch management (`/mana
    - Interactive tracklist sequencer: add tracks from workspaces, reorder positions (`▲ Up` / `▼ Down`), and configure disc assignments.
    - Release metadata (Album Artist, Year, Genre, Catalog Number, Credits & Liner Notes).
 
-4. **Two-Way Editor Ingestion & Promotion**:
+4. **Revision Tracking vs. Takes**:
+   - **Takes**: Reserved strictly for actual audio changes (recording takes, tempo alterations, stem replacements, alternate mixes/masters).
+   - **Revisions**: Non-audio changes (artwork replacements, tag and title modifications, credits updates, musical key/BPM adjustments, synchronized lyrics edits, or album tracklist re-sequencing) are tracked as **revisions** (`Rev 1`, `Rev 2`, etc.) with timestamped changelogs rather than duplicating audio files as new takes.
+
+5. **Two-Way Editor Ingestion & Promotion**:
    - Save directly from single-track editor sessions (`/app` and `/manager`) into any track workspace via `POST /api/projects/ingest-session`.
    - Promote any stored take into an active editor session with one click (`POST /api/projects/tracks/{id}/takes/{id}/load-session`).
 

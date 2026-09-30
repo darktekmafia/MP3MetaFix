@@ -34,6 +34,7 @@ from backend.project_models import (
     WorkspaceStatus,
     StemRole,
     LyricsFormat,
+    RevisionEntry,
     StemMetadata,
     TakeMetadata,
     TrackMetadata,
@@ -195,6 +196,15 @@ class ProjectStorageManager:
             title=title.strip(),
             artist=artist.strip() if artist else None,
             status=status,
+            revision=1,
+            revisions=[
+                RevisionEntry(
+                    revision=1,
+                    timestamp=now,
+                    change_summary="Initial track workspace creation",
+                    changed_fields=[],
+                )
+            ],
             primary_take_id=None,
             master_lyrics=master_lyrics,
             notes=notes,
@@ -276,8 +286,9 @@ class ProjectStorageManager:
         user_id: str,
         track_id: str,
         updates: Dict[str, Any],
+        change_summary: Optional[str] = None,
     ) -> Optional[TrackMetadata]:
-        """Update fields in track workspace manifest."""
+        """Update fields in track workspace manifest with revision history."""
         track = self.get_track(user_id, track_id)
         if not track:
             return None
@@ -286,9 +297,28 @@ class ProjectStorageManager:
         manifest_path = track_dir / "track.json"
 
         data = track.model_dump()
+        summary_text = updates.pop("change_summary", None) or change_summary
+
+        ignored_fields = ("id", "created_at", "takes_count", "revisions", "revision", "updated_at")
+        changed_fields = []
         for k, v in updates.items():
-            if v is not None and k in data and k not in ("id", "created_at", "takes_count"):
+            if v is not None and k in data and k not in ignored_fields and data.get(k) != v:
+                changed_fields.append(k)
                 data[k] = v
+
+        if changed_fields:
+            new_rev = int(data.get("revision", 1)) + 1
+            data["revision"] = new_rev
+            summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
+            if "revisions" not in data or not isinstance(data["revisions"], list):
+                data["revisions"] = []
+            data["revisions"].append({
+                "revision": new_rev,
+                "timestamp": time.time(),
+                "change_summary": summary,
+                "changed_fields": changed_fields,
+            })
+
         data["updated_at"] = time.time()
 
         with file_lock(manifest_path):
@@ -368,6 +398,15 @@ class ProjectStorageManager:
             size_bytes=len(audio_bytes),
             duration_seconds=duration_seconds,
             is_master=is_master,
+            revision=1,
+            revisions=[
+                RevisionEntry(
+                    revision=1,
+                    timestamp=now,
+                    change_summary="Initial take audio creation",
+                    changed_fields=[],
+                )
+            ],
             prompt=prompt,
             style_tags=style_tags,
             seed=seed,
@@ -439,8 +478,9 @@ class ProjectStorageManager:
         track_id: str,
         take_id: str,
         updates: Dict[str, Any],
+        change_summary: Optional[str] = None,
     ) -> Optional[TakeMetadata]:
-        """Update take metadata (label, prompt, notes, is_master)."""
+        """Update take metadata (label, prompt, notes, is_master) with revision tracking."""
         take = self.get_take(user_id, track_id, take_id)
         if not take:
             return None
@@ -449,9 +489,28 @@ class ProjectStorageManager:
         manifest_path = take_dir / "take.json"
 
         data = take.model_dump()
+        summary_text = updates.pop("change_summary", None) or change_summary
+
+        ignored_fields = ("id", "created_at", "filename", "format", "size_bytes", "revisions", "revision", "updated_at", "stems")
+        changed_fields = []
         for k, v in updates.items():
-            if v is not None and k in data and k not in ("id", "created_at", "filename", "format", "size_bytes"):
+            if v is not None and k in data and k not in ignored_fields and data.get(k) != v:
+                changed_fields.append(k)
                 data[k] = v
+
+        if changed_fields:
+            new_rev = int(data.get("revision", 1)) + 1
+            data["revision"] = new_rev
+            summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
+            if "revisions" not in data or not isinstance(data["revisions"], list):
+                data["revisions"] = []
+            data["revisions"].append({
+                "revision": new_rev,
+                "timestamp": time.time(),
+                "change_summary": summary,
+                "changed_fields": changed_fields,
+            })
+
         data["updated_at"] = time.time()
 
         with file_lock(manifest_path):
@@ -535,6 +594,17 @@ class ProjectStorageManager:
             data["notes"] = notes
         if is_master is not None:
             data["is_master"] = is_master
+
+        new_rev = int(data.get("revision", 1)) + 1
+        data["revision"] = new_rev
+        if "revisions" not in data or not isinstance(data["revisions"], list):
+            data["revisions"] = []
+        data["revisions"].append({
+            "revision": new_rev,
+            "timestamp": time.time(),
+            "change_summary": "Updated take audio in place",
+            "changed_fields": ["audio"],
+        })
         data["updated_at"] = time.time()
 
         manifest_path = take_dir / "take.json"
@@ -772,6 +842,15 @@ class ProjectStorageManager:
             genre=genre.strip() if genre else None,
             credits=credits,
             status=status,
+            revision=1,
+            revisions=[
+                RevisionEntry(
+                    revision=1,
+                    timestamp=now,
+                    change_summary="Initial album creation",
+                    changed_fields=[],
+                )
+            ],
             has_cover=False,
             tracks=[],
             created_at=now,
@@ -834,8 +913,9 @@ class ProjectStorageManager:
         user_id: str,
         album_id: str,
         updates: Dict[str, Any],
+        change_summary: Optional[str] = None,
     ) -> Optional[AlbumMetadata]:
-        """Update album info or sequenced tracklist."""
+        """Update album info or sequenced tracklist with revision tracking."""
         album = self.get_album(user_id, album_id)
         if not album:
             return None
@@ -844,9 +924,14 @@ class ProjectStorageManager:
         manifest_path = album_dir / "album.json"
 
         data = album.model_dump()
+        summary_text = updates.pop("change_summary", None) or change_summary
+        changed_fields = []
+
         for k, v in updates.items():
-            if v is not None and k not in ("id", "created_at", "has_cover"):
-                data[k] = v
+            if v is not None and k not in ("id", "created_at", "has_cover", "revisions", "revision", "updated_at", "tracks", "track_ids"):
+                if data.get(k) != v:
+                    changed_fields.append(k)
+                    data[k] = v
 
         # Normalize tracks if tracks or track_ids updated
         if "tracks" in updates and updates["tracks"] is not None:
@@ -863,14 +948,32 @@ class ProjectStorageManager:
                     })
                 elif hasattr(item, "model_dump"):
                     norm_tracks.append(item.model_dump())
-            data["tracks"] = norm_tracks
-            data["track_ids"] = [t["track_id"] for t in norm_tracks]
+            if data.get("tracks") != norm_tracks:
+                changed_fields.append("tracks")
+                data["tracks"] = norm_tracks
+                data["track_ids"] = [t["track_id"] for t in norm_tracks]
         elif "track_ids" in updates and updates["track_ids"] is not None:
-            data["track_ids"] = list(updates["track_ids"])
-            data["tracks"] = [
-                {"track_number": i + 1, "disc_number": 1, "track_id": tid, "take_id": None, "custom_title": None}
-                for i, tid in enumerate(updates["track_ids"])
-            ]
+            norm_ids = list(updates["track_ids"])
+            if data.get("track_ids") != norm_ids:
+                changed_fields.append("tracks")
+                data["track_ids"] = norm_ids
+                data["tracks"] = [
+                    {"track_number": i + 1, "disc_number": 1, "track_id": tid, "take_id": None, "custom_title": None}
+                    for i, tid in enumerate(updates["track_ids"])
+                ]
+
+        if changed_fields:
+            new_rev = int(data.get("revision", 1)) + 1
+            data["revision"] = new_rev
+            summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
+            if "revisions" not in data or not isinstance(data["revisions"], list):
+                data["revisions"] = []
+            data["revisions"].append({
+                "revision": new_rev,
+                "timestamp": time.time(),
+                "change_summary": summary,
+                "changed_fields": changed_fields,
+            })
 
         data["updated_at"] = time.time()
 
@@ -930,6 +1033,30 @@ class ProjectStorageManager:
             os.chmod(cover_path, 0o600)
         except Exception:
             pass
+
+        # Update album revision for cover artwork change
+        manifest_path = album_dir / "album.json"
+        if manifest_path.is_file():
+            try:
+                import json
+                with file_lock(manifest_path):
+                    with open(manifest_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    new_rev = int(data.get("revision", 1)) + 1
+                    data["revision"] = new_rev
+                    data["has_cover"] = True
+                    data["updated_at"] = time.time()
+                    if "revisions" not in data or not isinstance(data["revisions"], list):
+                        data["revisions"] = []
+                    data["revisions"].append({
+                        "revision": new_rev,
+                        "timestamp": time.time(),
+                        "change_summary": "Updated album cover artwork",
+                        "changed_fields": ["cover_art"],
+                    })
+                    atomic_json(manifest_path, data)
+            except Exception as e:
+                logger.warning(f"Failed to record revision for album cover update: {e}")
 
         return True
 
