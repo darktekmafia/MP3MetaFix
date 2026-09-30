@@ -56,6 +56,10 @@ Unlike single-track quick tagging (`/app`) or directory batch management (`/mana
 | `GET` | `/api/projects/tracks/{id}/takes/{take_id}/stream` | Stream take audio (HTTP 206 Partial Content) |
 | `GET` | `/api/projects/tracks/{id}/takes/{take_id}/download` | Download take audio with RFC 5987 filename |
 | `POST` | `/api/projects/tracks/{id}/takes/{take_id}/stems` | Upload separated audio stem |
+| `GET` | `/api/projects/tracks/{id}/takes/{take_id}/stems/{stem_id}/stream` | Stream stem audio (HTTP 206 Partial Content) |
+| `GET` | `/api/projects/tracks/{id}/takes/{take_id}/stems/{stem_id}/download` | Download individual stem audio file |
+| `DELETE` | `/api/projects/tracks/{id}/takes/{take_id}/stems/{stem_id}` | Delete separated stem |
+| `GET` | `/api/projects/tracks/{id}/takes/{take_id}/stems/download-pack` | Export all take stems as a ZIP archive |
 | `POST` | `/api/projects/tracks/{id}/takes/{take_id}/load-session` | Promote take into active editing session |
 | `GET` | `/api/projects/albums` | List album releases |
 | `POST` | `/api/projects/albums` | Create album release project |
