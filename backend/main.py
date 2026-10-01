@@ -603,6 +603,14 @@ DOCS_REGISTRY: Dict[str, Dict[str, Any]] = {
         "path": DOCS_DIR / "SUNO_TOS_COMPLIANCE.md",
         "summary": "Permissible metadata ingestion, watermark preservation, and third-party terms compliance.",
     },
+    "readme": {
+        "id": "readme",
+        "title": "Project Overview",
+        "category": "Project & Governance",
+        "icon": "book-open",
+        "path": BASE_DIR / "README.md",
+        "summary": "Introduction, core workspace features, supported audio codecs, and installation scenarios.",
+    },
     "roadmap": {
         "id": "roadmap",
         "title": "Public Roadmap",
@@ -643,13 +651,15 @@ async def list_docs():
     """Return available documentation articles and categories."""
     sections = []
     for doc_id, doc in DOCS_REGISTRY.items():
+        doc_path = doc["path"]
+        is_avail = doc_path.is_file() or (BASE_DIR / doc_path.name).is_file() or (DOCS_DIR / doc_path.name).is_file()
         sections.append({
             "id": doc["id"],
             "title": doc["title"],
             "category": doc["category"],
             "icon": doc.get("icon", "file-text"),
             "summary": doc.get("summary", ""),
-            "available": doc["path"].is_file(),
+            "available": is_avail,
         })
     return {"sections": sections}
 
@@ -658,11 +668,24 @@ async def list_docs():
 async def get_doc_content(doc_id: str):
     """Return the raw markdown content of a specific documentation article."""
     if doc_id not in DOCS_REGISTRY:
-        raise HTTPException(404, "Documentation topic not found")
+        raise HTTPException(404, f"Documentation topic '{doc_id}' not found")
     doc_meta = DOCS_REGISTRY[doc_id]
     doc_path = doc_meta["path"]
     if not doc_path.is_file():
-        raise HTTPException(404, "Documentation file is not available on host")
+        # Fallback search if working directory or relative path differs
+        alt_paths = [
+            BASE_DIR / doc_path.name,
+            DOCS_DIR / doc_path.name,
+            BASE_DIR / "docs" / doc_path.name,
+            Path.cwd() / doc_path.name,
+            Path.cwd() / "docs" / doc_path.name,
+        ]
+        for alt in alt_paths:
+            if alt.is_file():
+                doc_path = alt
+                break
+        else:
+            raise HTTPException(404, f"Documentation file '{doc_path.name}' is not available on host")
     
     try:
         content = doc_path.read_text(encoding="utf-8")
@@ -675,7 +698,7 @@ async def get_doc_content(doc_id: str):
         }
     except Exception as e:
         logger.error(f"Failed to read documentation file {doc_path}: {e}")
-        raise HTTPException(500, "Could not load documentation content")
+        raise HTTPException(500, f"Could not load documentation content: {e}")
 
 
 @app.get("/api/updates/check")

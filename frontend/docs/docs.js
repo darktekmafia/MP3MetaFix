@@ -25,6 +25,7 @@
       history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline><path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5"></path></svg>',
       compass: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg>',
       users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>',
+      'book-open': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>',
       code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>',
       'file-text': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>',
     };
@@ -89,7 +90,7 @@
         else if (cleanUrl.includes('CHANGELOG.md') || cleanUrl === 'changelog') linkUrl = '#changelog';
         else if (cleanUrl.includes('VISION.md') || cleanUrl === 'vision') linkUrl = '#vision';
         else if (cleanUrl.includes('GOVERNANCE.md') || cleanUrl === 'governance') linkUrl = '#governance';
-        else if (cleanUrl.endsWith('README.md') || cleanUrl === 'README.md' || cleanUrl === '../README.md') linkUrl = '/';
+        else if (cleanUrl.endsWith('README.md') || cleanUrl === 'README.md' || cleanUrl === '../README.md' || cleanUrl === 'readme') linkUrl = '#readme';
         else if (cleanUrl.includes('backend/') || cleanUrl.includes('frontend/') || cleanUrl.includes('install.sh') || cleanUrl.includes('VERSION')) {
           const stripped = cleanUrl.replace(/^\.\.\//, '').replace(/^\.\//, '');
           linkUrl = `https://github.com/darktekmafia/MP3MetaFix/blob/main/${stripped}`;
@@ -511,7 +512,7 @@
     // Listen for hash changes
     window.addEventListener('hashchange', () => {
       const hash = window.location.hash.replace('#', '').trim();
-      if (hash && hash !== currentDocId && docsList.some(d => d.id === hash)) {
+      if (hash && hash !== currentDocId) {
         loadDoc(hash);
       }
     });

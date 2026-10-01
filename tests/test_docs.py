@@ -143,7 +143,7 @@ def test_recursive_documentation_links_integrity():
         if "CHANGELOG.md" in clean_url or clean_url == "changelog": return "#changelog"
         if "VISION.md" in clean_url or clean_url == "vision": return "#vision"
         if "GOVERNANCE.md" in clean_url or clean_url == "governance": return "#governance"
-        if clean_url.endswith("README.md") or clean_url in ("README.md", "../README.md"): return "/"
+        if clean_url.endswith("README.md") or clean_url in ("README.md", "../README.md", "readme"): return "#readme"
         if any(k in clean_url for k in ("backend/", "frontend/", "install.sh", "VERSION")):
             stripped = clean_url.replace("../", "").replace("./", "")
             return f"GITHUB:{stripped}"
