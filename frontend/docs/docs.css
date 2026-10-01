@@ -541,12 +541,18 @@
 }
 
 /* Badges & Inline Documentation Images */
+.docs-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0 1.25rem;
+}
+
 .docs-badge-img {
   display: inline-block;
   vertical-align: middle;
   height: 20px;
-  margin-right: 0.4rem;
-  margin-bottom: 0.4rem;
   border-radius: 3px;
   border: 0;
 }
@@ -558,4 +564,5 @@
   display: block;
   margin: 1rem 0;
 }
+
 

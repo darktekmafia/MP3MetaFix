@@ -369,11 +369,39 @@
         continue;
       }
 
-      // Normal Paragraph
-      const p = document.createElement('p');
-      parseInlineFormatting(line, p);
-      targetContainer.appendChild(p);
-      i++;
+      // Normal Paragraph (group consecutive prose/badge lines)
+      const paragraphLines = [];
+      while (
+        i < lines.length &&
+        lines[i].trim() &&
+        !lines[i].trim().startsWith('#') &&
+        !lines[i].trim().startsWith('```') &&
+        !lines[i].trim().startsWith('>') &&
+        !(lines[i].includes('|') && lines[i].trim().startsWith('|')) &&
+        !lines[i].trim().startsWith('- ') &&
+        !lines[i].trim().startsWith('* ') &&
+        !/^\d+\.\s/.test(lines[i].trim()) &&
+        lines[i].trim() !== '---' &&
+        lines[i].trim() !== '***'
+      ) {
+        paragraphLines.push(lines[i].trim());
+        i++;
+      }
+
+      if (paragraphLines.length > 0) {
+        const p = document.createElement('p');
+        const isBadgeOnly = paragraphLines.every(pl => pl.startsWith('[![') || pl.startsWith('!['));
+        if (isBadgeOnly) {
+          p.className = 'docs-badge-row';
+        }
+        paragraphLines.forEach((pl, idx) => {
+          if (idx > 0) {
+            p.appendChild(document.createTextNode(' '));
+          }
+          parseInlineFormatting(pl, p);
+        });
+        targetContainer.appendChild(p);
+      }
     }
   }
 
