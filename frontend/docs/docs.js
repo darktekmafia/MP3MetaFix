@@ -20,6 +20,7 @@
       lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>',
       cpu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>',
       'shield-check': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>',
+      'shield-alert': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>',
       code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>',
       'file-text': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>',
     };
@@ -64,19 +65,29 @@
         const a = document.createElement('a');
         a.textContent = linkText;
         
-        // Handle internal doc routing (e.g. docs/app/README.md -> #app)
-        if (linkUrl.includes('docs/app') || linkUrl.endsWith('/app.md')) linkUrl = '#app';
-        else if (linkUrl.includes('docs/manager') || linkUrl.endsWith('/manager.md')) linkUrl = '#manager';
-        else if (linkUrl.includes('docs/projects') || linkUrl.endsWith('/projects.md')) linkUrl = '#projects';
-        else if (linkUrl.includes('docs/admin') || linkUrl.endsWith('/admin.md')) linkUrl = '#admin';
-        else if (linkUrl.includes('DEPLOYMENT.md')) linkUrl = '#deployment';
-        else if (linkUrl.includes('ACCOUNT_MIGRATION.md')) linkUrl = '#account_migration';
-        else if (linkUrl.includes('ARCHITECTURE.md')) linkUrl = '#architecture';
-        else if (linkUrl.includes('SECURITY_HARDENING.md')) linkUrl = '#security';
-        else if (linkUrl.includes('development_workflow.md')) linkUrl = '#workflow';
+        // Handle internal doc routing (e.g. docs/app/README.md -> #app, SECURITY_REMEDIATION -> #security_remediation)
+        if (linkUrl.includes('docs/app') || linkUrl.endsWith('/app.md') || linkUrl === 'app') linkUrl = '#app';
+        else if (linkUrl.includes('docs/manager') || linkUrl.endsWith('/manager.md') || linkUrl === 'manager') linkUrl = '#manager';
+        else if (linkUrl.includes('docs/projects') || linkUrl.endsWith('/projects.md') || linkUrl === 'projects') linkUrl = '#projects';
+        else if (linkUrl.includes('docs/admin') || linkUrl.endsWith('/admin.md') || linkUrl === 'admin') linkUrl = '#admin';
+        else if (linkUrl.includes('DEPLOYMENT.md') || linkUrl === 'deployment') linkUrl = '#deployment';
+        else if (linkUrl.includes('ACCOUNT_MIGRATION.md') || linkUrl === 'account_migration') linkUrl = '#account_migration';
+        else if (linkUrl.includes('ARCHITECTURE.md') || linkUrl === 'architecture') linkUrl = '#architecture';
+        else if (linkUrl.includes('SECURITY_HARDENING.md') || linkUrl === 'security') linkUrl = '#security';
+        else if (linkUrl.includes('SECURITY_REMEDIATION_2026-09-21.md') || linkUrl.includes('SECURITY_REMEDIATION') || linkUrl === 'security_remediation') linkUrl = '#security_remediation';
+        else if (linkUrl.includes('SECURITY_AUDIT_2026-09-20.md') || linkUrl.includes('SECURITY_AUDIT') || linkUrl === 'security_audit') linkUrl = '#security_audit';
+        else if (linkUrl.includes('SUNO_TOS_COMPLIANCE.md') || linkUrl === 'suno_tos') linkUrl = '#suno_tos';
+        else if (linkUrl.includes('development_workflow.md') || linkUrl === 'workflow') linkUrl = '#workflow';
         
         a.href = linkUrl;
-        if (linkUrl.startsWith('http') || linkUrl.startsWith('https')) {
+        if (linkUrl.startsWith('#')) {
+          a.addEventListener('click', (e) => {
+            e.preventDefault();
+            const targetId = linkUrl.substring(1);
+            window.location.hash = targetId;
+            loadDoc(targetId);
+          });
+        } else if (linkUrl.startsWith('http://') || linkUrl.startsWith('https://')) {
           a.target = '_blank';
           a.rel = 'noopener noreferrer';
         }

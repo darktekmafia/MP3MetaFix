@@ -570,6 +570,22 @@ DOCS_REGISTRY: Dict[str, Dict[str, Any]] = {
         "path": DOCS_DIR / "SECURITY_HARDENING.md",
         "summary": "Cryptographic session tokens, POSIX permissions, anti-spoofing rate limits, and defenses.",
     },
+    "security_remediation": {
+        "id": "security_remediation",
+        "title": "Security Remediation (v0.5.1)",
+        "category": "Security & Architecture",
+        "icon": "shield-check",
+        "path": DOCS_DIR / "SECURITY_REMEDIATION_2026-09-21.md",
+        "summary": "Application security fixes, user-service hardening, and remaining deployment trade-offs.",
+    },
+    "security_audit": {
+        "id": "security_audit",
+        "title": "Security Audit Report",
+        "category": "Security & Architecture",
+        "icon": "shield-alert",
+        "path": DOCS_DIR / "SECURITY_AUDIT_2026-09-20.md",
+        "summary": "Historical application security audit findings and vulnerability assessments.",
+    },
     "workflow": {
         "id": "workflow",
         "title": "Development Workflow",
