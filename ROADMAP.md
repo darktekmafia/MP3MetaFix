@@ -49,14 +49,18 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - Keep the installed application version visible in the header for guests and signed-in users, using a read-only local version/health response. Displaying or clicking it does not trigger a remote update check.
   - Removed automatic and manual update checks, update prompts, and update-check controls from `/app`, `/manager`, and the public hub. Confined update discovery and installation controls exclusively to `/admin`, gated by administrator authentication.
   - Verified guest startup, refresh, session restore, and version-display interactions never request `/api/updates/check`, eliminating unauthenticated 401 triggers while preserving authorized administrator update management.
-- [ ] **Granular Workspace Access Controls & Maintenance Mode**:
+- [x] **Public & Guest Access to In-App Help & Documentation**:
+  - In-app Help Modal and `/docs` documentation portal are directly accessible to unauthenticated visitors and guest mode users across all workspace headers, navigation drawers, and footers without requiring an active user login.
+  - Documentation API endpoints (`GET /api/docs/list`, `GET /api/docs/{doc_id}`) remain open for public reading with strict path-traversal safeguards and catalog whitelisting.
+- [x] **Granular Workspace Access Controls & Maintenance Mode**:
   - Administrator toggles in `/admin` to enable/disable guest and user access individually for `/app`, `/manager`, and `/projects`.
   - Configurable maintenance/reason messages (e.g. "Temporarily disabled: investigating audio save bug") set in `/admin`.
   - **Hub Card Visibility Toggle**: Configurable setting in `/admin` to choose whether disabled or coming-soon services display as a disabled card on the `/` Hub or remain completely hidden from the Hub interface.
   - **Graceful Direct Route Handoff**: If a user accesses a disabled workspace via bookmark or direct link (`/manager`, `/projects`, `/app`), an informative maintenance/status view displays the configured message rather than an abrupt redirect or broken state.
-  - Future-proof design compatible with upcoming multi-user role tiers (Guest, User, Admin).
+  - **Multi-User Preparation & Current Scope Note**: The configuration schema and `/admin` UI controls are in place for all workspaces. In the current single-tenant release, `/manager` and `/projects` require administrator/user authentication by design (with `/projects` requiring an active user session for POSIX 0700 storage isolation). The per-workspace guest toggles for those workspaces will become effective once the multi-user role tier feature is officially unlocked.
 - [ ] **Multi-User Role & Quota Policies**:
   - Granular per-user storage quotas, tenant directories, and role management (Editor, Viewer, Admin).
+  - Connect granular workspace permissions to role tiers, allowing administrators to configure user-level and guest-level reachability across `/manager` and `/projects`.
 - [ ] **Service Daemon Maintenance Triggers**:
   - Authenticated admin actions to trigger cache cleanup, storage purge, or service restart directly from the web portal.
 - [ ] **Live Audio Processing Metrics**:
@@ -133,19 +137,23 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - High-density top toolbar with search filter and batch action controls.
 - [x] **Global Header Switcher Integration**:
   - Unified app switcher navigation pill linking back to `/app` and `/` seamlessly.
-- [x] **Coming Soon State & Navigation Safety**:
-  - Clear placeholder state with active editor handoff buttons to prevent dead-end interactions while in development.
-
-### Active Backlog & Future Vision 📋
-- [ ] **Full Feature Parity with MP3MetaFix (`/app`) via Integrated Single-Track Inspector**:
-  - Embedded collapsible **Track Detail Inspector Drawer / Side Panel** allowing comprehensive single-track editing without leaving the batch workspace:
+- [x] **Integrated MP3MetaFix Single-Track Inspector (`/manager` Sidebar → `MP3Metafix`)**:
+  - Direct single-track editor embedded within the `/manager` desktop workspace:
     - *Full Tag Suite*: In-place editing for Track Title, Artist, Album, Album Artist, Genre, Year/Date, Track/Total, Disc/Total, BPM, Composer, Comments, and Unsynchronized Lyrics (`USLT`).
-    - *Album Artwork Studio*: Direct cover art drag-and-drop replacement, high-res preview, format normalization (JPEG/PNG/WebP), extraction, and removal.
-    - *Retina Canvas Audio Waveform Visualizer*: Full audio playback with dynamic waveform peaks, continuous drag scrubbing, and HTTP 206 streaming for the currently selected track.
+    - *Album Artwork Studio*: Direct cover art drag-and-drop replacement, high-res preview, format normalization (JPEG/PNG/WebP), and removal.
+    - *Canvas Audio Waveform Player*: Audio playback with dynamic waveform peaks, continuous drag scrubbing, and HTTP 206 streaming for loaded tracks.
     - *Canned Comment Presets & Preset Manager*: Quick-select preset dropdown and persistent custom preset creation.
     - *Dynamic Filename Formatter*: Instant pattern-based renaming (`%artist% - %title%.mp3`, `%track% - %title%.mp3`) with preset buttons.
-    - *Suno.com URL / Share Link Auto-Parser*: Direct URL fetching and tag prefilling for single tracks within the desktop queue.
-    - *Single-Track Native Save & Export*: In-place disk writeback and direct download.
+    - *Suno.com Sync & Watermark Safety*: Ingest metadata and high-res art while preserving proprietary provenance tags.
+- [x] **Tap-to-Sync Karaoke Lyric Stamping (`.lrc` & ID3 `SYLT`) (`/manager` Sidebar → `Synced Lyrics / SYLT`)**:
+  - Interactive "Tap-to-Sync" studio allowing creators to tap <kbd>Space</kbd> during playback to stamp precise millisecond timestamps onto lyric lines.
+  - **Smart Structural Tag Handling**: Automatic `00:00.00` timing for opening `[Intro]` tags and automatic $500\text{ms}$ lead-in reduction on preceding section headers (`[Verse 1]`, `[Chorus]`, `[Bridge]`) when stamping first vocal lines.
+  - **Precision Adjustments & Keyboard Navigation**: Selected line nudging ($\pm 100\text{ms}$, <kbd>[</kbd>, <kbd>]</kbd>, <kbd>-</kbd>, <kbd>+</kbd>), keyboard row navigation (<kbd>↑</kbd>, <kbd>↓</kbd>), and step-back (<kbd>Backspace</kbd>).
+  - **Strip Section Tags Mode**: Toggleable complete exclusion of non-singable tags from stamping and export.
+  - **Live Karaoke Visualizer**: Active-line spotlight, previous-line fade, and instrumental break cues.
+  - **Atomic Save & Conversion**: Embed native ID3 `SYLT` frames directly into audio files, or import/export standard `.lrc` companion files.
+
+### Active Backlog & Future Vision 📋
 - [ ] **Universal ID3 Frame & Raw Metadata Inspector / Editor ("View/Edit All Embedded Information")**:
   - **Comprehensive Frame Manager**: View, add, edit, and delete **any** embedded ID3v2.3 / ID3v2.4 frame:
     - *Standard Text Frames*: `TIT1` (Grouping), `TIT2` (Title), `TIT3` (Subtitle), `TPE1`–`TPE4` (Artists/Conductor), `TALB` (Album), `TOAL` (Original Album), `TCOM` (Composer), `TEXT` (Lyricist), `TCON` (Genre), `TCOP` (Copyright), `TPUB` (Publisher), `TDRC`/`TYER` (Recording Date), `TRCK` (Track), `TPOS` (Disc), `TBPM` (BPM), `TKEY` (Initial Key), `TLAN` (Language), `TSRC` (ISRC), `TSSE` (Encoder).
@@ -180,9 +188,6 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - One-click packaging into structured multi-track `.zip` archives or DAW-ready directories.
 - [ ] **Suno MP4 Video Ingestion & Asset Extractor**:
   - Drag and drop Suno `.mp4` video files to extract clean audio (lossless WAV or MP3 320kbps), extract timestamped lyrics, and recover high-resolution poster artwork.
-- [ ] **Tap-to-Sync Karaoke Lyric Stamping (`.lrc` & ID3 `SYLT`)**:
-  - Interactive "Tap-to-Sync" tool allowing creators to tap <kbd>Space</kbd> during playback to stamp exact timestamps onto lyric lines.
-  - Export standard `.lrc` sidecar companion files or embed directly into the ID3 `SYLT` binary frame.
 - [ ] **Suno AI Stem & Generation Tree Organizer**:
   - Visual parent/child lineage graph organizing variations, extensions, and separated vocal/instrumental stems.
 - [ ] **Bulk Cover Art Manager**:
@@ -285,7 +290,27 @@ The underlying Python backend, Mutagen audio engine, systemd service architectur
   - Abstract storage interface supporting Local Filesystem, SMB/NFS shared network mounts, and S3 / MinIO Object Storage.
 - [ ] **Asynchronous Background Task Queue**:
   - Worker queue for heavy batch audio transcoding and multi-gigabyte ZIP packaging with Server-Sent Events (SSE) progress streaming.
+- [ ] **Comprehensive REST Developer API Documentation**:
+  - Expand standalone documentation and interactive developer guides covering the complete REST API surface across all workspaces (`/app`, `/manager`, `/projects`, `/admin`).
+  - Provide developer-focused documentation with curl and HTTP request/response examples so external developers and automation scripts can interact directly with backend audio metadata, project storage, take/stem ingestion, and batch tagging APIs without requiring the `/app`, `/manager`, or `/projects` web clients.
+
+---
+
+## 🏛️ Project Governance, Vision & Community Process Roadmap
+
+This track outlines the evolution of MP3MetaFix's formal vision, community governance structure, and release methodologies as described in [VISION.md](VISION.md) and [GOVERNANCE.md](GOVERNANCE.md):
+
+- [ ] **Formal Initial Vision Specification**:
+  - Establish and document the initial formal project vision during the founder stewardship phase to anchor project identity and architectural scope.
+- [ ] **Community Governance Transition & Succession Specification**:
+  - Define formal criteria, milestones, and voting procedures to transition project governance to the community.
+  - Formulate detailed succession protocols (triggers, administrative credential/repository transfer, governance continuity) ensuring long-term project health.
+- [ ] **Proposal Docket & Community Prioritization Tooling**:
+  - Implement structured community docket tracking for feature proposals with vision-alignment review and community voting workflows.
+- [ ] **Release-Candidate (RC) / Testing Branch Integration**:
+  - Establish an intermediate `testing` / release-candidate branch workflow enabling broad hardware, distribution, and container testing before promoting releases to `main`.
 
 ---
 
 *Note: As each sub-project evolves, milestones and priorities are tracked and refined in this roadmap.*
+

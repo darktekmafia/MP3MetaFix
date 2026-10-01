@@ -32,9 +32,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from backend.config import (
+    BASE_DIR,
     STATIC_DIR,
     APP_DIR,
     MANAGER_DIR,
+    PROJECTS_DIR,
     ADMIN_DIR,
     DOCS_DIR,
     DOCS_STATIC_DIR,
@@ -79,6 +81,8 @@ from backend.metadata_engine import (
     extract_metadata_and_artwork,
     write_metadata_and_artwork,
     get_embedded_artwork_binary,
+    sylt_to_lrc,
+    lrc_to_sylt,
 )
 from backend.suno_extractor import (
     fetch_suno_metadata,
@@ -225,16 +229,28 @@ def require_admin(request: Request) -> Dict[str, Any]:
     return user
 
 
-def enforce_access_policy(request: Request) -> Optional[Dict[str, Any]]:
-    """Enforce access control on file-editing endpoints based on Guest Mode settings."""
+def enforce_access_policy(request: Request, workspace: str = "app") -> Optional[Dict[str, Any]]:
+    """Enforce access control on workspace endpoints based on Guest Mode & Workspace Maintenance settings."""
     user = get_current_user(request)
+    if user and user.get("role") == "admin":
+        return user
+
+    if not auth_manager.is_workspace_enabled(workspace):
+        msg = auth_manager.get_workspace_maintenance_message(workspace)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Maintenance Mode: {msg}",
+        )
+
     if user:
         return user
-    if auth_manager.is_guest_mode_enabled():
+
+    if auth_manager.is_guest_mode_enabled() and auth_manager.is_workspace_guest_allowed(workspace):
         return None
+
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required. Guest mode is disabled.",
+        detail="Authentication required. Guest mode is disabled or not permitted for this workspace.",
     )
 
 
@@ -242,7 +258,7 @@ def enforce_access_policy(request: Request) -> Optional[Dict[str, Any]]:
 
 @app.get("/api/auth/status")
 async def get_auth_status(request: Request):
-    """Return system setup state, current session identity, and guest mode policy."""
+    """Return system setup state, current session identity, and guest mode / workspace access policy."""
     setup_req = auth_manager.is_setup_required()
     user = get_current_user(request)
     settings = auth_manager.get_settings()
@@ -257,6 +273,8 @@ async def get_auth_status(request: Request):
         "is_guest": user is None and auth_manager.is_guest_mode_enabled(),
         "suno_integration_enabled": auth_manager.is_suno_enabled(),
         "max_upload_size_mb": settings.get("max_upload_size_mb", MAX_UPLOAD_SIZE_MB),
+        "workspace_access": settings.get("workspace_access", {}),
+        "hub_hide_disabled_cards": bool(settings.get("hub_hide_disabled_cards", False)),
     }
 
 
@@ -328,7 +346,7 @@ async def logout(request: Request, response: Response):
     if user:
         auth_manager.revoke_sessions(user["id"])
     is_https = (request.url.scheme == "https")
-    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/", secure=is_https, httponly=True)
+    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/", secure=is_https, httponly=True, samesite="lax")
     return {"success": True}
 
 
@@ -358,6 +376,8 @@ async def get_settings(user: Dict[str, Any] = Depends(require_authenticated_user
         "max_temp_storage_mb": storage_quota,
         "max_sessions": settings.get("max_sessions", 10),
         "quick_settings_pinned": settings.get("quick_settings_pinned", ["guest_mode_enabled", "max_sessions", "max_global_storage_mb"]),
+        "workspace_access": settings.get("workspace_access", {}),
+        "hub_hide_disabled_cards": bool(settings.get("hub_hide_disabled_cards", False)),
         "version": VERSION,
         "is_admin": user.get("role") == "admin",
     }
@@ -551,6 +571,22 @@ DOCS_REGISTRY: Dict[str, Dict[str, Any]] = {
         "path": DOCS_DIR / "SECURITY_HARDENING.md",
         "summary": "Cryptographic session tokens, POSIX permissions, anti-spoofing rate limits, and defenses.",
     },
+    "security_remediation": {
+        "id": "security_remediation",
+        "title": "Security Remediation (v0.5.1)",
+        "category": "Security & Architecture",
+        "icon": "shield-check",
+        "path": DOCS_DIR / "SECURITY_REMEDIATION_2026-09-21.md",
+        "summary": "Application security fixes, user-service hardening, and remaining deployment trade-offs.",
+    },
+    "security_audit": {
+        "id": "security_audit",
+        "title": "Security Audit Report",
+        "category": "Security & Architecture",
+        "icon": "shield-alert",
+        "path": DOCS_DIR / "SECURITY_AUDIT_2026-09-20.md",
+        "summary": "Historical application security audit findings and vulnerability assessments.",
+    },
     "workflow": {
         "id": "workflow",
         "title": "Development Workflow",
@@ -567,6 +603,46 @@ DOCS_REGISTRY: Dict[str, Dict[str, Any]] = {
         "path": DOCS_DIR / "SUNO_TOS_COMPLIANCE.md",
         "summary": "Permissible metadata ingestion, watermark preservation, and third-party terms compliance.",
     },
+    "readme": {
+        "id": "readme",
+        "title": "Project Overview",
+        "category": "Project & Governance",
+        "icon": "book-open",
+        "path": BASE_DIR / "README.md",
+        "summary": "Introduction, core workspace features, supported audio codecs, and installation scenarios.",
+    },
+    "roadmap": {
+        "id": "roadmap",
+        "title": "Public Roadmap",
+        "category": "Project & Governance",
+        "icon": "map",
+        "path": BASE_DIR / "ROADMAP.md",
+        "summary": "Completed milestone achievements, active development focus, and future technical roadmap.",
+    },
+    "changelog": {
+        "id": "changelog",
+        "title": "Changelog & Releases",
+        "category": "Project & Governance",
+        "icon": "history",
+        "path": BASE_DIR / "CHANGELOG.md",
+        "summary": "Comprehensive version history and release notes following Keep a Changelog.",
+    },
+    "vision": {
+        "id": "vision",
+        "title": "Project Vision",
+        "category": "Project & Governance",
+        "icon": "compass",
+        "path": BASE_DIR / "VISION.md",
+        "summary": "Core engineering principles, tenant isolation, and long-term architectural direction.",
+    },
+    "governance": {
+        "id": "governance",
+        "title": "Project Governance",
+        "category": "Project & Governance",
+        "icon": "users",
+        "path": BASE_DIR / "GOVERNANCE.md",
+        "summary": "Transparency principles, decision authority, stewardship model, and contribution ethics.",
+    },
 }
 
 
@@ -575,13 +651,15 @@ async def list_docs():
     """Return available documentation articles and categories."""
     sections = []
     for doc_id, doc in DOCS_REGISTRY.items():
+        doc_path = doc["path"]
+        is_avail = doc_path.is_file() or (BASE_DIR / doc_path.name).is_file() or (DOCS_DIR / doc_path.name).is_file()
         sections.append({
             "id": doc["id"],
             "title": doc["title"],
             "category": doc["category"],
             "icon": doc.get("icon", "file-text"),
             "summary": doc.get("summary", ""),
-            "available": doc["path"].is_file(),
+            "available": is_avail,
         })
     return {"sections": sections}
 
@@ -590,11 +668,24 @@ async def list_docs():
 async def get_doc_content(doc_id: str):
     """Return the raw markdown content of a specific documentation article."""
     if doc_id not in DOCS_REGISTRY:
-        raise HTTPException(404, "Documentation topic not found")
+        raise HTTPException(404, f"Documentation topic '{doc_id}' not found")
     doc_meta = DOCS_REGISTRY[doc_id]
     doc_path = doc_meta["path"]
     if not doc_path.is_file():
-        raise HTTPException(404, "Documentation file is not available on host")
+        # Fallback search if working directory or relative path differs
+        alt_paths = [
+            BASE_DIR / doc_path.name,
+            DOCS_DIR / doc_path.name,
+            BASE_DIR / "docs" / doc_path.name,
+            Path.cwd() / doc_path.name,
+            Path.cwd() / "docs" / doc_path.name,
+        ]
+        for alt in alt_paths:
+            if alt.is_file():
+                doc_path = alt
+                break
+        else:
+            raise HTTPException(404, f"Documentation file '{doc_path.name}' is not available on host")
     
     try:
         content = doc_path.read_text(encoding="utf-8")
@@ -607,7 +698,7 @@ async def get_doc_content(doc_id: str):
         }
     except Exception as e:
         logger.error(f"Failed to read documentation file {doc_path}: {e}")
-        raise HTTPException(500, "Could not load documentation content")
+        raise HTTPException(500, f"Could not load documentation content: {e}")
 
 
 @app.get("/api/updates/check")
@@ -916,6 +1007,44 @@ async def api_suno_apply_artwork(
         "size_bytes": len(clean_bytes),
         "preview_data_url": preview_url,
     }
+
+
+class LrcParseRequest(BaseModel):
+    lrc_text: str = Field(..., max_length=100000, description="Raw LRC lyrics text")
+
+
+class LrcExportRequest(BaseModel):
+    entries: list = Field(default=[], description="Synced lyrics entries")
+    artist: Optional[str] = Field(default="", max_length=500)
+    title: Optional[str] = Field(default="", max_length=500)
+    album: Optional[str] = Field(default="", max_length=500)
+
+
+@app.post("/api/lyrics/parse-lrc")
+async def parse_lrc_payload(
+    req: LrcParseRequest,
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
+):
+    """Parse raw LRC text and return structured timestamped lyric entries."""
+    entries = lrc_to_sylt(req.lrc_text)
+    return {"success": True, "entries": entries, "count": len(entries)}
+
+
+@app.post("/api/lyrics/export-lrc")
+async def export_lrc_payload(
+    req: LrcExportRequest,
+    _access: Optional[Dict[str, Any]] = Depends(enforce_access_policy),
+):
+    """Generate standard LRC file content from timestamped entries."""
+    lrc_content = sylt_to_lrc(req.entries, artist=req.artist or "", title=req.title or "", album=req.album or "")
+    filename = sanitize_filename(f"{req.artist} - {req.title}" if req.artist and req.title else (req.title or "lyrics")) + ".lrc"
+    return Response(
+        content=lrc_content,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
 
 
 @app.post("/api/save")
@@ -1262,11 +1391,19 @@ if APP_DIR.is_dir():
 if MANAGER_DIR.is_dir():
     app.mount("/manager", StaticFiles(directory=MANAGER_DIR, html=True), name="manager")
 
+if PROJECTS_DIR.is_dir():
+    app.mount("/projects", StaticFiles(directory=PROJECTS_DIR, html=True), name="projects")
+
 if ADMIN_DIR.is_dir():
     app.mount("/admin", StaticFiles(directory=ADMIN_DIR, html=True), name="admin")
 
 if DOCS_STATIC_DIR.is_dir():
     app.mount("/docs", StaticFiles(directory=DOCS_STATIC_DIR, html=True), name="docs")
+
+# Include Project & Storage Subsystem Routers
+from backend.projects_api import projects_router, storage_router
+app.include_router(projects_router)
+app.include_router(storage_router)
 
 if STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")

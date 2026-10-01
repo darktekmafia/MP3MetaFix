@@ -12,15 +12,26 @@ DOCS_DIR = BASE_DIR / "docs"
 STATIC_DIR = BASE_DIR / "frontend"
 APP_DIR = STATIC_DIR / "app"
 MANAGER_DIR = STATIC_DIR / "manager"
+PROJECTS_DIR = STATIC_DIR / "projects"
 ADMIN_DIR = STATIC_DIR / "admin"
 DOCS_STATIC_DIR = STATIC_DIR / "docs"
 ASSETS_DIR = BASE_DIR / "assets"
+STORAGE_DIR = DATA_DIR / "storage"
+TENANTS_DIR = STORAGE_DIR / "tenants"
 
 # Ensure directories exist
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+TENANTS_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    os.chmod(STORAGE_DIR, 0o700)
+    os.chmod(TENANTS_DIR, 0o700)
+except Exception:
+    pass
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 APP_DIR.mkdir(parents=True, exist_ok=True)
 MANAGER_DIR.mkdir(parents=True, exist_ok=True)
+PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 ADMIN_DIR.mkdir(parents=True, exist_ok=True)
 DOCS_STATIC_DIR.mkdir(parents=True, exist_ok=True)
 

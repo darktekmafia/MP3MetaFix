@@ -10,6 +10,7 @@ import hmac
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+import copy
 from pydantic import BaseModel, Field
 from backend.locking import file_lock, atomic_json
 from functools import wraps
@@ -227,7 +228,32 @@ ALLOWED_PINNABLE_SETTINGS = {
     "max_upload_size_mb",
     "suno_integration_enabled",
     "software_updates",
+    "workspace_access",
 }
+
+DEFAULT_WORKSPACE_ACCESS: Dict[str, Dict[str, Any]] = {
+    "app": {
+        "enabled": True,
+        "guest_allowed": True,
+        "maintenance_message": "MP3MetaFix single-track workspace is undergoing scheduled maintenance.",
+    },
+    "manager": {
+        "enabled": True,
+        "guest_allowed": False,
+        "maintenance_message": "MP3MetaManager library workspace is undergoing scheduled maintenance.",
+    },
+    "projects": {
+        "enabled": True,
+        "guest_allowed": False,
+        "maintenance_message": "MP3MetaProjects studio workspace is undergoing scheduled maintenance.",
+    },
+}
+
+
+class WorkspaceAccessConfig(BaseModel):
+    enabled: Optional[bool] = True
+    guest_allowed: Optional[bool] = False
+    maintenance_message: Optional[str] = Field(default="", max_length=500)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -241,6 +267,8 @@ class SettingsUpdateRequest(BaseModel):
     suno_integration_enabled: Optional[bool] = None
     suno_enabled: Optional[bool] = None
     quick_settings_pinned: Optional[List[str]] = None
+    workspace_access: Optional[Dict[str, Dict[str, Any]]] = None
+    hub_hide_disabled_cards: Optional[bool] = None
 
 
 # --- Authentication & Settings Manager ---
@@ -266,6 +294,19 @@ class AuthManager:
         self.settings_file = self.auth_dir / "settings.json"
         self._ensure_storage()
 
+    def _normalize_workspace_access(self, raw_access: Any) -> Dict[str, Dict[str, Any]]:
+        result = {}
+        for ws, default_cfg in DEFAULT_WORKSPACE_ACCESS.items():
+            user_cfg = raw_access.get(ws, {}) if isinstance(raw_access, dict) else {}
+            if not isinstance(user_cfg, dict):
+                user_cfg = {}
+            result[ws] = {
+                "enabled": bool(user_cfg.get("enabled", default_cfg["enabled"])) if "enabled" in user_cfg else default_cfg["enabled"],
+                "guest_allowed": bool(user_cfg.get("guest_allowed", default_cfg["guest_allowed"])) if "guest_allowed" in user_cfg else default_cfg["guest_allowed"],
+                "maintenance_message": str(user_cfg.get("maintenance_message") if user_cfg.get("maintenance_message") is not None else default_cfg["maintenance_message"]).strip()[:500],
+            }
+        return result
+
     def _ensure_storage(self):
         """Create auth directory with POSIX 0700 permissions."""
         self.auth_dir.mkdir(parents=True, exist_ok=True)
@@ -282,6 +323,8 @@ class AuthManager:
                 "max_global_storage_mb": MAX_GLOBAL_TEMP_STORAGE_MB,
                 "suno_integration_enabled": False,
                 "quick_settings_pinned": list(DEFAULT_PINNED_SETTINGS),
+                "workspace_access": copy.deepcopy(DEFAULT_WORKSPACE_ACCESS),
+                "hub_hide_disabled_cards": False,
                 "updated_at": int(time.time()),
             }
             self._save_settings(default_settings)
@@ -354,6 +397,8 @@ class AuthManager:
             "max_upload_size_mb": MAX_UPLOAD_SIZE_MB,
             "max_global_storage_mb": MAX_GLOBAL_TEMP_STORAGE_MB,
             "quick_settings_pinned": list(DEFAULT_PINNED_SETTINGS),
+            "workspace_access": copy.deepcopy(DEFAULT_WORKSPACE_ACCESS),
+            "hub_hide_disabled_cards": False,
         }
         if not self.settings_file.exists():
             return default_res
@@ -362,6 +407,11 @@ class AuthManager:
                 data = json.load(f)
                 if not isinstance(data.get("quick_settings_pinned"), list):
                     data["quick_settings_pinned"] = list(DEFAULT_PINNED_SETTINGS)
+                data["workspace_access"] = self._normalize_workspace_access(data.get("workspace_access"))
+                if "hub_hide_disabled_cards" not in data:
+                    data["hub_hide_disabled_cards"] = False
+                else:
+                    data["hub_hide_disabled_cards"] = bool(data["hub_hide_disabled_cards"])
                 return data
         except Exception as e:
             logger.error(f"Error reading settings file: {e}")
@@ -482,6 +532,25 @@ class AuthManager:
                     sanitized_pins.append(norm_item)
             updates["quick_settings_pinned"] = sanitized_pins
 
+        if "workspace_access" in updates and updates["workspace_access"] is not None:
+            raw_ws = updates["workspace_access"]
+            current_ws = current.get("workspace_access", copy.deepcopy(DEFAULT_WORKSPACE_ACCESS))
+            if isinstance(raw_ws, dict):
+                for ws, cfg in raw_ws.items():
+                    if ws in DEFAULT_WORKSPACE_ACCESS and isinstance(cfg, dict):
+                        if ws not in current_ws:
+                            current_ws[ws] = copy.deepcopy(DEFAULT_WORKSPACE_ACCESS[ws])
+                        if "enabled" in cfg and cfg["enabled"] is not None:
+                            current_ws[ws]["enabled"] = bool(cfg["enabled"])
+                        if "guest_allowed" in cfg and cfg["guest_allowed"] is not None:
+                            current_ws[ws]["guest_allowed"] = bool(cfg["guest_allowed"])
+                        if "maintenance_message" in cfg and cfg["maintenance_message"] is not None:
+                            current_ws[ws]["maintenance_message"] = str(cfg["maintenance_message"]).strip()[:500]
+            updates["workspace_access"] = current_ws
+
+        if "hub_hide_disabled_cards" in updates and updates["hub_hide_disabled_cards"] is not None:
+            updates["hub_hide_disabled_cards"] = bool(updates["hub_hide_disabled_cards"])
+
         for k, v in updates.items():
             if v is not None:
                 current[k] = v
@@ -491,7 +560,7 @@ class AuthManager:
         return current
 
     def is_guest_mode_enabled(self) -> bool:
-        """Check if unauthenticated guest access to /app is permitted."""
+        """Check if unauthenticated guest access is permitted system-wide."""
         settings = self._load_settings()
         return bool(settings.get("guest_mode_enabled", settings.get("guest_mode", False)))
 
@@ -499,6 +568,31 @@ class AuthManager:
         """Check if Suno metadata detection and enrichment integration is enabled."""
         settings = self._load_settings()
         return bool(settings.get("suno_integration_enabled", False))
+
+    def get_workspace_access(self, workspace: str) -> Dict[str, Any]:
+        """Return access configuration for a workspace (app, manager, projects)."""
+        settings = self._load_settings()
+        ws_access = settings.get("workspace_access", DEFAULT_WORKSPACE_ACCESS)
+        if workspace in ws_access:
+            return ws_access[workspace]
+        return DEFAULT_WORKSPACE_ACCESS.get(workspace, {"enabled": True, "guest_allowed": False, "maintenance_message": ""})
+
+    def is_workspace_enabled(self, workspace: str) -> bool:
+        """Check if a workspace is active or in maintenance mode."""
+        cfg = self.get_workspace_access(workspace)
+        return bool(cfg.get("enabled", True))
+
+    def is_workspace_guest_allowed(self, workspace: str) -> bool:
+        """Check if unauthenticated guests can access the workspace when Guest Mode is active."""
+        if not self.is_guest_mode_enabled():
+            return False
+        cfg = self.get_workspace_access(workspace)
+        return bool(cfg.get("guest_allowed", False))
+
+    def get_workspace_maintenance_message(self, workspace: str) -> str:
+        """Return the configured maintenance message for a workspace."""
+        cfg = self.get_workspace_access(workspace)
+        return cfg.get("maintenance_message") or DEFAULT_WORKSPACE_ACCESS.get(workspace, {}).get("maintenance_message", "Workspace is undergoing scheduled maintenance.")
 
 
 auth_manager = AuthManager()

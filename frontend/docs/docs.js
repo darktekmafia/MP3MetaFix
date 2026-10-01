@@ -20,16 +20,22 @@
       lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>',
       cpu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>',
       'shield-check': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>',
+      'shield-alert': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>',
+      map: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon><line x1="8" y1="2" x2="8" y2="18"></line><line x1="16" y1="6" x2="16" y2="22"></line></svg>',
+      history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline><path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5"></path></svg>',
+      compass: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg>',
+      users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>',
+      'book-open': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>',
       code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>',
       'file-text': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>',
     };
     return icons[iconName] || icons['file-text'];
   }
 
-  // Safe in-line text parser: parses bold, code, links, kbd without raw innerHTML
+  // Safe in-line text parser: parses bold, code, links, images, badges, kbd without raw innerHTML
   function parseInlineFormatting(text, container) {
-    // Matches: `code`, **bold**, *italic*, [link](url), <kbd>key</kbd>
-    const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\)|<kbd>[^<]+<\/kbd>)/g;
+    // Matches: `code`, **bold**, *italic*, [![alt](img)](url), ![alt](img), [link](url), <kbd>key</kbd>
+    const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[!\[[^\]]*\]\((?:[^()]+|\([^()]*\))*\)\]\((?:[^()]+|\([^()]*\))*\)|!\[[^\]]*\]\((?:[^()]+|\([^()]*\))*\)|\[[^\]]+\]\((?:[^()]+|\([^()]*\))*\)|<kbd>[^<]+<\/kbd>)/g;
     let lastIndex = 0;
     let match;
 
@@ -56,6 +62,57 @@
         const kbd = document.createElement('kbd');
         kbd.textContent = raw.slice(5, -6);
         container.appendChild(kbd);
+      } else if (raw.startsWith('[![') && raw.endsWith(')')) {
+        // Linked image / badge: [![alt](imgUrl)](linkUrl)
+        const lastSplit = raw.lastIndexOf('](');
+        if (lastSplit !== -1) {
+          const imgPart = raw.substring(1, lastSplit); // ![alt](imgUrl)
+          let linkUrl = raw.substring(lastSplit + 2, raw.length - 1); // linkUrl
+          
+          const imgSplit = imgPart.indexOf('](');
+          const altText = imgPart.substring(2, imgSplit);
+          const imgSrc = imgPart.substring(imgSplit + 2, imgPart.length - 1);
+
+          const a = document.createElement('a');
+          const cleanUrl = linkUrl.split('#')[0];
+          if (cleanUrl.includes('VERSION') || cleanUrl.includes('backend/') || cleanUrl.includes('frontend/')) {
+            linkUrl = `https://github.com/darktekmafia/MP3MetaFix/blob/main/${cleanUrl.replace(/^\.\.\//, '').replace(/^\.\//, '')}`;
+          }
+          a.href = linkUrl;
+          if (linkUrl.startsWith('#')) {
+            a.addEventListener('click', (e) => {
+              e.preventDefault();
+              const targetId = linkUrl.substring(1);
+              if (targetId && targetId !== '#') {
+                window.location.hash = targetId;
+                loadDoc(targetId);
+              }
+            });
+          } else if (linkUrl.startsWith('http://') || linkUrl.startsWith('https://')) {
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+          }
+
+          const img = document.createElement('img');
+          img.src = imgSrc;
+          img.alt = altText;
+          img.className = 'docs-badge-img';
+          img.loading = 'lazy';
+          a.appendChild(img);
+          container.appendChild(a);
+        }
+      } else if (raw.startsWith('![') && raw.includes('](') && raw.endsWith(')')) {
+        // Standalone image: ![alt](imgUrl)
+        const splitIdx = raw.indexOf('](');
+        const altText = raw.substring(2, splitIdx);
+        const imgSrc = raw.substring(splitIdx + 2, raw.length - 1);
+
+        const img = document.createElement('img');
+        img.src = imgSrc;
+        img.alt = altText;
+        img.className = 'docs-inline-img';
+        img.loading = 'lazy';
+        container.appendChild(img);
       } else if (raw.startsWith('[') && raw.includes('](') && raw.endsWith(')')) {
         const splitIdx = raw.indexOf('](');
         const linkText = raw.substring(1, splitIdx);
@@ -64,19 +121,43 @@
         const a = document.createElement('a');
         a.textContent = linkText;
         
-        // Handle internal doc routing (e.g. docs/app/README.md -> #app)
-        if (linkUrl.includes('docs/app') || linkUrl.endsWith('/app.md')) linkUrl = '#app';
-        else if (linkUrl.includes('docs/manager') || linkUrl.endsWith('/manager.md')) linkUrl = '#manager';
-        else if (linkUrl.includes('docs/projects') || linkUrl.endsWith('/projects.md')) linkUrl = '#projects';
-        else if (linkUrl.includes('docs/admin') || linkUrl.endsWith('/admin.md')) linkUrl = '#admin';
-        else if (linkUrl.includes('DEPLOYMENT.md')) linkUrl = '#deployment';
-        else if (linkUrl.includes('ACCOUNT_MIGRATION.md')) linkUrl = '#account_migration';
-        else if (linkUrl.includes('ARCHITECTURE.md')) linkUrl = '#architecture';
-        else if (linkUrl.includes('SECURITY_HARDENING.md')) linkUrl = '#security';
-        else if (linkUrl.includes('development_workflow.md')) linkUrl = '#workflow';
+        // Strip URL query or hash fragment for matching
+        const cleanUrl = linkUrl.split('#')[0];
+        
+        // Handle internal doc routing (e.g. docs/app/README.md -> #app, ROADMAP.md -> #roadmap)
+        if (cleanUrl.includes('docs/app') || cleanUrl.endsWith('/app.md') || cleanUrl === 'app') linkUrl = '#app';
+        else if (cleanUrl.includes('docs/manager') || cleanUrl.endsWith('/manager.md') || cleanUrl === 'manager') linkUrl = '#manager';
+        else if (cleanUrl.includes('docs/projects') || cleanUrl.endsWith('/projects.md') || cleanUrl === 'projects') linkUrl = '#projects';
+        else if (cleanUrl.includes('docs/admin') || cleanUrl.endsWith('/admin.md') || cleanUrl === 'admin') linkUrl = '#admin';
+        else if (cleanUrl.includes('DEPLOYMENT.md') || cleanUrl === 'deployment') linkUrl = '#deployment';
+        else if (cleanUrl.includes('ACCOUNT_MIGRATION.md') || cleanUrl === 'account_migration') linkUrl = '#account_migration';
+        else if (cleanUrl.includes('ARCHITECTURE.md') || cleanUrl === 'architecture') linkUrl = '#architecture';
+        else if (cleanUrl.includes('SECURITY_HARDENING.md') || cleanUrl === 'security') linkUrl = '#security';
+        else if (cleanUrl.includes('SECURITY_REMEDIATION_2026-09-21.md') || cleanUrl.includes('SECURITY_REMEDIATION') || cleanUrl === 'security_remediation') linkUrl = '#security_remediation';
+        else if (cleanUrl.includes('SECURITY_AUDIT_2026-09-20.md') || cleanUrl.includes('SECURITY_AUDIT') || cleanUrl === 'security_audit') linkUrl = '#security_audit';
+        else if (cleanUrl.includes('SUNO_TOS_COMPLIANCE.md') || cleanUrl === 'suno_tos') linkUrl = '#suno_tos';
+        else if (cleanUrl.includes('development_workflow.md') || cleanUrl === 'workflow') linkUrl = '#workflow';
+        else if (cleanUrl.includes('ROADMAP.md') || cleanUrl === 'roadmap') linkUrl = '#roadmap';
+        else if (cleanUrl.includes('CHANGELOG.md') || cleanUrl === 'changelog') linkUrl = '#changelog';
+        else if (cleanUrl.includes('VISION.md') || cleanUrl === 'vision') linkUrl = '#vision';
+        else if (cleanUrl.includes('GOVERNANCE.md') || cleanUrl === 'governance') linkUrl = '#governance';
+        else if (cleanUrl.endsWith('README.md') || cleanUrl === 'README.md' || cleanUrl === '../README.md' || cleanUrl === 'readme') linkUrl = '#readme';
+        else if (cleanUrl.includes('backend/') || cleanUrl.includes('frontend/') || cleanUrl.includes('install.sh') || cleanUrl.includes('VERSION')) {
+          const stripped = cleanUrl.replace(/^\.\.\//, '').replace(/^\.\//, '');
+          linkUrl = `https://github.com/darktekmafia/MP3MetaFix/blob/main/${stripped}`;
+        }
         
         a.href = linkUrl;
-        if (linkUrl.startsWith('http') || linkUrl.startsWith('https')) {
+        if (linkUrl.startsWith('#')) {
+          a.addEventListener('click', (e) => {
+            e.preventDefault();
+            const targetId = linkUrl.substring(1);
+            if (targetId && targetId !== '#') {
+              window.location.hash = targetId;
+              loadDoc(targetId);
+            }
+          });
+        } else if (linkUrl.startsWith('http://') || linkUrl.startsWith('https://')) {
           a.target = '_blank';
           a.rel = 'noopener noreferrer';
         }
@@ -288,11 +369,39 @@
         continue;
       }
 
-      // Normal Paragraph
-      const p = document.createElement('p');
-      parseInlineFormatting(line, p);
-      targetContainer.appendChild(p);
-      i++;
+      // Normal Paragraph (group consecutive prose/badge lines)
+      const paragraphLines = [];
+      while (
+        i < lines.length &&
+        lines[i].trim() &&
+        !lines[i].trim().startsWith('#') &&
+        !lines[i].trim().startsWith('```') &&
+        !lines[i].trim().startsWith('>') &&
+        !(lines[i].includes('|') && lines[i].trim().startsWith('|')) &&
+        !lines[i].trim().startsWith('- ') &&
+        !lines[i].trim().startsWith('* ') &&
+        !/^\d+\.\s/.test(lines[i].trim()) &&
+        lines[i].trim() !== '---' &&
+        lines[i].trim() !== '***'
+      ) {
+        paragraphLines.push(lines[i].trim());
+        i++;
+      }
+
+      if (paragraphLines.length > 0) {
+        const p = document.createElement('p');
+        const isBadgeOnly = paragraphLines.every(pl => pl.startsWith('[![') || pl.startsWith('!['));
+        if (isBadgeOnly) {
+          p.className = 'docs-badge-row';
+        }
+        paragraphLines.forEach((pl, idx) => {
+          if (idx > 0) {
+            p.appendChild(document.createTextNode(' '));
+          }
+          parseInlineFormatting(pl, p);
+        });
+        targetContainer.appendChild(p);
+      }
     }
   }
 
@@ -484,7 +593,7 @@
     // Listen for hash changes
     window.addEventListener('hashchange', () => {
       const hash = window.location.hash.replace('#', '').trim();
-      if (hash && hash !== currentDocId && docsList.some(d => d.id === hash)) {
+      if (hash && hash !== currentDocId) {
         loadDoc(hash);
       }
     });

@@ -14,6 +14,8 @@
     guestMode: false,
     isGuest: false,
     sunoIntegrationEnabled: false,
+    workspaceAccess: {},
+    hubHideDisabledCards: false,
   };
 
   // Safe toast notifier fallback
@@ -58,186 +60,267 @@
   // --- Header Account Pill & Dropdown Management ---
   function renderHeaderAuth() {
     const container = document.getElementById('headerAuthContainer');
-    if (!container) return;
+    if (container) {
+      // Clear existing
+      container.innerHTML = '';
 
-    // Clear existing
-    container.innerHTML = '';
+      if (!AuthState.authenticated) {
+        // Guest or Unauthenticated State
+        if (AuthState.guestMode) {
+          const guestPill = document.createElement('div');
+          guestPill.className = 'auth-user-pill';
+          guestPill.title = 'You are currently browsing in Guest Mode';
 
-    if (!AuthState.authenticated) {
-      // Guest or Unauthenticated State
-      if (AuthState.guestMode) {
-        const guestPill = document.createElement('div');
-        guestPill.className = 'auth-user-pill';
-        guestPill.title = 'You are currently browsing in Guest Mode';
+          const avatar = document.createElement('div');
+          avatar.className = 'auth-avatar avatar-guest';
+          avatar.textContent = 'G';
+
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'auth-username';
+          nameSpan.textContent = 'Guest';
+
+          const roleSpan = document.createElement('span');
+          roleSpan.className = 'auth-role-tag role-guest';
+          roleSpan.textContent = 'Guest';
+
+          const helpBtn = document.createElement('button');
+          helpBtn.type = 'button';
+          helpBtn.className = 'btn btn-secondary btn-xs';
+          helpBtn.style.marginLeft = '0.35rem';
+          helpBtn.title = 'Documentation & Help';
+          helpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+          helpBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openHelpModal();
+          });
+
+          const loginBtn = document.createElement('button');
+          loginBtn.className = 'btn btn-secondary btn-xs';
+          loginBtn.style.marginLeft = '0.35rem';
+          loginBtn.textContent = 'Log In';
+          loginBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openModal('loginModal');
+          });
+
+          guestPill.appendChild(avatar);
+          guestPill.appendChild(nameSpan);
+          guestPill.appendChild(roleSpan);
+          guestPill.appendChild(helpBtn);
+          guestPill.appendChild(loginBtn);
+          container.appendChild(guestPill);
+        } else {
+          const helpBtn = document.createElement('button');
+          helpBtn.type = 'button';
+          helpBtn.className = 'btn btn-secondary btn-sm';
+          helpBtn.style.marginRight = '0.5rem';
+          helpBtn.title = 'Help & Documentation';
+          helpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg><span>Help</span>';
+          helpBtn.addEventListener('click', () => openHelpModal());
+
+          const loginBtn = document.createElement('button');
+          loginBtn.className = 'btn btn-primary btn-sm';
+          loginBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg><span>Sign In</span>';
+          loginBtn.addEventListener('click', () => openModal('loginModal'));
+
+          container.appendChild(helpBtn);
+          container.appendChild(loginBtn);
+        }
+      } else {
+        // Authenticated User Pill
+        const userPill = document.createElement('button');
+        userPill.className = 'auth-user-pill';
+        userPill.id = 'authUserPill';
+        userPill.setAttribute('aria-haspopup', 'true');
+        userPill.setAttribute('aria-expanded', 'false');
 
         const avatar = document.createElement('div');
-        avatar.className = 'auth-avatar avatar-guest';
-        avatar.textContent = 'G';
+        avatar.className = 'auth-avatar';
+        avatar.textContent = (AuthState.username || 'U').charAt(0).toUpperCase();
 
         const nameSpan = document.createElement('span');
         nameSpan.className = 'auth-username';
-        nameSpan.textContent = 'Guest';
+        nameSpan.textContent = AuthState.username;
 
         const roleSpan = document.createElement('span');
-        roleSpan.className = 'auth-role-tag role-guest';
-        roleSpan.textContent = 'Guest';
+        roleSpan.className = `auth-role-tag role-${AuthState.role === 'admin' ? 'admin' : 'user'}`;
+        roleSpan.textContent = AuthState.role === 'admin' ? 'Admin' : 'User';
 
-        const helpBtn = document.createElement('button');
-        helpBtn.type = 'button';
-        helpBtn.className = 'btn btn-secondary btn-xs';
-        helpBtn.style.marginLeft = '0.35rem';
-        helpBtn.title = 'Documentation & Help';
-        helpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
-        helpBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
+        const chevronSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        chevronSvg.setAttribute('viewBox', '0 0 24 24');
+        chevronSvg.setAttribute('fill', 'none');
+        chevronSvg.setAttribute('stroke', 'currentColor');
+        chevronSvg.setAttribute('stroke-width', '2');
+        chevronSvg.setAttribute('class', 'auth-chevron');
+        const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        polyline.setAttribute('points', '6 9 12 15 18 9');
+        chevronSvg.appendChild(polyline);
+
+        userPill.appendChild(avatar);
+        userPill.appendChild(nameSpan);
+        userPill.appendChild(roleSpan);
+        userPill.appendChild(chevronSvg);
+
+        // Dropdown Menu
+        const dropdown = document.createElement('div');
+        dropdown.className = 'auth-dropdown-menu hidden';
+        dropdown.id = 'authDropdownMenu';
+
+        const userInfo = document.createElement('div');
+        userInfo.className = 'dropdown-user-info';
+        const dName = document.createElement('div');
+        dName.className = 'dropdown-name';
+        dName.textContent = AuthState.username;
+        const dRole = document.createElement('div');
+        dRole.className = 'dropdown-role';
+        dRole.textContent = `Signed in as ${AuthState.role === 'admin' ? 'Administrator' : 'User'}`;
+        userInfo.appendChild(dName);
+        userInfo.appendChild(dRole);
+        dropdown.appendChild(userInfo);
+
+        // If admin, add Admin Dashboard link
+        if (AuthState.role === 'admin') {
+          const adminLink = document.createElement('a');
+          adminLink.href = '/admin';
+          adminLink.className = 'dropdown-item';
+          adminLink.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg><span>Admin Dashboard</span>';
+          dropdown.appendChild(adminLink);
+        }
+
+        // Quick Settings Item
+        const settingsItem = document.createElement('button');
+        settingsItem.className = 'dropdown-item';
+        settingsItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg><span>Quick Settings</span>';
+        settingsItem.addEventListener('click', () => {
+          dropdown.classList.add('hidden');
+          userPill.classList.remove('active');
+          openSettingsModal();
+        });
+        dropdown.appendChild(settingsItem);
+
+        // Help & Documentation Item
+        const helpItem = document.createElement('button');
+        helpItem.type = 'button';
+        helpItem.className = 'dropdown-item';
+        helpItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg><span>Help & Documentation</span>';
+        helpItem.addEventListener('click', () => {
+          dropdown.classList.add('hidden');
+          userPill.classList.remove('active');
           openHelpModal();
         });
+        dropdown.appendChild(helpItem);
+
+        // Logout Item
+        const logoutItem = document.createElement('button');
+        logoutItem.className = 'dropdown-item dropdown-item-danger';
+        logoutItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg><span>Sign Out</span>';
+        logoutItem.addEventListener('click', handleLogout);
+        dropdown.appendChild(logoutItem);
+
+        // Toggle dropdown
+        userPill.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const isClosed = dropdown.classList.contains('hidden');
+          if (isClosed) {
+            dropdown.classList.remove('hidden');
+            userPill.classList.add('active');
+            userPill.setAttribute('aria-expanded', 'true');
+          } else {
+            dropdown.classList.add('hidden');
+            userPill.classList.remove('active');
+            userPill.setAttribute('aria-expanded', 'false');
+          }
+        });
+
+        // Close dropdown on outside click
+        document.addEventListener('click', (e) => {
+          if (!container.contains(e.target)) {
+            dropdown.classList.add('hidden');
+            userPill.classList.remove('active');
+            userPill.setAttribute('aria-expanded', 'false');
+          }
+        });
+
+        container.appendChild(userPill);
+        container.appendChild(dropdown);
+      }
+    }
+
+    // Sync Mobile Drawer Auth Card (if present on page)
+    const mobileAuthContainer = document.getElementById('mobileDrawerAuth');
+    if (mobileAuthContainer) {
+      mobileAuthContainer.innerHTML = '';
+      if (!AuthState.authenticated) {
+        const guestCard = document.createElement('div');
+        guestCard.className = 'drawer-user-card';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'auth-avatar avatar-guest';
+        avatar.textContent = AuthState.guestMode ? 'G' : '?';
+
+        const info = document.createElement('div');
+        info.className = 'drawer-user-info';
+        const name = document.createElement('div');
+        name.className = 'drawer-user-name';
+        name.textContent = AuthState.guestMode ? 'Guest Mode' : 'Not Signed In';
+        const role = document.createElement('span');
+        role.className = 'auth-role-tag role-guest';
+        role.textContent = AuthState.guestMode ? 'Public Access' : 'Sign In Required';
+        info.appendChild(name);
+        info.appendChild(role);
 
         const loginBtn = document.createElement('button');
-        loginBtn.className = 'btn btn-secondary btn-xs';
-        loginBtn.style.marginLeft = '0.35rem';
-        loginBtn.textContent = 'Log In';
-        loginBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
+        loginBtn.type = 'button';
+        loginBtn.className = 'btn btn-primary btn-sm';
+        loginBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg><span>Sign In</span>';
+        loginBtn.addEventListener('click', () => {
+          closeMobileDrawer();
           openModal('loginModal');
         });
 
-        guestPill.appendChild(avatar);
-        guestPill.appendChild(nameSpan);
-        guestPill.appendChild(roleSpan);
-        guestPill.appendChild(helpBtn);
-        guestPill.appendChild(loginBtn);
-        container.appendChild(guestPill);
+        guestCard.appendChild(avatar);
+        guestCard.appendChild(info);
+        guestCard.appendChild(loginBtn);
+        mobileAuthContainer.appendChild(guestCard);
       } else {
-        const loginBtn = document.createElement('button');
-        loginBtn.className = 'btn btn-primary btn-sm';
-        loginBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg><span>Sign In</span>';
-        loginBtn.addEventListener('click', () => openModal('loginModal'));
-        container.appendChild(loginBtn);
+        const userCard = document.createElement('div');
+        userCard.className = 'drawer-user-card';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'auth-avatar';
+        avatar.textContent = (AuthState.username || 'U').charAt(0).toUpperCase();
+
+        const info = document.createElement('div');
+        info.className = 'drawer-user-info';
+        const name = document.createElement('div');
+        name.className = 'drawer-user-name';
+        name.textContent = AuthState.username;
+        const role = document.createElement('span');
+        role.className = `auth-role-tag role-${AuthState.role === 'admin' ? 'admin' : 'user'}`;
+        role.textContent = AuthState.role === 'admin' ? 'Admin' : 'User';
+        info.appendChild(name);
+        info.appendChild(role);
+
+        const logoutBtn = document.createElement('button');
+        logoutBtn.type = 'button';
+        logoutBtn.className = 'btn btn-secondary btn-sm';
+        logoutBtn.title = 'Sign Out';
+        logoutBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg><span>Sign Out</span>';
+        logoutBtn.addEventListener('click', () => {
+          closeMobileDrawer();
+          handleLogout();
+        });
+
+        userCard.appendChild(avatar);
+        userCard.appendChild(info);
+        userCard.appendChild(logoutBtn);
+        mobileAuthContainer.appendChild(userCard);
       }
-      return;
     }
-
-    // Authenticated User Pill
-    const userPill = document.createElement('button');
-    userPill.className = 'auth-user-pill';
-    userPill.id = 'authUserPill';
-    userPill.setAttribute('aria-haspopup', 'true');
-    userPill.setAttribute('aria-expanded', 'false');
-
-    const avatar = document.createElement('div');
-    avatar.className = 'auth-avatar';
-    avatar.textContent = (AuthState.username || 'U').charAt(0).toUpperCase();
-
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'auth-username';
-    nameSpan.textContent = AuthState.username;
-
-    const roleSpan = document.createElement('span');
-    roleSpan.className = `auth-role-tag role-${AuthState.role === 'admin' ? 'admin' : 'user'}`;
-    roleSpan.textContent = AuthState.role === 'admin' ? 'Admin' : 'User';
-
-    const chevronSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    chevronSvg.setAttribute('viewBox', '0 0 24 24');
-    chevronSvg.setAttribute('fill', 'none');
-    chevronSvg.setAttribute('stroke', 'currentColor');
-    chevronSvg.setAttribute('stroke-width', '2');
-    chevronSvg.setAttribute('class', 'auth-chevron');
-    const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    polyline.setAttribute('points', '6 9 12 15 18 9');
-    chevronSvg.appendChild(polyline);
-
-    userPill.appendChild(avatar);
-    userPill.appendChild(nameSpan);
-    userPill.appendChild(roleSpan);
-    userPill.appendChild(chevronSvg);
-
-    // Dropdown Menu
-    const dropdown = document.createElement('div');
-    dropdown.className = 'auth-dropdown-menu hidden';
-    dropdown.id = 'authDropdownMenu';
-
-    const userInfo = document.createElement('div');
-    userInfo.className = 'dropdown-user-info';
-    const dName = document.createElement('div');
-    dName.className = 'dropdown-name';
-    dName.textContent = AuthState.username;
-    const dRole = document.createElement('div');
-    dRole.className = 'dropdown-role';
-    dRole.textContent = `Signed in as ${AuthState.role === 'admin' ? 'Administrator' : 'User'}`;
-    userInfo.appendChild(dName);
-    userInfo.appendChild(dRole);
-    dropdown.appendChild(userInfo);
-
-    // If admin, add Admin Dashboard link
-    if (AuthState.role === 'admin') {
-      const adminLink = document.createElement('a');
-      adminLink.href = '/admin';
-      adminLink.className = 'dropdown-item';
-      adminLink.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg><span>Admin Dashboard</span>';
-      dropdown.appendChild(adminLink);
-    }
-
-    // Quick Settings Item
-    const settingsItem = document.createElement('button');
-    settingsItem.className = 'dropdown-item';
-    settingsItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg><span>Quick Settings</span>';
-    settingsItem.addEventListener('click', () => {
-      dropdown.classList.add('hidden');
-      userPill.classList.remove('active');
-      openSettingsModal();
-    });
-    dropdown.appendChild(settingsItem);
-
-    // Help & Documentation Item
-    const helpItem = document.createElement('button');
-    helpItem.type = 'button';
-    helpItem.className = 'dropdown-item';
-    helpItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg><span>Help & Documentation</span>';
-    helpItem.addEventListener('click', () => {
-      dropdown.classList.add('hidden');
-      userPill.classList.remove('active');
-      openHelpModal();
-    });
-    dropdown.appendChild(helpItem);
-
-    // Logout Item
-    const logoutItem = document.createElement('button');
-    logoutItem.className = 'dropdown-item dropdown-item-danger';
-    logoutItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg><span>Sign Out</span>';
-    logoutItem.addEventListener('click', handleLogout);
-    dropdown.appendChild(logoutItem);
-
-    // Toggle dropdown
-    userPill.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const isClosed = dropdown.classList.contains('hidden');
-      if (isClosed) {
-        dropdown.classList.remove('hidden');
-        userPill.classList.add('active');
-        userPill.setAttribute('aria-expanded', 'true');
-      } else {
-        dropdown.classList.add('hidden');
-        userPill.classList.remove('active');
-        userPill.setAttribute('aria-expanded', 'false');
-      }
-    });
-
-    // Close dropdown on outside click
-    document.addEventListener('click', (e) => {
-      if (!container.contains(e.target)) {
-        dropdown.classList.add('hidden');
-        userPill.classList.remove('active');
-        userPill.setAttribute('aria-expanded', 'false');
-      }
-    });
-
-    container.appendChild(userPill);
-    container.appendChild(dropdown);
 
     // Dynamic Admin-only DOM elements visibility
     document.querySelectorAll('.admin-only').forEach((el) => {
-      if (AuthState.role === 'admin') {
+      if (AuthState.authenticated && AuthState.role === 'admin') {
         el.classList.remove('hidden');
       } else {
         el.classList.add('hidden');
@@ -245,12 +328,214 @@
     });
   }
 
-  // Check if current route is permitted for unauthenticated guests when guestMode is enabled
-  function isGuestAllowedPath() {
+  function getCurrentWorkspace() {
     const path = window.location.pathname;
-    const isHub = path === '/' || path === '/index.html' || path === '';
-    const isApp = path === '/app' || path.startsWith('/app/');
-    return isHub || isApp;
+    if (path === '/app' || path.startsWith('/app/')) return 'app';
+    if (path === '/manager' || path.startsWith('/manager/')) return 'manager';
+    if (path === '/projects' || path.startsWith('/projects/')) return 'projects';
+    if (path === '/admin' || path.startsWith('/admin/')) return 'admin';
+    if (path === '/docs' || path.startsWith('/docs/')) return 'docs';
+    return 'hub';
+  }
+
+  // Check if current route is permitted for unauthenticated guests
+  function isGuestAllowedPath(wsAccess) {
+    const ws = getCurrentWorkspace();
+    if (ws === 'hub' || ws === 'docs') return true;
+    if (ws === 'app' || ws === 'manager' || ws === 'projects') {
+      const cfg = wsAccess && wsAccess[ws];
+      if (cfg && typeof cfg.guest_allowed === 'boolean') return cfg.guest_allowed;
+      if (ws === 'app') return true;
+    }
+    return false;
+  }
+
+  // --- Safe DOM Maintenance Views & Banners ---
+  function renderMaintenanceView(workspace, cfg) {
+    let overlay = document.getElementById('maintenanceOverlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'maintenanceOverlay';
+      overlay.className = 'maintenance-overlay';
+      document.body.appendChild(overlay);
+    }
+    overlay.textContent = ''; // safe clear
+
+    const card = document.createElement('div');
+    card.className = 'card maintenance-card';
+
+    const iconDiv = document.createElement('div');
+    iconDiv.className = 'maintenance-icon-badge';
+    iconDiv.textContent = '🛠️';
+
+    const badgePill = document.createElement('div');
+    badgePill.className = 'app-badge-pill pill-maintenance';
+    const pillDot = document.createElement('span');
+    pillDot.className = 'pill-dot pill-dot-amber';
+    const pillText = document.createElement('span');
+    pillText.textContent = 'Maintenance Mode Active';
+    badgePill.appendChild(pillDot);
+    badgePill.appendChild(pillText);
+
+    const title = document.createElement('h2');
+    title.className = 'maintenance-title';
+    const wsNames = {
+      app: 'MP3MetaFix',
+      manager: 'MP3MetaManager',
+      projects: 'MP3MetaProjects',
+    };
+    title.textContent = `${wsNames[workspace] || 'Workspace'} Under Maintenance`;
+
+    const msgP = document.createElement('p');
+    msgP.className = 'maintenance-message';
+    msgP.textContent = (cfg && cfg.maintenance_message) ? cfg.maintenance_message : 'This workspace is temporarily undergoing scheduled maintenance. Please check back shortly.';
+
+    const actionGroup = document.createElement('div');
+    actionGroup.className = 'maintenance-actions';
+
+    const hubLink = document.createElement('a');
+    hubLink.href = '/';
+    hubLink.className = 'btn btn-primary';
+    const hubText = document.createElement('span');
+    hubText.textContent = 'Return to Gateway Hub';
+    hubLink.appendChild(hubText);
+
+    actionGroup.appendChild(hubLink);
+
+    if (!AuthState.authenticated) {
+      const adminLoginBtn = document.createElement('button');
+      adminLoginBtn.type = 'button';
+      adminLoginBtn.className = 'btn btn-secondary';
+      adminLoginBtn.textContent = 'Sign In as Administrator';
+      adminLoginBtn.addEventListener('click', () => {
+        openModal('loginModal');
+      });
+      actionGroup.appendChild(adminLoginBtn);
+    }
+
+    card.appendChild(iconDiv);
+    card.appendChild(badgePill);
+    card.appendChild(title);
+    card.appendChild(msgP);
+    card.appendChild(actionGroup);
+
+    overlay.appendChild(card);
+    overlay.classList.remove('hidden');
+  }
+
+  function removeMaintenanceView() {
+    const overlay = document.getElementById('maintenanceOverlay');
+    if (overlay) {
+      overlay.remove();
+    }
+  }
+
+  function renderAdminMaintenanceBanner(workspace) {
+    let banner = document.getElementById('maintenanceAdminBanner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'maintenanceAdminBanner';
+      banner.className = 'maintenance-admin-banner';
+      const container = document.querySelector('.app-container') || document.body;
+      const header = container.querySelector('.app-header');
+      if (header && header.nextSibling) {
+        container.insertBefore(banner, header.nextSibling);
+      } else {
+        container.prepend(banner);
+      }
+    }
+    banner.textContent = '';
+
+    const pill = document.createElement('span');
+    pill.className = 'app-badge-pill pill-maintenance';
+    const dot = document.createElement('span');
+    dot.className = 'pill-dot pill-dot-amber';
+    const text = document.createElement('span');
+    text.textContent = '⚠️ Maintenance Mode Active';
+    pill.appendChild(dot);
+    pill.appendChild(text);
+
+    const desc = document.createElement('span');
+    desc.className = 'admin-banner-text';
+    desc.textContent = 'Admin Preview: You have full access to test this workspace while public and guest access is restricted.';
+
+    banner.appendChild(pill);
+    banner.appendChild(desc);
+  }
+
+  function removeAdminMaintenanceBanner() {
+    const banner = document.getElementById('maintenanceAdminBanner');
+    if (banner) {
+      banner.remove();
+    }
+  }
+
+  function updateHubCards(wsAccess, hubHideDisabled) {
+    const currentWs = getCurrentWorkspace();
+    if (currentWs !== 'hub') return;
+
+    const cardMap = [
+      { ws: 'app', cardSelector: '.app-card:not(.app-card-manager):not(.app-card-projects)', btnSelector: '#btnLaunchFix' },
+      { ws: 'manager', cardSelector: '.app-card-manager', btnSelector: '#btnLaunchManager' },
+      { ws: 'projects', cardSelector: '.app-card-projects', btnSelector: '#btnLaunchProjects' },
+    ];
+
+    cardMap.forEach(({ ws, cardSelector, btnSelector }) => {
+      const card = document.querySelector(cardSelector);
+      const btn = document.querySelector(btnSelector);
+      if (!card) return;
+
+      const cfg = wsAccess ? wsAccess[ws] : null;
+      const isEnabled = cfg ? cfg.enabled !== false : true;
+
+      if (!isEnabled) {
+        if (hubHideDisabled) {
+          card.style.display = 'none';
+        } else {
+          card.style.display = '';
+          card.classList.add('card-in-maintenance');
+
+          let badge = card.querySelector('.hub-maintenance-badge');
+          if (!badge) {
+            badge = document.createElement('div');
+            badge.className = 'app-badge-pill pill-maintenance hub-maintenance-badge';
+            const dot = document.createElement('span');
+            dot.className = 'pill-dot pill-dot-amber';
+            const txt = document.createElement('span');
+            txt.textContent = 'Maintenance Mode';
+            badge.appendChild(dot);
+            badge.appendChild(txt);
+            const header = card.querySelector('.app-card-header');
+            if (header) {
+              header.prepend(badge);
+            }
+          }
+
+          if (btn) {
+            btn.dataset.origHref = btn.getAttribute('href') || btn.dataset.origHref || `/${ws}`;
+            btn.dataset.origText = btn.dataset.origText || btn.textContent.trim();
+            btn.classList.add('btn-maintenance-disabled');
+            btn.removeAttribute('href');
+            btn.style.cursor = 'pointer';
+            const msg = cfg?.maintenance_message || 'Under scheduled maintenance.';
+            btn.onclick = (e) => {
+              e.preventDefault();
+              notify(`${card.querySelector('.app-title')?.textContent || ws}: ${msg}`, 'info');
+            };
+          }
+        }
+      } else {
+        card.style.display = '';
+        card.classList.remove('card-in-maintenance');
+        const badge = card.querySelector('.hub-maintenance-badge');
+        if (badge) badge.remove();
+        if (btn && btn.dataset.origHref) {
+          btn.setAttribute('href', btn.dataset.origHref);
+          btn.classList.remove('btn-maintenance-disabled');
+          btn.onclick = null;
+        }
+      }
+    });
   }
 
   // --- API Authentication Handlers ---
@@ -267,6 +552,8 @@
       AuthState.guestMode = !!data.guest_mode;
       AuthState.isGuest = !!data.is_guest;
       AuthState.sunoIntegrationEnabled = !!data.suno_integration_enabled;
+      AuthState.workspaceAccess = data.workspace_access || {};
+      AuthState.hubHideDisabledCards = !!data.hub_hide_disabled_cards;
       AuthState.maxUploadSizeMb = data.max_upload_size_mb || 150;
       window.MP3MetaFixMaxUploadSizeMb = AuthState.maxUploadSizeMb;
 
@@ -284,21 +571,42 @@
         return;
       }
 
-      const path = window.location.pathname;
-      const isAdminPage = path === '/admin' || path.startsWith('/admin/');
+      const currentWs = getCurrentWorkspace();
+      updateHubCards(AuthState.workspaceAccess, AuthState.hubHideDisabledCards);
+
+      // Check if current workspace is in maintenance mode
+      if (['app', 'manager', 'projects'].includes(currentWs)) {
+        const wsCfg = AuthState.workspaceAccess[currentWs];
+        const isWsEnabled = wsCfg ? wsCfg.enabled !== false : true;
+
+        if (!isWsEnabled) {
+          if (AuthState.authenticated && AuthState.role === 'admin') {
+            removeMaintenanceView();
+            renderAdminMaintenanceBanner(currentWs);
+          } else {
+            renderMaintenanceView(currentWs, wsCfg);
+            closeModal('loginModal');
+            closeModal('setupModal');
+            return;
+          }
+        } else {
+          removeMaintenanceView();
+          removeAdminMaintenanceBanner();
+        }
+      }
+
+      const isAdminPage = currentWs === 'admin';
 
       if (!AuthState.authenticated) {
-        if (AuthState.guestMode && isGuestAllowedPath()) {
-          // Allowed as Guest on / and /app
+        const isGuestPermitted = isGuestAllowedPath(AuthState.workspaceAccess);
+        if (AuthState.guestMode && isGuestPermitted) {
           closeModal('loginModal');
           closeModal('setupModal');
           window.dispatchEvent(new CustomEvent('mp3metafix:auth-ready', { detail: { ...AuthState } }));
         } else {
-          // Protected page (/manager, /admin) or Guest mode disabled -> show login modal
           openModal('loginModal');
         }
       } else {
-        // Authenticated user
         if (isAdminPage && AuthState.role !== 'admin') {
           notify('Administrator privileges required to access the Admin Control Center', 'error');
           setTimeout(() => { window.location.href = '/'; }, 1500);
@@ -772,9 +1080,54 @@
       });
     }
 
-    // Global Modal Escape & Backdrop handling for Settings/Login
+    // Mobile Navigation Drawer Controller
+    const mobileNavToggle = document.getElementById('mobileNavToggle');
+    if (mobileNavToggle) {
+      mobileNavToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openMobileDrawer();
+      });
+    }
+
+    const btnCloseDrawer = document.getElementById('btnCloseMobileDrawer');
+    if (btnCloseDrawer) {
+      btnCloseDrawer.addEventListener('click', closeMobileDrawer);
+    }
+
+    const drawerBackdrop = document.getElementById('mobileDrawerBackdrop');
+    if (drawerBackdrop) {
+      drawerBackdrop.addEventListener('click', closeMobileDrawer);
+    }
+
+    const btnMobileSettings = document.getElementById('btnMobileQuickSettings');
+    if (btnMobileSettings) {
+      btnMobileSettings.addEventListener('click', () => {
+        closeMobileDrawer();
+        openSettingsModal();
+      });
+    }
+
+    const btnMobileHelp = document.getElementById('btnMobileHelpDocs');
+    if (btnMobileHelp) {
+      btnMobileHelp.addEventListener('click', () => {
+        closeMobileDrawer();
+        openHelpModal();
+      });
+    }
+
+    document.querySelectorAll('#mobileNavDrawer .drawer-nav-item').forEach((link) => {
+      link.addEventListener('click', () => {
+        closeMobileDrawer();
+      });
+    });
+
+    // Global Modal & Drawer Escape key handling
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        const mobileDrawer = document.getElementById('mobileNavDrawer');
+        if (mobileDrawer && !mobileDrawer.classList.contains('hidden')) {
+          closeMobileDrawer();
+        }
         const settingsModal = document.getElementById('settingsModal');
         if (settingsModal && !settingsModal.classList.contains('hidden')) {
           closeModal('settingsModal');
@@ -807,6 +1160,37 @@
     // Initial Status Handshake
     checkAuthStatus();
   });
+
+  // Mobile Drawer Helpers
+  function openMobileDrawer() {
+    const drawer = document.getElementById('mobileNavDrawer');
+    const toggle = document.getElementById('mobileNavToggle');
+    if (!drawer) return;
+    drawer.classList.remove('hidden');
+    requestAnimationFrame(() => {
+      drawer.classList.add('open');
+    });
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', 'true');
+    }
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeMobileDrawer() {
+    const drawer = document.getElementById('mobileNavDrawer');
+    const toggle = document.getElementById('mobileNavToggle');
+    if (!drawer || drawer.classList.contains('hidden')) return;
+    drawer.classList.remove('open');
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', 'false');
+    }
+    document.body.style.overflow = '';
+    setTimeout(() => {
+      if (!drawer.classList.contains('open')) {
+        drawer.classList.add('hidden');
+      }
+    }, 250);
+  }
 
   // --- In-App Help Modal Controller ---
   let cachedDocsList = null;

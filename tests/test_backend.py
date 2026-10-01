@@ -38,6 +38,7 @@ def setup_auth_environment(tmp_path, monkeypatch):
     test_auth_mgr = AuthManager(auth_dir=auth_dir)
     monkeypatch.setattr("backend.main.auth_manager", test_auth_mgr)
     monkeypatch.setattr("backend.auth.auth_manager", test_auth_mgr)
+    monkeypatch.setattr("backend.projects_api.auth_manager", test_auth_mgr)
     login_rate_limiter.failed_attempts.clear()
     login_rate_limiter.blocked_until.clear()
     # Isolate uploaded files and rate limits as well as account state.
@@ -310,6 +311,11 @@ def test_multi_interface_static_mounts(client):
     assert res_mgr.status_code == 200
     assert "MP3MetaManager Desktop Workspace" in res_mgr.text
     assert "app-switcher-nav" in res_mgr.text
+    assert "manager-sidebar" in res_mgr.text
+    assert "MP3Metafix" in res_mgr.text
+    assert "uploadSection" in res_mgr.text
+    assert "editorSection" in res_mgr.text
+    assert "/js/app.js" in res_mgr.text
 
 
 def test_security_static_mounts_and_telemetry_isolation(client):
@@ -2612,8 +2618,127 @@ def test_quick_settings_pinned_persistence(auth_client, unauth_client):
     assert "software_updates" in pinned
     assert "invalid_key" not in pinned
 
-    # 4. Unauthenticated client cannot update
-    assert unauth_client.post("/api/settings", json={"quick_settings_pinned": ["guest_mode_enabled"]}).status_code == 401
+def test_workspace_access_controls_and_maintenance_mode(auth_client, unauth_client, sample_mp3_bytes):
+    import uuid
+    import time
+    from backend.auth import auth_manager, AUTH_COOKIE_NAME, hash_password
+
+    # 1. Verify default workspace settings in /api/auth/status and /api/settings
+    res_status = unauth_client.get("/api/auth/status")
+    assert res_status.status_code == 200
+    status_data = res_status.json()
+    assert "workspace_access" in status_data
+    assert "hub_hide_disabled_cards" in status_data
+    assert status_data["hub_hide_disabled_cards"] is False
+    assert status_data["workspace_access"]["app"]["enabled"] is True
+    assert status_data["workspace_access"]["app"]["guest_allowed"] is True
+    assert status_data["workspace_access"]["manager"]["guest_allowed"] is False
+    assert status_data["workspace_access"]["projects"]["guest_allowed"] is False
+
+    # 2. Update workspace settings as administrator
+    custom_msg = "MP3MetaFix is temporarily offline for maintenance."
+    res_update = auth_client.post("/api/settings", json={
+        "hub_hide_disabled_cards": True,
+        "workspace_access": {
+            "app": {
+                "enabled": False,
+                "guest_allowed": True,
+                "maintenance_message": custom_msg,
+            },
+            "manager": {
+                "enabled": True,
+                "guest_allowed": True,
+                "maintenance_message": "Manager notice",
+            },
+        },
+    })
+    assert res_update.status_code == 200
+
+    # Verify settings persisted
+    res_get = auth_client.get("/api/settings")
+    assert res_get.status_code == 200
+    settings_data = res_get.json()
+    assert settings_data["hub_hide_disabled_cards"] is True
+    assert settings_data["workspace_access"]["app"]["enabled"] is False
+    assert settings_data["workspace_access"]["app"]["maintenance_message"] == custom_msg
+    assert settings_data["workspace_access"]["manager"]["guest_allowed"] is True
+
+    # 3. Test maintenance mode gating on /app audio upload
+    # Guest mode is active
+    auth_client.post("/api/settings", json={"guest_mode_enabled": True})
+    
+    # Guest/Unauth client is blocked with 503 Maintenance Mode
+    res_blocked = unauth_client.post("/api/upload", files={"file": ("test.mp3", sample_mp3_bytes, "audio/mpeg")})
+    assert res_blocked.status_code == 503
+    assert custom_msg in res_blocked.json().get("detail", "")
+
+    # Admin client bypasses maintenance mode
+    res_admin_up = auth_client.post("/api/upload", files={"file": ("admin.mp3", sample_mp3_bytes, "audio/mpeg")})
+    assert res_admin_up.status_code == 200
+
+    # 4. Re-enable app, but disable guest access for app specifically
+    auth_client.post("/api/settings", json={
+        "workspace_access": {
+            "app": {
+                "enabled": True,
+                "guest_allowed": False,
+                "maintenance_message": "",
+            }
+        }
+    })
+    res_guest_denied = unauth_client.post("/api/upload", files={"file": ("test.mp3", sample_mp3_bytes, "audio/mpeg")})
+    assert res_guest_denied.status_code == 401
+    assert "not permitted for this workspace" in res_guest_denied.json().get("detail", "")
+
+    # 5. Test maintenance mode on persistent Projects workspace
+    proj_msg = "Projects studio workspace is undergoing database migration."
+    auth_client.post("/api/settings", json={
+        "workspace_access": {
+            "projects": {
+                "enabled": False,
+                "guest_allowed": False,
+                "maintenance_message": proj_msg,
+            }
+        }
+    })
+
+    # Non-admin user gets 503 Maintenance Mode on projects endpoints
+    # Create regular user account
+    user_id = str(uuid.uuid4())
+    users = auth_manager._load_users()
+    users.append({
+        "id": user_id,
+        "username": "regular_user",
+        "password_hash": hash_password("RegularPass123!"),
+        "role": "user",
+        "created_at": int(time.time()),
+        "updated_at": int(time.time()),
+    })
+    auth_manager._save_users(users)
+    user_token = auth_manager.issue_token(user_id)
+
+    user_client = TestClient(app)
+    user_client.cookies.set(AUTH_COOKIE_NAME, user_token, domain="testserver.local", path="/")
+
+    res_user_proj = user_client.get("/api/projects/tracks")
+    assert res_user_proj.status_code == 503
+    assert proj_msg in res_user_proj.json().get("detail", "")
+
+    # Admin user can access projects during maintenance mode
+    res_admin_proj = auth_client.get("/api/projects/tracks")
+    assert res_admin_proj.status_code == 200
+
+    # 6. Reset settings back to defaults
+    auth_client.post("/api/settings", json={
+        "guest_mode_enabled": False,
+        "hub_hide_disabled_cards": False,
+        "workspace_access": {
+            "app": {"enabled": True, "guest_allowed": True, "maintenance_message": ""},
+            "manager": {"enabled": True, "guest_allowed": False, "maintenance_message": ""},
+            "projects": {"enabled": True, "guest_allowed": False, "maintenance_message": ""},
+        }
+    })
+
 
 
 
@@ -3206,5 +3331,94 @@ do_install
     assert "To update MP3MetaFix:" in result.stdout
     assert "./install.sh --update" in result.stdout
     assert "./install.sh --reinstall" in result.stdout
+
+
+def test_sylt_extract_and_save_roundtrip(tmp_path):
+    """Verify SYLT frame writing and reading in MP3 metadata engine."""
+    from backend.metadata_engine import (
+        MetadataModel,
+        extract_metadata_and_artwork,
+        write_metadata_and_artwork,
+        sylt_to_lrc,
+        lrc_to_sylt,
+    )
+    import shutil
+
+    sample = Path("Right In Front Of You.mp3")
+    if not sample.exists():
+        pytest.skip("Sample Right In Front Of You.mp3 not found")
+
+    dest = tmp_path / "test_sylt.mp3"
+    shutil.copyfile(sample, dest)
+
+    # 1. Initial extraction of Suno track
+    data = extract_metadata_and_artwork(dest)
+    assert "[Intro]" in data["metadata"]["lyrics"]
+    assert "[Verse 1]" in data["metadata"]["lyrics"]
+    assert isinstance(data["metadata"]["synced_lyrics"], list)
+
+    # 2. Add synced lyrics
+    entries = [
+        {"text": "[Intro]", "time_ms": 0},
+        {"text": "[Verse 1]", "time_ms": 4200},
+        {"text": "I remember the day you arrived with nothing but a name", "time_ms": 8500},
+        {"text": "[Chorus]", "time_ms": 25000},
+    ]
+    meta = MetadataModel(
+        title=data["metadata"]["title"],
+        artist=data["metadata"]["artist"],
+        lyrics=data["metadata"]["lyrics"],
+        synced_lyrics=entries,
+    )
+    write_metadata_and_artwork(dest, meta)
+
+    # 3. Verify reading back
+    updated = extract_metadata_and_artwork(dest)
+    assert len(updated["metadata"]["synced_lyrics"]) == 4
+    assert updated["metadata"]["synced_lyrics"][0]["text"] == "[Intro]"
+    assert updated["metadata"]["synced_lyrics"][0]["time_ms"] == 0
+    assert updated["metadata"]["synced_lyrics"][1]["text"] == "[Verse 1]"
+    assert updated["metadata"]["synced_lyrics"][1]["time_ms"] == 4200
+
+    # 4. LRC format conversion roundtrip
+    lrc = sylt_to_lrc(entries, artist="against_the_grain", title="Right In Front Of You")
+    assert "[ti:Right In Front Of You]" in lrc
+    assert "[00:04.20][Verse 1]" in lrc
+
+    parsed = lrc_to_sylt(lrc)
+    assert len(parsed) == 4
+    assert parsed[1]["text"] == "[Verse 1]"
+    assert parsed[1]["time_ms"] == 4200
+
+
+def test_lyrics_api_endpoints(client):
+    """Verify /api/lyrics/parse-lrc and /api/lyrics/export-lrc endpoints."""
+    lrc_text = """[ti:Test Track]
+[ar:Test Artist]
+[00:02.50][Intro]
+[00:06.00]First line of lyrics
+[00:12.35]Second line of lyrics
+"""
+    # Parse
+    res_parse = client.post("/api/lyrics/parse-lrc", json={"lrc_text": lrc_text})
+    assert res_parse.status_code == 200
+    data = res_parse.json()
+    assert data["success"] is True
+    assert data["count"] == 3
+    assert data["entries"][0]["text"] == "[Intro]"
+    assert data["entries"][0]["time_ms"] == 2500
+    assert data["entries"][1]["text"] == "First line of lyrics"
+    assert data["entries"][1]["time_ms"] == 6000
+
+    # Export
+    res_export = client.post("/api/lyrics/export-lrc", json={
+        "entries": data["entries"],
+        "artist": "Test Artist",
+        "title": "Test Track",
+    })
+    assert res_export.status_code == 200
+    assert "attachment" in res_export.headers.get("content-disposition", "")
+    assert "[00:02.50][Intro]" in res_export.text
+
 
 

@@ -19,12 +19,23 @@ class RequestLimitsMiddleware:
         request = Request(scope)
         path = scope['path']
         limit = 256 * 1024
-        upload = path == '/api/upload'
-        artwork = path == '/api/artwork' and scope['method'] == 'POST'
-        storage_write = path in ('/api/upload', '/api/save', '/api/artwork', '/api/suno/apply-artwork', '/api/session')
+        is_audio_upload = (
+            path == '/api/upload'
+            or (path.startswith('/api/projects/tracks/') and (path.endswith('/takes') or path.endswith('/stems')))
+            or path == '/api/projects/ingest-session'
+        )
+        is_artwork_upload = (
+            path == '/api/artwork'
+            or (path.startswith('/api/projects/albums/') and path.endswith('/artwork'))
+        ) and scope['method'] == 'POST'
+        storage_write = (
+            path in ('/api/upload', '/api/save', '/api/artwork', '/api/suno/apply-artwork', '/api/session', '/api/projects/ingest-session')
+            or (path.startswith('/api/projects/tracks/') and (path.endswith('/takes') or path.endswith('/stems')))
+            or (path.startswith('/api/projects/albums/') and path.endswith('/artwork'))
+        )
         if storage_write:
             # Include a small allowance for multipart headers, not an unbounded body.
-            if upload or artwork:
+            if is_audio_upload or is_artwork_upload:
                 import backend.request_limits as rl
                 import backend.main as bm
                 if rl.MAX_UPLOAD_SIZE_BYTES != (150 * 1024 * 1024):
@@ -33,10 +44,10 @@ class RequestLimitsMiddleware:
                     upload_max = bm.MAX_UPLOAD_SIZE_BYTES
                 else:
                     upload_max = get_runtime_upload_limit_bytes()
-                limit = (upload_max if upload else MAX_ARTWORK_SIZE_BYTES) + 64 * 1024
+                limit = (upload_max if is_audio_upload else MAX_ARTWORK_SIZE_BYTES) + 64 * 1024
             try:
                 self.access_check(request)
-                if upload:
+                if is_audio_upload:
                     from backend.security import upload_rate_limiter
                     if not upload_rate_limiter.is_allowed(upload_rate_limiter.get_client_ip(request)):
                         raise HTTPException(429, 'Too many uploads. Please try again later.')
@@ -60,14 +71,14 @@ class RequestLimitsMiddleware:
                 message = await asyncio.wait_for(receive(), timeout=max(0, min(30, deadline - time.monotonic())))
             except TimeoutError:
                 timed_out = True
-                if upload or artwork:
+                if is_audio_upload or is_artwork_upload:
                     from starlette.formparsers import MultiPartException
                     raise MultiPartException('Request timed out.') from None
                 raise HTTPException(408, 'Request timed out.') from None
             if message['type'] == 'http.request':
                 consumed += len(message.get('body', b''))
                 if consumed > limit:
-                    if upload or artwork:
+                    if is_audio_upload or is_artwork_upload:
                         from starlette.formparsers import MultiPartException
                         raise MultiPartException('Request body exceeds allowed size.')
                     raise HTTPException(413, 'Request body exceeds allowed size.')

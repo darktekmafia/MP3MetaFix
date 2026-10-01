@@ -394,6 +394,9 @@ document.addEventListener('DOMContentLoaded', () => {
     uploadSection.classList.add('hidden');
     editorSection.classList.remove('hidden');
     showToast(isRestore ? 'Active session restored' : `${state.format.toUpperCase()} loaded and parsed successfully`, 'success');
+
+    window.MP3MetaFixAppState = state;
+    window.dispatchEvent(new CustomEvent('mp3metafix:session-loaded', { detail: data }));
   }
 
   // --- Artwork Management ---
@@ -998,6 +1001,7 @@ document.addEventListener('DOMContentLoaded', () => {
       bpm: document.getElementById('inputBpm').value.trim(),
       comment: document.getElementById('inputComment').value.trim(),
       lyrics: document.getElementById('inputLyrics').value.trim(),
+      synced_lyrics: state.metadata.synced_lyrics || [],
       custom_filename: inputCustomFilename.value.trim(),
       remove_artwork: state.artworkRemoved,
     };
@@ -2054,4 +2058,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     restoreSessionIfExists();
   });
+
+  // Global Bridge for Subsystems (/manager, /projects)
+  window.restoreSession = restoreSessionIfExists;
+  window.loadSession = loadSession;
+  window.MP3MetaFixApp = {
+    restoreSession: restoreSessionIfExists,
+    loadSession,
+    state,
+  };
 });

@@ -77,21 +77,31 @@ Before implementing or modifying command execution, installers, service manageme
 
 ---
 
-## 📚 6. Documentation Synchronization & Release Gates
+## 🧭 6. Self-Contained Workspace Section Architecture (Zero Workflow Fragmentation)
+
+The `/app`, `/manager`, and `/projects` sections are specifically designed for distinct use cases, screen layouts, and user workflows:
+
+1. **Dedicated Section Workflows**: Even when multiple sections share core underlying capabilities (such as the single-track audio metadata editor, cover art manager, waveform player, Suno AI synchronization, or lyrics studio), each section must fully house the features it utilizes directly within its own interface.
+2. **Zero Cross-Section Navigation for Core Tasks**: A user must never be forced or redirected to navigate away to a different section (e.g., leaving `/projects` to go to `/manager` or `/app`) to accomplish a task intended for their active workspace. Cross-section redirects break user momentum, fragment production flow, and lower productivity.
+3. **Seamless In-Place Execution**: All operations initiated within a section (e.g., editing metadata, updating or saving workspace takes, reviewing waveforms, syncing lyrics) must complete seamlessly in-place, preserving workspace context and session continuity.
+
+---
+
+## 📚 7. Documentation Synchronization & Release Gates
 
 Before any changes are committed or merged:
 
 1. **Incremental Updates during Development (`development` branch)**:
    - Every feature, security patch, bug fix, or dependency update must be documented in [CHANGELOG.md](../CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/).
-   - Keep [README.md](../README.md), [docs/ARCHITECTURE.md](ARCHITECTURE.md), [docs/DEPLOYMENT.md](DEPLOYMENT.md), and [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md) current with any newly implemented behaviors, architecture changes, and installer options.
+   - Keep [README.md](../README.md), [VISION.md](../VISION.md), [GOVERNANCE.md](../GOVERNANCE.md), [docs/ARCHITECTURE.md](ARCHITECTURE.md), [docs/DEPLOYMENT.md](DEPLOYMENT.md), and [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md) current with any newly implemented behaviors, architecture changes, and installer options.
 2. **Public vs. Internal Documentation Boundary**:
    - Treat documentation on every remote branch as public. Document installation, use, architecture, supported behavior, product plans, and relevant security/compatibility limitations. Exclude personal learning plans, environment-specific work logs, and agent/session handoffs.
    - Keep [ROADMAP.md](../ROADMAP.md) focused on public product work.
-   - Keep internal planning and personal notes strictly in the ignored `internal/` directory ([internal/README.md](../internal/README.md)). Never force-add or link untracked internal notes from public documentation.
+   - Keep internal planning and personal notes strictly in the ignored `internal/` directory (`internal/README.md`). Never force-add or link untracked internal notes from public documentation.
 3. **Mandatory Pre-Merge Release Gate (Before Merging `development` → `main`)**:
    - When `development` is approved for a new release, the documentation MUST be finalized on `development` before merging into `main`:
      - Convert `## [Unreleased]` in [CHANGELOG.md](../CHANGELOG.md) to the release heading: `## [X.Y.Z] - YYYY-MM-DD`.
-     - Synchronize version strings across [VERSION](../VERSION), [backend/config.py](../backend/config.py), [frontend/index.html](../frontend/index.html), and [install.sh](../install.sh).
+     - Synchronize version strings across [VERSION](../VERSION), [backend/config.py](../backend/config.py), [frontend/index.html](../frontend/index.html), [install.sh](../install.sh), and all <script> and <link> asset tags (?v=X.Y.Z) across frontend/**/*.html.
      - Audit all public docs to verify they accurately reflect the release-ready product state.
      - Execute the test suite (`./.venv/bin/pytest`) with 0 failures.
      - Commit the release preparation on `development` (`chore(release): prepare vX.Y.Z`).
@@ -99,7 +109,7 @@ Before any changes are committed or merged:
 
 ---
 
-## 🔄 7. Staged Git & Release Workflow (Never Blind Push)
+## 🔄 8. Staged Git & Release Workflow (Never Blind Push)
 
 Follow a strict 4-stage validation pipeline:
 
@@ -124,7 +134,7 @@ Follow a strict 4-stage validation pipeline:
 ### Stage 4: Continuous `development` Sync & Explicit `main` Release Gate
 - **Continuous `development` Sync**: Once local changes are verified with 0 test failures and committed locally, push them directly to remote GitHub branch `development` (`git push origin development`) to keep the remote `development` branch continuously in sync with local development.
 - **Strict `main` Release Gate**: Merging `development` into `main`, creating release tags, or triggering production deployment strictly requires explicit user approval. This can only take place after the user's own independent testing and security audits confirm release readiness.
-- Apply the **Pre-Merge Release Gate** (Section 6) on `development` prior to executing any approved merge to `main`.
+- Apply the **Pre-Merge Release Gate** (Section 7) on `development` prior to executing any approved merge to `main`.
 - Keep `origin main` as the installer default release source. The installer enforces that standard updates are run only on a `main` checkout, fast-forwards strictly from `origin main`, and halts on fetch or branch errors without falling back to generic `git pull`. Development testing checkouts use `install.sh --update --dev`.
 - Validate installer and update changes in the designated disposable LXC before recommending wider deployment. Check service identity, listening ports, proxy behavior, data preservation, and recovery after failure.
 - Preserve user files, configuration, authentication secrets, and existing data unless an approved migration explicitly changes them.
@@ -132,6 +142,6 @@ Follow a strict 4-stage validation pipeline:
 
 ---
 
-## 8. Agent Rules Synchronization
+## 9. Agent Rules Synchronization
 
 Treat this document as the detailed project engineering and deployment source of truth. When asked to create or refresh Antigravity conversation/workspace rules (including `AGENTS.md` if supported), summarize and reference this document without contradicting or silently dropping its specific requirements. Verify the resulting rules in conversation settings; do not assume automatic synchronization.

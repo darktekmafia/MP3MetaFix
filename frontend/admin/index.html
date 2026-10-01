@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
   
   <link rel="icon" type="image/svg+xml" href="/assets/mp3metafix.svg">
-  <link rel="stylesheet" href="/css/styles.css?v=0.5.3">
+  <link rel="stylesheet" href="/css/styles.css?v=0.6.0">
 </head>
 <body class="app-body hub-body admin-body">
   <!-- Dynamic Background Glow Elements -->
@@ -42,10 +42,14 @@
             <span class="switcher-icon">⚡</span>
             <span class="switcher-label">MP3MetaFix</span>
           </a>
-          <span class="switcher-link switcher-link-disabled" title="MP3MetaManager (Coming Soon &bull; In Active Development)" aria-disabled="true">
+          <a href="/manager" class="switcher-link" title="MP3MetaManager (Desktop Workspace & Synced Lyrics)">
             <span class="switcher-icon">🗂️</span>
-            <span class="switcher-label">MetaManager <span class="switcher-badge-soon">Soon</span></span>
-          </span>
+            <span class="switcher-label">MetaManager</span>
+          </a>
+          <a href="/projects" class="switcher-link" title="MP3MetaProjects (Track & Album Studio)">
+            <span class="switcher-icon">🎛️</span>
+            <span class="switcher-label">MetaProjects</span>
+          </a>
           <a href="/" class="switcher-link" title="Gateway Hub">
             <span class="switcher-icon">🏠</span>
             <span class="switcher-label">Hub</span>
@@ -58,9 +62,16 @@
       </nav>
 
       <div class="header-badges">
-        <span class="badge badge-version" id="adminVersionBadge">v0.5.3</span>
+        <span class="badge badge-version" id="adminVersionBadge">v0.6.0</span>
         <span class="badge badge-status" id="adminStatusBadge"><span class="status-dot"></span> Online</span>
         <div class="header-auth-container" id="headerAuthContainer"></div>
+        <button id="mobileNavToggle" class="mobile-nav-toggle" aria-label="Open Navigation Menu" aria-expanded="false" aria-controls="mobileNavDrawer">
+          <svg class="hamburger-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
       </div>
     </header>
 
@@ -87,6 +98,10 @@
           <a href="#sectionAccess" class="jump-pill">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <span>Access & Guest Mode</span>
+          </a>
+          <a href="#sectionWorkspaces" class="jump-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+            <span>Workspace Controls</span>
           </a>
           <a href="#sectionStorage" class="jump-pill">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
@@ -215,8 +230,31 @@
               <div class="t-meter-fill meter-storage" id="statStorageMeter" style="width: 0%"></div>
             </div>
             <div class="t-details-row">
-              <span>Quota Used:</span>
+              <span>Temp Quota:</span>
               <span class="t-val-code" id="statStorageQuota">0% of 2048MB</span>
+            </div>
+          </div>
+
+          <!-- Card 5: Persistent Project Workspaces -->
+          <div class="card telemetry-card">
+            <div class="t-card-header">
+              <div class="t-icon t-icon-storage" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                </svg>
+              </div>
+              <div>
+                <h4 class="t-title">Project Storage</h4>
+                <span class="t-sub" id="statProjectsCount">0 Tracks • 0 Takes</span>
+              </div>
+            </div>
+            <div class="t-val-main" id="statProjectsStorageSize">0 MB</div>
+            <div class="t-meter-track">
+              <div class="t-meter-fill meter-storage" id="statProjectsStorageMeter" style="width: 0%; background: linear-gradient(90deg, #38bdf8, #0ea5e9);"></div>
+            </div>
+            <div class="t-details-row">
+              <span>Tenant Quota:</span>
+              <span class="t-val-code" id="statProjectsStorageQuota">0% of 1000MB</span>
             </div>
           </div>
         </div>
@@ -253,7 +291,7 @@
           </div>
           <div>
             <h3 class="admin-section-heading">Access Control & Public Policies</h3>
-            <p class="admin-section-sub">Manage Guest Mode reachability and session concurrency policies</p>
+            <p class="admin-section-sub">Manage global Guest Mode reachability and session concurrency policies</p>
           </div>
         </div>
 
@@ -353,6 +391,156 @@
         </div>
       </section>
 
+      <!-- Section 2B: Granular Workspace Access & Maintenance Mode -->
+      <section class="admin-section" id="sectionWorkspaces">
+        <div class="section-title-group" style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 0.75rem;">
+          <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <div class="section-icon-pill">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+            </div>
+            <div>
+              <h3 class="admin-section-heading">Granular Workspace Controls & Maintenance Mode</h3>
+              <p class="admin-section-sub">Individually toggle availability, custom maintenance notices, and guest access for each workspace</p>
+            </div>
+          </div>
+          <label class="quick-pin-toggle" title="Pin to Quick Settings modal">
+            <input type="checkbox" class="pin-checkbox" data-setting="workspace_access" id="pin_workspace_access">
+            <span class="quick-pin-badge">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+              <span>Quick Settings</span>
+            </span>
+          </label>
+        </div>
+
+        <div class="card admin-card">
+          <form id="formWorkspaceAccess" class="admin-form">
+            <!-- Hub Card Visibility Toggle -->
+            <div class="settings-row" style="padding-bottom: 1.25rem; border-bottom: 1px solid var(--border-subtle);">
+              <div class="settings-label-group">
+                <span class="settings-label" style="font-size: 1.05rem; font-weight: 600;">Hide Disabled Workspace Cards from Gateway Hub (/)</span>
+                <span class="settings-subtext">When enabled, workspaces in maintenance mode are completely hidden from the Hub interface. When disabled, they appear as dimmed cards displaying a maintenance badge.</span>
+              </div>
+              <label class="toggle-switch" aria-label="Toggle Hub Card Visibility for Disabled Workspaces">
+                <input type="checkbox" id="adminHubHideDisabled">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+
+            <!-- Workspace Controls Grid -->
+            <div class="workspace-controls-container" style="display: flex; flex-direction: column; gap: 1.5rem; margin-top: 1.25rem;">
+              <!-- 1. MP3MetaFix (/app) -->
+              <div class="card workspace-ctrl-card" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-subtle); padding: 1.25rem; border-radius: var(--radius-md);">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap;">
+                  <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div style="font-size: 1.5rem; line-height: 1;">⚡</div>
+                    <div>
+                      <h4 style="margin: 0; font-size: 1.05rem; font-weight: 600;">MP3MetaFix <span style="font-size: 0.85rem; font-weight: 400; color: var(--text-muted);">(/app)</span></h4>
+                      <p style="margin: 0.2rem 0 0; font-size: 0.85rem; color: var(--text-muted);">Single-Track Metadata, APIC Artwork & Waveform Inspection</p>
+                    </div>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                      <span style="font-size: 0.85rem; font-weight: 500;">Guest Access</span>
+                      <label class="toggle-switch toggle-switch-sm" aria-label="Allow Guest Access for MP3MetaFix">
+                        <input type="checkbox" id="wsAppGuestAllowed" checked>
+                        <span class="switch-slider"></span>
+                      </label>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                      <span style="font-size: 0.85rem; font-weight: 600;" id="wsAppStatusLabel">Workspace Active</span>
+                      <label class="toggle-switch" aria-label="Toggle MP3MetaFix Workspace Status">
+                        <input type="checkbox" id="wsAppEnabled" checked>
+                        <span class="switch-slider"></span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-group" style="margin-top: 1rem;">
+                  <label for="wsAppMessage" class="form-label" style="font-size: 0.85rem;">Custom Maintenance Notice / Reason</label>
+                  <input type="text" id="wsAppMessage" class="form-input" placeholder="MP3MetaFix single-track workspace is undergoing scheduled maintenance." maxlength="500">
+                  <span class="settings-subtext">Displayed to visitors when accessing /app directly while maintenance mode is active.</span>
+                </div>
+              </div>
+
+              <!-- 2. MP3MetaManager (/manager) -->
+              <div class="card workspace-ctrl-card" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-subtle); padding: 1.25rem; border-radius: var(--radius-md);">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap;">
+                  <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div style="font-size: 1.5rem; line-height: 1;">🗂️</div>
+                    <div>
+                      <h4 style="margin: 0; font-size: 1.05rem; font-weight: 600;">MP3MetaManager <span style="font-size: 0.85rem; font-weight: 400; color: var(--text-muted);">(/manager)</span></h4>
+                      <p style="margin: 0.2rem 0 0; font-size: 0.85rem; color: var(--text-muted);">Desktop Multi-Track Batch Library & Synced Lyrics (SYLT)</p>
+                    </div>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                      <span style="font-size: 0.85rem; font-weight: 500;">Guest Access</span>
+                      <label class="toggle-switch toggle-switch-sm" aria-label="Allow Guest Access for MP3MetaManager">
+                        <input type="checkbox" id="wsManagerGuestAllowed">
+                        <span class="switch-slider"></span>
+                      </label>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                      <span style="font-size: 0.85rem; font-weight: 600;" id="wsManagerStatusLabel">Workspace Active</span>
+                      <label class="toggle-switch" aria-label="Toggle MP3MetaManager Workspace Status">
+                        <input type="checkbox" id="wsManagerEnabled" checked>
+                        <span class="switch-slider"></span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-group" style="margin-top: 1rem;">
+                  <label for="wsManagerMessage" class="form-label" style="font-size: 0.85rem;">Custom Maintenance Notice / Reason</label>
+                  <input type="text" id="wsManagerMessage" class="form-input" placeholder="MP3MetaManager library workspace is undergoing scheduled maintenance." maxlength="500">
+                  <span class="settings-subtext">Displayed to visitors when accessing /manager directly while maintenance mode is active.</span>
+                </div>
+              </div>
+
+              <!-- 3. MP3MetaProjects (/projects) -->
+              <div class="card workspace-ctrl-card" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-subtle); padding: 1.25rem; border-radius: var(--radius-md);">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap;">
+                  <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div style="font-size: 1.5rem; line-height: 1;">🎛️</div>
+                    <div>
+                      <h4 style="margin: 0; font-size: 1.05rem; font-weight: 600;">MP3MetaProjects <span style="font-size: 0.85rem; font-weight: 400; color: var(--text-muted);">(/projects)</span></h4>
+                      <p style="margin: 0.2rem 0 0; font-size: 0.85rem; color: var(--text-muted);">Multi-Take Track Workspaces, Stems & Album Studio</p>
+                    </div>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                      <span style="font-size: 0.85rem; font-weight: 500;">Guest Access</span>
+                      <label class="toggle-switch toggle-switch-sm" aria-label="Allow Guest Access for MP3MetaProjects">
+                        <input type="checkbox" id="wsProjectsGuestAllowed">
+                        <span class="switch-slider"></span>
+                      </label>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                      <span style="font-size: 0.85rem; font-weight: 600;" id="wsProjectsStatusLabel">Workspace Active</span>
+                      <label class="toggle-switch" aria-label="Toggle MP3MetaProjects Workspace Status">
+                        <input type="checkbox" id="wsProjectsEnabled" checked>
+                        <span class="switch-slider"></span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-group" style="margin-top: 1rem;">
+                  <label for="wsProjectsMessage" class="form-label" style="font-size: 0.85rem;">Custom Maintenance Notice / Reason</label>
+                  <input type="text" id="wsProjectsMessage" class="form-input" placeholder="MP3MetaProjects studio workspace is undergoing scheduled maintenance." maxlength="500">
+                  <span class="settings-subtext">Displayed to visitors when accessing /projects directly while maintenance mode is active.</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="admin-actions-bar" style="margin-top: 1.5rem; display: flex; justify-content: flex-end;">
+              <button type="submit" class="btn btn-primary" id="btnSaveWorkspaceSettings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                <span>Save Workspace Access Policies</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
       <!-- Section 3: AI Services & Metadata Extractors -->
       <section class="admin-section" id="sectionExtractors">
         <div class="section-title-group" style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 0.75rem;">
@@ -416,7 +604,7 @@
           <div class="update-check-header" style="margin-bottom: 1.5rem;">
             <div>
               <div style="display: flex; align-items: center; gap: 0.6rem;">
-                <span class="badge badge-version" id="updateCardVerBadge">v0.5.3</span>
+                <span class="badge badge-version" id="updateCardVerBadge">v0.6.0</span>
                 <a href="https://github.com/darktekmafia/MP3MetaFix" target="_blank" rel="noopener noreferrer" class="v-link">
                   darktekmafia/MP3MetaFix
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
@@ -820,7 +1008,102 @@
     </div>
   </div>
 
-  <script src="/js/auth.js?v=0.5.3"></script>
-  <script src="/admin/admin.js?v=0.5.3"></script>
+  <!-- Mobile Navigation Drawer Overlay -->
+  <div id="mobileNavDrawer" class="mobile-drawer-overlay hidden" role="dialog" aria-modal="true" aria-label="Navigation Menu">
+    <div class="mobile-drawer-backdrop" id="mobileDrawerBackdrop"></div>
+    <aside class="mobile-drawer-sheet" id="mobileDrawerSheet">
+      <div class="mobile-drawer-header">
+        <div class="drawer-brand">
+          <img src="/assets/mp3metafix.svg" alt="MP3MetaFix Logo" width="28" height="28">
+          <span class="drawer-title">MP3<span>MetaFix</span></span>
+        </div>
+        <button id="btnCloseMobileDrawer" class="btn-drawer-close" aria-label="Close navigation menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Account / User State Card in Drawer -->
+      <div class="mobile-drawer-auth" id="mobileDrawerAuth"></div>
+
+      <!-- Navigation Section -->
+      <div class="mobile-drawer-section">
+        <div class="drawer-section-label">Workspaces & Apps</div>
+        <nav class="mobile-drawer-nav">
+          <a href="/app" class="drawer-nav-item">
+            <span class="drawer-nav-icon">⚡</span>
+            <div class="drawer-nav-text">
+              <span class="drawer-nav-title">MP3MetaFix</span>
+              <span class="drawer-nav-sub">Single-Track Editor</span>
+            </div>
+          </a>
+          <a href="/manager" class="drawer-nav-item">
+            <span class="drawer-nav-icon">🗂️</span>
+            <div class="drawer-nav-text">
+              <span class="drawer-nav-title">MetaManager</span>
+              <span class="drawer-nav-sub">Desktop Workspace & Synced Lyrics</span>
+            </div>
+          </a>
+          <a href="/projects" class="drawer-nav-item">
+            <span class="drawer-nav-icon">🎛️</span>
+            <div class="drawer-nav-text">
+              <span class="drawer-nav-title">MetaProjects</span>
+              <span class="drawer-nav-sub">Track & Album Studio</span>
+            </div>
+          </a>
+          <a href="/" class="drawer-nav-item">
+            <span class="drawer-nav-icon">🏠</span>
+            <div class="drawer-nav-text">
+              <span class="drawer-nav-title">Gateway Hub</span>
+              <span class="drawer-nav-sub">System Portal & Overview</span>
+            </div>
+          </a>
+          <a href="/admin" class="drawer-nav-item active admin-only">
+            <span class="drawer-nav-icon">🛡️</span>
+            <div class="drawer-nav-text">
+              <span class="drawer-nav-title">Admin Dashboard</span>
+              <span class="drawer-nav-sub">System Configuration & Security</span>
+            </div>
+            <span class="drawer-nav-badge">Current</span>
+          </a>
+        </nav>
+      </div>
+
+      <!-- Quick Tools & Actions -->
+      <div class="mobile-drawer-section">
+        <div class="drawer-section-label">Quick Actions</div>
+        <div class="mobile-drawer-actions">
+          <button id="btnMobileQuickSettings" class="drawer-action-btn" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+            <span>Quick Settings</span>
+          </button>
+          <button id="btnMobileHelpDocs" class="drawer-action-btn" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            <span>Help & Documentation</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- System Status Footer in Drawer -->
+      <div class="mobile-drawer-footer">
+        <div class="drawer-sys-info">
+          <span class="drawer-version">MP3MetaFix v0.6.0</span>
+          <span class="drawer-status"><span class="status-dot"></span> System Online</span>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="/js/auth.js?v=0.6.0"></script>
+  <script src="/admin/admin.js?v=0.6.0"></script>
 </body>
 </html>

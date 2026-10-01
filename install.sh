@@ -16,7 +16,7 @@ VERSION_FILE="${INSTALL_DIR}/VERSION"
 if [ -f "$VERSION_FILE" ]; then
     VERSION="$(cat "$VERSION_FILE" | tr -d '[:space:]')"
 else
-    VERSION="0.5.3"
+    VERSION="0.6.0"
 fi
 TARGET_BRANCH="main"
 
@@ -358,6 +358,7 @@ EOF
 
         # Ensure data directory has secure ownership and 0700 permissions
         mkdir -p "${INSTALL_DIR}/data/temp"
+        mkdir -p "${INSTALL_DIR}/data/storage"
         if [ "$EUID" -eq 0 ]; then
             chown -R "${SERVICE_USER}:" "${INSTALL_DIR}/data" "${INSTALL_DIR}/.venv" 2>/dev/null || true
             chmod 0700 "${INSTALL_DIR}/data" 2>/dev/null || true
@@ -427,6 +428,7 @@ do_install() {
 
     # Create data directory
     mkdir -p "${INSTALL_DIR}/data/temp"
+    mkdir -p "${INSTALL_DIR}/data/storage"
     if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
         chown -R "${SERVICE_USER}:" "${INSTALL_DIR}/data" "${INSTALL_DIR}/.venv" 2>/dev/null || true
     fi

@@ -1,8 +1,8 @@
 # MP3MetaFix 🎵
 
-[![Version](https://img.shields.io/badge/version-0.5.3-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
-[![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%28Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC%29-purple.svg)](#)
 
 **MP3MetaFix** is a high-performance, security-focused audio metadata and production suite. It provides a touch-friendly mobile editor, a desktop power-user workspace, and deep container tagging for **MP3, M4A (AAC/ALAC/Opus), and WAV** files — all processed natively in-place with **zero audio re-encoding and zero quality loss**.
 
@@ -18,9 +18,9 @@ MP3MetaFix organizes music editing into tailored workspace interfaces:
 |---|---|---|---|
 | 🏠 **Gateway Hub** | `/` | **Active** | Central dispatcher and workspace selector with status indicators and maintenance notices. |
 | 📱 **MP3MetaFix Editor** | `/app` | **Active** | Mobile-first single-track editor with live retina waveforms, APIC cover art studio, Suno AI metadata extraction, and comment presets. Optimized for touchscreens ($\ge 320\text{px}$) and desktop browsers. |
-| 🗂️ **MP3MetaManager** | `/manager` | *Under Development (Shell)* | Desktop-first power-user workspace for high-density spreadsheet batch editing, folder tree ingestion, deep ID3 frame inspection (`TXXX`, `COMM`, `APIC`), stems, and LRC karaoke sync. |
-| 🎛️ **MP3Projects Studio** | `/projects` | *Under Development (Planned)* | Multi-track album sequencing, stem pack bundling, persistent project sessions, and structured release ZIP packaging. |
-| 🛡️ **Admin Control Center** | `/admin` | **Active** | Administrator dashboard for system diagnostics (CPU, RAM, disk, quotas), guest access controls, Quick Settings pinning, and authorized update management. |
+| 🗂️ **MP3MetaManager** | `/manager` | **Active** | Desktop power-user workspace featuring embedded single-track editor, Synced Lyrics (SYLT / LRC) studio with live tap-to-sync, live karaoke visualizer, persistent track workspaces, and planned batch spreadsheet tagging. |
+| 🎛️ **MP3Projects Studio** | `/projects` | **Active** | Multi-take version tracking, separated audio stem explorer (Vocals, Inst, Drums, Bass), album tracklist sequencing with master cover artwork, and POSIX `0700` tenant storage. |
+| 🛡️ **Admin Control Center** | `/admin` | **Active** | Administrator dashboard for system diagnostics (CPU, RAM, disk, quotas), persistent project storage telemetry, guest access controls, Quick Settings pinning, and authorized update management. |
 | 📖 **Documentation Portal** | `/docs` | **Active** | Full interactive documentation reader and in-app context help with architecture, guides, and API reference. |
 
 
@@ -138,9 +138,11 @@ Explore dedicated guides in the [`docs/`](docs/) directory:
 
 ---
 
-## 🗺️ Master Roadmap
+## 🗺️ Master Roadmap & Governance
 
-Follow upcoming milestones, sub-projects, and feature releases in the **[Master Product Roadmap](ROADMAP.md)**.
+- 🧭 **[Project Vision & Architectural Direction](VISION.md)** — Foundational commitments, API-first architecture, and vision evolution.
+- 🏛️ **[Project Governance & Transparency](GOVERNANCE.md)** — Founder stewardship, AI-assisted development transparency, contributor equality, and proposal docket lifecycle.
+- 📋 **[Master Product Roadmap](ROADMAP.md)** — Track active milestones, sub-projects, and engineering backlog items.
 
 ---
 
