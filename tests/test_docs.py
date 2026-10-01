@@ -88,3 +88,29 @@ def test_asset_tags_and_version_synchronization():
                 f"{asset_path}?v={asset_ver} (expected ?v={current_ver})"
             )
 
+
+def test_public_and_guest_access_to_all_docs():
+    """Verify that unauthenticated visitors and guests can access all registered docs without credentials."""
+    unauthed_client = TestClient(app)
+
+    # 1. Fetch catalog without any cookies or auth headers
+    res = unauthed_client.get("/api/docs/list")
+    assert res.status_code == 200
+    catalog = res.json().get("sections", [])
+    assert len(catalog) >= 5
+
+    # 2. Fetch every registered document without credentials
+    for section in catalog:
+        doc_id = section["id"]
+        doc_res = unauthed_client.get(f"/api/docs/{doc_id}")
+        assert doc_res.status_code == 200, f"Failed to fetch public doc {doc_id}"
+        doc_data = doc_res.json()
+        assert doc_data["id"] == doc_id
+        assert "content" in doc_data
+        assert len(doc_data["content"]) > 0
+
+    # 3. Access the portal UI
+    portal_res = unauthed_client.get("/docs/")
+    assert portal_res.status_code == 200
+
+

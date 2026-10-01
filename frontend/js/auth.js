@@ -111,10 +111,20 @@
         guestPill.appendChild(loginBtn);
         container.appendChild(guestPill);
       } else {
+        const helpBtn = document.createElement('button');
+        helpBtn.type = 'button';
+        helpBtn.className = 'btn btn-secondary btn-sm';
+        helpBtn.style.marginRight = '0.5rem';
+        helpBtn.title = 'Help & Documentation';
+        helpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg><span>Help</span>';
+        helpBtn.addEventListener('click', () => openHelpModal());
+
         const loginBtn = document.createElement('button');
         loginBtn.className = 'btn btn-primary btn-sm';
         loginBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg><span>Sign In</span>';
         loginBtn.addEventListener('click', () => openModal('loginModal'));
+
+        container.appendChild(helpBtn);
         container.appendChild(loginBtn);
       }
       return;
