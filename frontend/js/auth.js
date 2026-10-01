@@ -60,192 +60,191 @@
   // --- Header Account Pill & Dropdown Management ---
   function renderHeaderAuth() {
     const container = document.getElementById('headerAuthContainer');
-    if (!container) return;
+    if (container) {
+      // Clear existing
+      container.innerHTML = '';
 
-    // Clear existing
-    container.innerHTML = '';
+      if (!AuthState.authenticated) {
+        // Guest or Unauthenticated State
+        if (AuthState.guestMode) {
+          const guestPill = document.createElement('div');
+          guestPill.className = 'auth-user-pill';
+          guestPill.title = 'You are currently browsing in Guest Mode';
 
-    if (!AuthState.authenticated) {
-      // Guest or Unauthenticated State
-      if (AuthState.guestMode) {
-        const guestPill = document.createElement('div');
-        guestPill.className = 'auth-user-pill';
-        guestPill.title = 'You are currently browsing in Guest Mode';
+          const avatar = document.createElement('div');
+          avatar.className = 'auth-avatar avatar-guest';
+          avatar.textContent = 'G';
+
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'auth-username';
+          nameSpan.textContent = 'Guest';
+
+          const roleSpan = document.createElement('span');
+          roleSpan.className = 'auth-role-tag role-guest';
+          roleSpan.textContent = 'Guest';
+
+          const helpBtn = document.createElement('button');
+          helpBtn.type = 'button';
+          helpBtn.className = 'btn btn-secondary btn-xs';
+          helpBtn.style.marginLeft = '0.35rem';
+          helpBtn.title = 'Documentation & Help';
+          helpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+          helpBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openHelpModal();
+          });
+
+          const loginBtn = document.createElement('button');
+          loginBtn.className = 'btn btn-secondary btn-xs';
+          loginBtn.style.marginLeft = '0.35rem';
+          loginBtn.textContent = 'Log In';
+          loginBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openModal('loginModal');
+          });
+
+          guestPill.appendChild(avatar);
+          guestPill.appendChild(nameSpan);
+          guestPill.appendChild(roleSpan);
+          guestPill.appendChild(helpBtn);
+          guestPill.appendChild(loginBtn);
+          container.appendChild(guestPill);
+        } else {
+          const helpBtn = document.createElement('button');
+          helpBtn.type = 'button';
+          helpBtn.className = 'btn btn-secondary btn-sm';
+          helpBtn.style.marginRight = '0.5rem';
+          helpBtn.title = 'Help & Documentation';
+          helpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg><span>Help</span>';
+          helpBtn.addEventListener('click', () => openHelpModal());
+
+          const loginBtn = document.createElement('button');
+          loginBtn.className = 'btn btn-primary btn-sm';
+          loginBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg><span>Sign In</span>';
+          loginBtn.addEventListener('click', () => openModal('loginModal'));
+
+          container.appendChild(helpBtn);
+          container.appendChild(loginBtn);
+        }
+      } else {
+        // Authenticated User Pill
+        const userPill = document.createElement('button');
+        userPill.className = 'auth-user-pill';
+        userPill.id = 'authUserPill';
+        userPill.setAttribute('aria-haspopup', 'true');
+        userPill.setAttribute('aria-expanded', 'false');
 
         const avatar = document.createElement('div');
-        avatar.className = 'auth-avatar avatar-guest';
-        avatar.textContent = 'G';
+        avatar.className = 'auth-avatar';
+        avatar.textContent = (AuthState.username || 'U').charAt(0).toUpperCase();
 
         const nameSpan = document.createElement('span');
         nameSpan.className = 'auth-username';
-        nameSpan.textContent = 'Guest';
+        nameSpan.textContent = AuthState.username;
 
         const roleSpan = document.createElement('span');
-        roleSpan.className = 'auth-role-tag role-guest';
-        roleSpan.textContent = 'Guest';
+        roleSpan.className = `auth-role-tag role-${AuthState.role === 'admin' ? 'admin' : 'user'}`;
+        roleSpan.textContent = AuthState.role === 'admin' ? 'Admin' : 'User';
 
-        const helpBtn = document.createElement('button');
-        helpBtn.type = 'button';
-        helpBtn.className = 'btn btn-secondary btn-xs';
-        helpBtn.style.marginLeft = '0.35rem';
-        helpBtn.title = 'Documentation & Help';
-        helpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
-        helpBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
+        const chevronSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        chevronSvg.setAttribute('viewBox', '0 0 24 24');
+        chevronSvg.setAttribute('fill', 'none');
+        chevronSvg.setAttribute('stroke', 'currentColor');
+        chevronSvg.setAttribute('stroke-width', '2');
+        chevronSvg.setAttribute('class', 'auth-chevron');
+        const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        polyline.setAttribute('points', '6 9 12 15 18 9');
+        chevronSvg.appendChild(polyline);
+
+        userPill.appendChild(avatar);
+        userPill.appendChild(nameSpan);
+        userPill.appendChild(roleSpan);
+        userPill.appendChild(chevronSvg);
+
+        // Dropdown Menu
+        const dropdown = document.createElement('div');
+        dropdown.className = 'auth-dropdown-menu hidden';
+        dropdown.id = 'authDropdownMenu';
+
+        const userInfo = document.createElement('div');
+        userInfo.className = 'dropdown-user-info';
+        const dName = document.createElement('div');
+        dName.className = 'dropdown-name';
+        dName.textContent = AuthState.username;
+        const dRole = document.createElement('div');
+        dRole.className = 'dropdown-role';
+        dRole.textContent = `Signed in as ${AuthState.role === 'admin' ? 'Administrator' : 'User'}`;
+        userInfo.appendChild(dName);
+        userInfo.appendChild(dRole);
+        dropdown.appendChild(userInfo);
+
+        // If admin, add Admin Dashboard link
+        if (AuthState.role === 'admin') {
+          const adminLink = document.createElement('a');
+          adminLink.href = '/admin';
+          adminLink.className = 'dropdown-item';
+          adminLink.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg><span>Admin Dashboard</span>';
+          dropdown.appendChild(adminLink);
+        }
+
+        // Quick Settings Item
+        const settingsItem = document.createElement('button');
+        settingsItem.className = 'dropdown-item';
+        settingsItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg><span>Quick Settings</span>';
+        settingsItem.addEventListener('click', () => {
+          dropdown.classList.add('hidden');
+          userPill.classList.remove('active');
+          openSettingsModal();
+        });
+        dropdown.appendChild(settingsItem);
+
+        // Help & Documentation Item
+        const helpItem = document.createElement('button');
+        helpItem.type = 'button';
+        helpItem.className = 'dropdown-item';
+        helpItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg><span>Help & Documentation</span>';
+        helpItem.addEventListener('click', () => {
+          dropdown.classList.add('hidden');
+          userPill.classList.remove('active');
           openHelpModal();
         });
+        dropdown.appendChild(helpItem);
 
-        const loginBtn = document.createElement('button');
-        loginBtn.className = 'btn btn-secondary btn-xs';
-        loginBtn.style.marginLeft = '0.35rem';
-        loginBtn.textContent = 'Log In';
-        loginBtn.addEventListener('click', (e) => {
+        // Logout Item
+        const logoutItem = document.createElement('button');
+        logoutItem.className = 'dropdown-item dropdown-item-danger';
+        logoutItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg><span>Sign Out</span>';
+        logoutItem.addEventListener('click', handleLogout);
+        dropdown.appendChild(logoutItem);
+
+        // Toggle dropdown
+        userPill.addEventListener('click', (e) => {
           e.stopPropagation();
-          openModal('loginModal');
+          const isClosed = dropdown.classList.contains('hidden');
+          if (isClosed) {
+            dropdown.classList.remove('hidden');
+            userPill.classList.add('active');
+            userPill.setAttribute('aria-expanded', 'true');
+          } else {
+            dropdown.classList.add('hidden');
+            userPill.classList.remove('active');
+            userPill.setAttribute('aria-expanded', 'false');
+          }
         });
 
-        guestPill.appendChild(avatar);
-        guestPill.appendChild(nameSpan);
-        guestPill.appendChild(roleSpan);
-        guestPill.appendChild(helpBtn);
-        guestPill.appendChild(loginBtn);
-        container.appendChild(guestPill);
-      } else {
-        const helpBtn = document.createElement('button');
-        helpBtn.type = 'button';
-        helpBtn.className = 'btn btn-secondary btn-sm';
-        helpBtn.style.marginRight = '0.5rem';
-        helpBtn.title = 'Help & Documentation';
-        helpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg><span>Help</span>';
-        helpBtn.addEventListener('click', () => openHelpModal());
+        // Close dropdown on outside click
+        document.addEventListener('click', (e) => {
+          if (!container.contains(e.target)) {
+            dropdown.classList.add('hidden');
+            userPill.classList.remove('active');
+            userPill.setAttribute('aria-expanded', 'false');
+          }
+        });
 
-        const loginBtn = document.createElement('button');
-        loginBtn.className = 'btn btn-primary btn-sm';
-        loginBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg><span>Sign In</span>';
-        loginBtn.addEventListener('click', () => openModal('loginModal'));
-
-        container.appendChild(helpBtn);
-        container.appendChild(loginBtn);
+        container.appendChild(userPill);
+        container.appendChild(dropdown);
       }
-      return;
     }
-
-    // Authenticated User Pill
-    const userPill = document.createElement('button');
-    userPill.className = 'auth-user-pill';
-    userPill.id = 'authUserPill';
-    userPill.setAttribute('aria-haspopup', 'true');
-    userPill.setAttribute('aria-expanded', 'false');
-
-    const avatar = document.createElement('div');
-    avatar.className = 'auth-avatar';
-    avatar.textContent = (AuthState.username || 'U').charAt(0).toUpperCase();
-
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'auth-username';
-    nameSpan.textContent = AuthState.username;
-
-    const roleSpan = document.createElement('span');
-    roleSpan.className = `auth-role-tag role-${AuthState.role === 'admin' ? 'admin' : 'user'}`;
-    roleSpan.textContent = AuthState.role === 'admin' ? 'Admin' : 'User';
-
-    const chevronSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    chevronSvg.setAttribute('viewBox', '0 0 24 24');
-    chevronSvg.setAttribute('fill', 'none');
-    chevronSvg.setAttribute('stroke', 'currentColor');
-    chevronSvg.setAttribute('stroke-width', '2');
-    chevronSvg.setAttribute('class', 'auth-chevron');
-    const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    polyline.setAttribute('points', '6 9 12 15 18 9');
-    chevronSvg.appendChild(polyline);
-
-    userPill.appendChild(avatar);
-    userPill.appendChild(nameSpan);
-    userPill.appendChild(roleSpan);
-    userPill.appendChild(chevronSvg);
-
-    // Dropdown Menu
-    const dropdown = document.createElement('div');
-    dropdown.className = 'auth-dropdown-menu hidden';
-    dropdown.id = 'authDropdownMenu';
-
-    const userInfo = document.createElement('div');
-    userInfo.className = 'dropdown-user-info';
-    const dName = document.createElement('div');
-    dName.className = 'dropdown-name';
-    dName.textContent = AuthState.username;
-    const dRole = document.createElement('div');
-    dRole.className = 'dropdown-role';
-    dRole.textContent = `Signed in as ${AuthState.role === 'admin' ? 'Administrator' : 'User'}`;
-    userInfo.appendChild(dName);
-    userInfo.appendChild(dRole);
-    dropdown.appendChild(userInfo);
-
-    // If admin, add Admin Dashboard link
-    if (AuthState.role === 'admin') {
-      const adminLink = document.createElement('a');
-      adminLink.href = '/admin';
-      adminLink.className = 'dropdown-item';
-      adminLink.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg><span>Admin Dashboard</span>';
-      dropdown.appendChild(adminLink);
-    }
-
-    // Quick Settings Item
-    const settingsItem = document.createElement('button');
-    settingsItem.className = 'dropdown-item';
-    settingsItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg><span>Quick Settings</span>';
-    settingsItem.addEventListener('click', () => {
-      dropdown.classList.add('hidden');
-      userPill.classList.remove('active');
-      openSettingsModal();
-    });
-    dropdown.appendChild(settingsItem);
-
-    // Help & Documentation Item
-    const helpItem = document.createElement('button');
-    helpItem.type = 'button';
-    helpItem.className = 'dropdown-item';
-    helpItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg><span>Help & Documentation</span>';
-    helpItem.addEventListener('click', () => {
-      dropdown.classList.add('hidden');
-      userPill.classList.remove('active');
-      openHelpModal();
-    });
-    dropdown.appendChild(helpItem);
-
-    // Logout Item
-    const logoutItem = document.createElement('button');
-    logoutItem.className = 'dropdown-item dropdown-item-danger';
-    logoutItem.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg><span>Sign Out</span>';
-    logoutItem.addEventListener('click', handleLogout);
-    dropdown.appendChild(logoutItem);
-
-    // Toggle dropdown
-    userPill.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const isClosed = dropdown.classList.contains('hidden');
-      if (isClosed) {
-        dropdown.classList.remove('hidden');
-        userPill.classList.add('active');
-        userPill.setAttribute('aria-expanded', 'true');
-      } else {
-        dropdown.classList.add('hidden');
-        userPill.classList.remove('active');
-        userPill.setAttribute('aria-expanded', 'false');
-      }
-    });
-
-    // Close dropdown on outside click
-    document.addEventListener('click', (e) => {
-      if (!container.contains(e.target)) {
-        dropdown.classList.add('hidden');
-        userPill.classList.remove('active');
-        userPill.setAttribute('aria-expanded', 'false');
-      }
-    });
-
-    container.appendChild(userPill);
-    container.appendChild(dropdown);
 
     // Sync Mobile Drawer Auth Card (if present on page)
     const mobileAuthContainer = document.getElementById('mobileDrawerAuth');
@@ -257,16 +256,16 @@
 
         const avatar = document.createElement('div');
         avatar.className = 'auth-avatar avatar-guest';
-        avatar.textContent = 'G';
+        avatar.textContent = AuthState.guestMode ? 'G' : '?';
 
         const info = document.createElement('div');
         info.className = 'drawer-user-info';
         const name = document.createElement('div');
         name.className = 'drawer-user-name';
-        name.textContent = 'Guest Mode';
+        name.textContent = AuthState.guestMode ? 'Guest Mode' : 'Not Signed In';
         const role = document.createElement('span');
         role.className = 'auth-role-tag role-guest';
-        role.textContent = 'Public Access';
+        role.textContent = AuthState.guestMode ? 'Public Access' : 'Sign In Required';
         info.appendChild(name);
         info.appendChild(role);
 
@@ -321,7 +320,7 @@
 
     // Dynamic Admin-only DOM elements visibility
     document.querySelectorAll('.admin-only').forEach((el) => {
-      if (AuthState.role === 'admin') {
+      if (AuthState.authenticated && AuthState.role === 'admin') {
         el.classList.remove('hidden');
       } else {
         el.classList.add('hidden');

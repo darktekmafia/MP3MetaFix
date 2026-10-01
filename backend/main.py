@@ -345,7 +345,7 @@ async def logout(request: Request, response: Response):
     if user:
         auth_manager.revoke_sessions(user["id"])
     is_https = (request.url.scheme == "https")
-    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/", secure=is_https, httponly=True)
+    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/", secure=is_https, httponly=True, samesite="lax")
     return {"success": True}
 
 
