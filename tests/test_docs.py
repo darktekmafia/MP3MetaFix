@@ -114,3 +114,63 @@ def test_public_and_guest_access_to_all_docs():
     assert portal_res.status_code == 200
 
 
+def test_recursive_documentation_links_integrity():
+    """Verify that 100% of markdown links across all docs/*.md files resolve cleanly to registered docs or valid repository paths."""
+    import re
+    from pathlib import Path
+    from backend.main import DOCS_REGISTRY
+    from backend.config import BASE_DIR
+
+    docs_dir = BASE_DIR / "docs"
+    all_doc_ids = set(DOCS_REGISTRY.keys())
+    assert len(all_doc_ids) >= 10, "DOCS_REGISTRY missing core articles"
+
+    def resolve_link(link_url: str) -> str:
+        clean_url = link_url.split("#")[0]
+        if "docs/app" in clean_url or clean_url.endswith("/app.md") or clean_url == "app": return "#app"
+        if "docs/manager" in clean_url or clean_url.endswith("/manager.md") or clean_url == "manager": return "#manager"
+        if "docs/projects" in clean_url or clean_url.endswith("/projects.md") or clean_url == "projects": return "#projects"
+        if "docs/admin" in clean_url or clean_url.endswith("/admin.md") or clean_url == "admin": return "#admin"
+        if "DEPLOYMENT.md" in clean_url or clean_url == "deployment": return "#deployment"
+        if "ACCOUNT_MIGRATION.md" in clean_url or clean_url == "account_migration": return "#account_migration"
+        if "ARCHITECTURE.md" in clean_url or clean_url == "architecture": return "#architecture"
+        if "SECURITY_HARDENING.md" in clean_url or clean_url == "security": return "#security"
+        if "SECURITY_REMEDIATION" in clean_url or clean_url == "security_remediation": return "#security_remediation"
+        if "SECURITY_AUDIT" in clean_url or clean_url == "security_audit": return "#security_audit"
+        if "SUNO_TOS_COMPLIANCE.md" in clean_url or clean_url == "suno_tos": return "#suno_tos"
+        if "development_workflow.md" in clean_url or clean_url == "workflow": return "#workflow"
+        if "ROADMAP.md" in clean_url or clean_url == "roadmap": return "#roadmap"
+        if "CHANGELOG.md" in clean_url or clean_url == "changelog": return "#changelog"
+        if "VISION.md" in clean_url or clean_url == "vision": return "#vision"
+        if "GOVERNANCE.md" in clean_url or clean_url == "governance": return "#governance"
+        if clean_url.endswith("README.md") or clean_url in ("README.md", "../README.md"): return "/"
+        if any(k in clean_url for k in ("backend/", "frontend/", "install.sh", "VERSION")):
+            stripped = clean_url.replace("../", "").replace("./", "")
+            return f"GITHUB:{stripped}"
+        return link_url
+
+    errors = []
+    link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+    for p in sorted(docs_dir.glob("**/*.md")):
+        content = p.read_text()
+        for m in link_pattern.finditer(content):
+            text, url = m.groups()
+            target = resolve_link(url)
+            rel_p = p.relative_to(BASE_DIR)
+            if target.startswith("#"):
+                doc_id = target[1:]
+                if doc_id not in all_doc_ids:
+                    errors.append(f"{rel_p}: [{text}]({url}) -> target doc {doc_id} not in registry")
+            elif target.startswith("GITHUB:"):
+                f_path = BASE_DIR / target.split(":", 1)[1]
+                if not f_path.exists():
+                    errors.append(f"{rel_p}: [{text}]({url}) -> file {f_path} does not exist")
+            elif target.startswith(("http://", "https://", "/")):
+                pass
+            else:
+                errors.append(f"{rel_p}: [{text}]({url}) -> unresolved relative link {target}")
+
+    assert not errors, f"Broken markdown links detected in docs/:\n" + "\n".join(errors)
+
+
+

@@ -32,6 +32,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from backend.config import (
+    BASE_DIR,
     STATIC_DIR,
     APP_DIR,
     MANAGER_DIR,
@@ -601,6 +602,38 @@ DOCS_REGISTRY: Dict[str, Dict[str, Any]] = {
         "icon": "file-text",
         "path": DOCS_DIR / "SUNO_TOS_COMPLIANCE.md",
         "summary": "Permissible metadata ingestion, watermark preservation, and third-party terms compliance.",
+    },
+    "roadmap": {
+        "id": "roadmap",
+        "title": "Public Roadmap",
+        "category": "Project & Governance",
+        "icon": "map",
+        "path": BASE_DIR / "ROADMAP.md",
+        "summary": "Completed milestone achievements, active development focus, and future technical roadmap.",
+    },
+    "changelog": {
+        "id": "changelog",
+        "title": "Changelog & Releases",
+        "category": "Project & Governance",
+        "icon": "history",
+        "path": BASE_DIR / "CHANGELOG.md",
+        "summary": "Comprehensive version history and release notes following Keep a Changelog.",
+    },
+    "vision": {
+        "id": "vision",
+        "title": "Project Vision",
+        "category": "Project & Governance",
+        "icon": "compass",
+        "path": BASE_DIR / "VISION.md",
+        "summary": "Core engineering principles, tenant isolation, and long-term architectural direction.",
+    },
+    "governance": {
+        "id": "governance",
+        "title": "Project Governance",
+        "category": "Project & Governance",
+        "icon": "users",
+        "path": BASE_DIR / "GOVERNANCE.md",
+        "summary": "Transparency principles, decision authority, stewardship model, and contribution ethics.",
     },
 }
 

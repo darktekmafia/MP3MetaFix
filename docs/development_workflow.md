@@ -97,7 +97,7 @@ Before any changes are committed or merged:
 2. **Public vs. Internal Documentation Boundary**:
    - Treat documentation on every remote branch as public. Document installation, use, architecture, supported behavior, product plans, and relevant security/compatibility limitations. Exclude personal learning plans, environment-specific work logs, and agent/session handoffs.
    - Keep [ROADMAP.md](../ROADMAP.md) focused on public product work.
-   - Keep internal planning and personal notes strictly in the ignored `internal/` directory ([internal/README.md](../internal/README.md)). Never force-add or link untracked internal notes from public documentation.
+   - Keep internal planning and personal notes strictly in the ignored `internal/` directory (`internal/README.md`). Never force-add or link untracked internal notes from public documentation.
 3. **Mandatory Pre-Merge Release Gate (Before Merging `development` → `main`)**:
    - When `development` is approved for a new release, the documentation MUST be finalized on `development` before merging into `main`:
      - Convert `## [Unreleased]` in [CHANGELOG.md](../CHANGELOG.md) to the release heading: `## [X.Y.Z] - YYYY-MM-DD`.
