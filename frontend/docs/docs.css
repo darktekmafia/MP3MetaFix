@@ -539,3 +539,23 @@
   gap: 1rem;
   color: var(--text-muted);
 }
+
+/* Badges & Inline Documentation Images */
+.docs-badge-img {
+  display: inline-block;
+  vertical-align: middle;
+  height: 20px;
+  margin-right: 0.4rem;
+  margin-bottom: 0.4rem;
+  border-radius: 3px;
+  border: 0;
+}
+
+.docs-inline-img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  display: block;
+  margin: 1rem 0;
+}
+

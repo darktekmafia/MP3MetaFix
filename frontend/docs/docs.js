@@ -32,10 +32,10 @@
     return icons[iconName] || icons['file-text'];
   }
 
-  // Safe in-line text parser: parses bold, code, links, kbd without raw innerHTML
+  // Safe in-line text parser: parses bold, code, links, images, badges, kbd without raw innerHTML
   function parseInlineFormatting(text, container) {
-    // Matches: `code`, **bold**, *italic*, [link](url), <kbd>key</kbd>
-    const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\)|<kbd>[^<]+<\/kbd>)/g;
+    // Matches: `code`, **bold**, *italic*, [![alt](img)](url), ![alt](img), [link](url), <kbd>key</kbd>
+    const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[!\[[^\]]*\]\([^)]+\)\]\([^)]+\)|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|<kbd>[^<]+<\/kbd>)/g;
     let lastIndex = 0;
     let match;
 
@@ -62,6 +62,57 @@
         const kbd = document.createElement('kbd');
         kbd.textContent = raw.slice(5, -6);
         container.appendChild(kbd);
+      } else if (raw.startsWith('[![') && raw.endsWith(')')) {
+        // Linked image / badge: [![alt](imgUrl)](linkUrl)
+        const innerEnd = raw.indexOf(')](');
+        if (innerEnd !== -1) {
+          const imgPart = raw.substring(1, innerEnd + 1); // ![alt](imgUrl)
+          let linkUrl = raw.substring(innerEnd + 3, raw.length - 1); // linkUrl
+          
+          const imgSplit = imgPart.indexOf('](');
+          const altText = imgPart.substring(2, imgSplit);
+          const imgSrc = imgPart.substring(imgSplit + 2, imgPart.length - 1);
+
+          const a = document.createElement('a');
+          const cleanUrl = linkUrl.split('#')[0];
+          if (cleanUrl.includes('VERSION') || cleanUrl.includes('backend/') || cleanUrl.includes('frontend/')) {
+            linkUrl = `https://github.com/darktekmafia/MP3MetaFix/blob/main/${cleanUrl.replace(/^\.\.\//, '').replace(/^\.\//, '')}`;
+          }
+          a.href = linkUrl;
+          if (linkUrl.startsWith('#')) {
+            a.addEventListener('click', (e) => {
+              e.preventDefault();
+              const targetId = linkUrl.substring(1);
+              if (targetId && targetId !== '#') {
+                window.location.hash = targetId;
+                loadDoc(targetId);
+              }
+            });
+          } else if (linkUrl.startsWith('http://') || linkUrl.startsWith('https://')) {
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+          }
+
+          const img = document.createElement('img');
+          img.src = imgSrc;
+          img.alt = altText;
+          img.className = 'docs-badge-img';
+          img.loading = 'lazy';
+          a.appendChild(img);
+          container.appendChild(a);
+        }
+      } else if (raw.startsWith('![') && raw.includes('](') && raw.endsWith(')')) {
+        // Standalone image: ![alt](imgUrl)
+        const splitIdx = raw.indexOf('](');
+        const altText = raw.substring(2, splitIdx);
+        const imgSrc = raw.substring(splitIdx + 2, raw.length - 1);
+
+        const img = document.createElement('img');
+        img.src = imgSrc;
+        img.alt = altText;
+        img.className = 'docs-inline-img';
+        img.loading = 'lazy';
+        container.appendChild(img);
       } else if (raw.startsWith('[') && raw.includes('](') && raw.endsWith(')')) {
         const splitIdx = raw.indexOf('](');
         const linkText = raw.substring(1, splitIdx);
@@ -101,8 +152,10 @@
           a.addEventListener('click', (e) => {
             e.preventDefault();
             const targetId = linkUrl.substring(1);
-            window.location.hash = targetId;
-            loadDoc(targetId);
+            if (targetId && targetId !== '#') {
+              window.location.hash = targetId;
+              loadDoc(targetId);
+            }
           });
         } else if (linkUrl.startsWith('http://') || linkUrl.startsWith('https://')) {
           a.target = '_blank';
