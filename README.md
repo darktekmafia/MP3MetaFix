@@ -2,7 +2,7 @@
 
 [![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
-[![Platform](https://img.shields.io/badge/platform-Linux%20(Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC)-purple.svg)](#)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%28Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC%29-purple.svg)](#)
 
 **MP3MetaFix** is a high-performance, security-focused audio metadata and production suite. It provides a touch-friendly mobile editor, a desktop power-user workspace, and deep container tagging for **MP3, M4A (AAC/ALAC/Opus), and WAV** files — all processed natively in-place with **zero audio re-encoding and zero quality loss**.
 

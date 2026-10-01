@@ -35,7 +35,7 @@
   // Safe in-line text parser: parses bold, code, links, images, badges, kbd without raw innerHTML
   function parseInlineFormatting(text, container) {
     // Matches: `code`, **bold**, *italic*, [![alt](img)](url), ![alt](img), [link](url), <kbd>key</kbd>
-    const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[!\[[^\]]*\]\([^)]+\)\]\([^)]+\)|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|<kbd>[^<]+<\/kbd>)/g;
+    const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[!\[[^\]]*\]\((?:[^()]+|\([^()]*\))*\)\]\((?:[^()]+|\([^()]*\))*\)|!\[[^\]]*\]\((?:[^()]+|\([^()]*\))*\)|\[[^\]]+\]\((?:[^()]+|\([^()]*\))*\)|<kbd>[^<]+<\/kbd>)/g;
     let lastIndex = 0;
     let match;
 
@@ -64,10 +64,10 @@
         container.appendChild(kbd);
       } else if (raw.startsWith('[![') && raw.endsWith(')')) {
         // Linked image / badge: [![alt](imgUrl)](linkUrl)
-        const innerEnd = raw.indexOf(')](');
-        if (innerEnd !== -1) {
-          const imgPart = raw.substring(1, innerEnd + 1); // ![alt](imgUrl)
-          let linkUrl = raw.substring(innerEnd + 3, raw.length - 1); // linkUrl
+        const lastSplit = raw.lastIndexOf('](');
+        if (lastSplit !== -1) {
+          const imgPart = raw.substring(1, lastSplit); // ![alt](imgUrl)
+          let linkUrl = raw.substring(lastSplit + 2, raw.length - 1); // linkUrl
           
           const imgSplit = imgPart.indexOf('](');
           const altText = imgPart.substring(2, imgSplit);
