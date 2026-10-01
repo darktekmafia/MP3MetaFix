@@ -9,6 +9,8 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-30
+
 ### Added
 - **Persistent File & Project Storage Engine (`/projects` & `/manager`)**: Added user-owned persistent storage architecture with self-contained Track Workspaces (`trk_...`), Takes (`tak_...`), Stems (`stm_...`), and Album Releases (`alb_...`) under POSIX `0700` filesystem isolation (`data/storage/tenants/`).
 - **RESTful Project & Storage APIs (`/api/projects`, `/api/storage`)**: Complete suite of endpoints for track CRUD, take/stem audio ingestion, synchronized lyrics format attachment, HTTP 206 audio streaming, RFC 5987 sanitized audio downloads, album tracklist sequencing, cover artwork normalization, and quota telemetry.
