@@ -63,8 +63,8 @@ def prepared(tmp_path, monkeypatch):
     source = tmp_path / 'source'
     source.mkdir()
     for part in migration.PARTS:
-        if part == 'VERSION':
-            (source / part).write_text('0.5.1')
+        if part == 'VERSION' or part.endswith('.md'):
+            (source / part).write_text('content')
         else:
             (source / part).mkdir()
     (source / 'data').mkdir()
@@ -363,6 +363,8 @@ def test_migrate_service_adds_missing_docs_bind(tmp_path):
     runtime = tmp_path / 'runtime'
     (source / 'docs').mkdir(parents=True)
     (source / 'backend').mkdir(parents=True)
+    (source / 'README.md').write_text('# MP3MetaFix')
+    (source / 'ROADMAP.md').write_text('# Roadmap')
 
     content = f"""[Unit]
 Description=MP3MetaFix dedicated service
@@ -375,6 +377,11 @@ BindReadOnlyPaths={source}/frontend:{runtime}/frontend
     new_content, status, err = migrate_service_content(content)
     assert status == MigrationStatus.CHANGED
     assert f"BindReadOnlyPaths={source}/docs:{runtime}/docs" in new_content
+    assert f"BindReadOnlyPaths={source}/README.md:{runtime}/README.md" in new_content
+    assert f"BindReadOnlyPaths={source}/ROADMAP.md:{runtime}/ROADMAP.md" in new_content
+    assert (runtime / 'README.md').is_file()
+    assert (runtime / 'ROADMAP.md').is_file()
+
 
 
 

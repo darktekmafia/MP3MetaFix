@@ -206,37 +206,55 @@ def migrate_service_content(content: str) -> Tuple[str, str, Optional[str]]:
         for env_line in reversed(insert_env_lines):
             new_lines.insert(exec_idx, env_line)
 
-    # Check for missing BindReadOnlyPaths for docs if unit uses sandboxed component binds
+    # Check for missing BindReadOnlyPaths for docs and root documents if unit uses sandboxed component binds
     has_backend_bind = False
-    has_docs_bind = False
     bind_source = None
     bind_runtime = None
     last_bind_idx = -1
+    existing_binds = []
 
     for idx, line in enumerate(new_lines):
         s_line = line.strip()
         if s_line.startswith("BindReadOnlyPaths="):
             last_bind_idx = idx
             bind_val = s_line.split("BindReadOnlyPaths=", 1)[1].strip()
-            if "/docs:" in bind_val or bind_val.endswith("/docs"):
-                has_docs_bind = True
-            if "/backend:" in bind_val:
+            existing_binds.append(bind_val)
+            if "/backend:" in bind_val or bind_val.endswith("/backend"):
                 has_backend_bind = True
                 parts = bind_val.split(":", 1)
                 if len(parts) == 2:
                     bind_source = Path(parts[0]).parent
                     bind_runtime = Path(parts[1]).parent
 
-    if has_backend_bind and not has_docs_bind and bind_source and bind_runtime:
-        docs_source = bind_source / "docs"
-        docs_runtime = bind_runtime / "docs"
-        if docs_source.is_dir():
-            try:
-                docs_runtime.mkdir(mode=0o755, exist_ok=True)
-                os.chmod(docs_runtime, 0o755)
-            except Exception:
-                pass
-            new_lines.insert(last_bind_idx + 1, f"BindReadOnlyPaths={docs_source}:{docs_runtime}")
+    DOCS_AND_ROOT_PARTS = ("docs", "README.md", "ROADMAP.md", "CHANGELOG.md", "VISION.md", "GOVERNANCE.md")
+
+    if has_backend_bind and bind_source and bind_runtime:
+        for item in DOCS_AND_ROOT_PARTS:
+            already_bound = any(
+                f"/{item}:" in b or b.endswith(f"/{item}")
+                for b in existing_binds
+            )
+            if not already_bound:
+                item_source = bind_source / item
+                item_runtime = bind_runtime / item
+                if item_source.exists():
+                    if item_source.is_dir():
+                        try:
+                            item_runtime.mkdir(mode=0o755, exist_ok=True)
+                            os.chmod(item_runtime, 0o755)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            item_runtime.parent.mkdir(mode=0o755, exist_ok=True)
+                            if not item_runtime.exists():
+                                item_runtime.touch(mode=0o644)
+                                os.chmod(item_runtime, 0o644)
+                        except Exception:
+                            pass
+                    new_lines.insert(last_bind_idx + 1, f"BindReadOnlyPaths={item_source}:{item_runtime}")
+                    existing_binds.append(f"{item_source}:{item_runtime}")
+                    last_bind_idx += 1
 
     new_content = "\n".join(new_lines)
     if content.endswith("\n") and not new_content.endswith("\n"):
