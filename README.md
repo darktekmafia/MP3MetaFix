@@ -149,3 +149,13 @@ Explore dedicated guides in the [`docs/`](docs/) directory:
 ## 📄 License
 
 Declared project license: MIT © 2026 MP3MetaFix Contributors.
+
+---
+
+## 💖 Sponsorship
+
+MP3MetaFix is developed and maintained independently as a permanently open-source project. If you find the project useful and would like to support its continued development, sponsorship helps cover the time and costs involved in developing, testing, hosting, and maintaining the project.
+Sponsorship is entirely optional and does not purchase feature priority, issue priority, governance authority, or guaranteed development work.
+
+Sponsorship supports the maintainer's continued work on the project. It creates no entitlement to project direction or priority.
+
