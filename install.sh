@@ -565,7 +565,7 @@ do_update() {
 
             PREV_COMMIT=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)
             log_info "Fetching release tags and updates from origin ${TARGET_BRANCH}..."
-            if ! git -C "$INSTALL_DIR" fetch origin "$TARGET_BRANCH" --tags; then
+            if ! git -C "$INSTALL_DIR" fetch --force --tags origin "$TARGET_BRANCH"; then
                 log_error "Failed to fetch updates from 'origin ${TARGET_BRANCH}'. Check network and remote configuration."
                 return 1
             fi
