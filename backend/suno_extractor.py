@@ -61,7 +61,7 @@ def unescape_nextjs_chunk(raw_chunk: str) -> str:
 
 def parse_next_f_payload(html: str) -> Dict[str, Any]:
     """Extracts and parses Next.js SSR stream payload chunks."""
-    matches = re.findall(r"self\.__next_f\.push\(\[1,\"(.*?)\"\]\)", html)
+    matches = re.findall(r"self\.__next_f\.push\(\[1,\"(.*?)\"\]\)", html, re.DOTALL)
     combined = ""
     for m in matches:
         try:
@@ -70,6 +70,38 @@ def parse_next_f_payload(html: str) -> Dict[str, Any]:
             logger.debug(f"Chunk unescape error: {e}")
             continue
     return parse_suno_combined_stream(combined, html)
+
+
+def extract_rsc_ref(ref_id: str, combined: str) -> Optional[str]:
+    """Resolves an RSC Flight stream reference string (e.g. 'bf', '51') to its decoded content."""
+    if not ref_id or not combined:
+        return None
+    # 1. Check for T<hex_len>, format: e.g. bf:T9d5,...
+    m_hex = re.search(r"(?:^|\n)" + re.escape(ref_id) + r":T([0-9a-fA-F]+),", combined)
+    if m_hex:
+        try:
+            byte_len = int(m_hex.group(1), 16)
+            prefix_bytes = combined[:m_hex.end()].encode("utf-8")
+            all_bytes = combined.encode("utf-8")
+            chunk_bytes = all_bytes[len(prefix_bytes):len(prefix_bytes) + byte_len]
+            text = chunk_bytes.decode("utf-8", errors="ignore")
+            # In case dummy/mock byte_len extends into next chunk marker
+            m_next = re.search(r"[0-9a-fA-F]+:\[[\"\$]", text)
+            if m_next:
+                text = text[:m_next.start()]
+            return text.strip()
+        except Exception as e:
+            logger.debug(f"Error resolving RSC T-token for ref {ref_id}: {e}")
+
+    # 2. Check for JSON string format: e.g. 51:"..."
+    m_json = re.search(r"(?:^|\n)" + re.escape(ref_id) + r':"(.*?)"(?:\n|$)', combined)
+    if m_json:
+        try:
+            return json.loads(f'"{m_json.group(1)}"')
+        except Exception:
+            return m_json.group(1).strip()
+
+    return None
 
 
 def parse_suno_combined_stream(combined: str, raw_html: str = "") -> Dict[str, Any]:
@@ -89,28 +121,57 @@ def parse_suno_combined_stream(combined: str, raw_html: str = "") -> Dict[str, A
         "formatted_comment": "",
     }
 
-    # 1. Locate the "clip":{...} object
-    clip_pos = combined.find('"clip":{')
     clip_dict: Dict[str, Any] = {}
-    if clip_pos != -1:
-        snippet = combined[clip_pos + 7:]
-        brace_count = 0
-        end_idx = 0
-        for i, char in enumerate(snippet):
-            if char == "{":
-                brace_count += 1
-            elif char == "}":
-                brace_count -= 1
-                if brace_count == 0:
-                    end_idx = i + 1
-                    break
-        if end_idx > 0:
-            try:
-                clip_dict = json.loads(snippet[:end_idx])
-            except Exception as e:
-                logger.warning(f"Error parsing clip JSON snippet: {e}")
 
-    # Fallback to OpenGraph / Meta tags if clip dict is empty
+    # 1. Check for TanStack Query dehydratedState (current Suno web architecture)
+    if '"dehydratedState"' in combined:
+        pos = combined.find('"dehydratedState"')
+        start_obj = combined.find("{", pos)
+        if start_obj != -1:
+            brace_count = 0
+            end_idx = -1
+            for i, char in enumerate(combined[start_obj:]):
+                if char == "{":
+                    brace_count += 1
+                elif char == "}":
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_idx = start_obj + i + 1
+                        break
+            if end_idx != -1:
+                try:
+                    dehydrated = json.loads(combined[start_obj:end_idx])
+                    for q in dehydrated.get("queries", []):
+                        data = q.get("state", {}).get("data", {})
+                        if isinstance(data, dict) and (data.get("id") or data.get("title")):
+                            clip_dict = data
+                            if data.get("entity_type") == "song_schema" or "metadata" in data:
+                                break
+                except Exception as e:
+                    logger.debug(f"Error parsing dehydratedState JSON: {e}")
+
+    # 2. Legacy fallback: check for inline "clip":{ object
+    if not clip_dict:
+        clip_pos = combined.find('"clip":{')
+        if clip_pos != -1:
+            snippet = combined[clip_pos + 7:]
+            brace_count = 0
+            end_idx = 0
+            for i, char in enumerate(snippet):
+                if char == "{":
+                    brace_count += 1
+                elif char == "}":
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_idx = i + 1
+                        break
+            if end_idx > 0:
+                try:
+                    clip_dict = json.loads(snippet[:end_idx])
+                except Exception as e:
+                    logger.warning(f"Error parsing clip JSON snippet: {e}")
+
+    # 3. Fallback to OpenGraph / Meta tags if clip dict is empty
     if not clip_dict and raw_html:
         og_title = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\'](.*?)["\']', raw_html, re.I)
         og_image = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\'](.*?)["\']', raw_html, re.I)
@@ -121,7 +182,7 @@ def parse_suno_combined_stream(combined: str, raw_html: str = "") -> Dict[str, A
 
     if clip_dict:
         result["id"] = clip_dict.get("id", "")
-        result["title"] = clip_dict.get("title", "")
+        result["title"] = (clip_dict.get("title") or "").strip()
         result["artist"] = clip_dict.get("display_name", "") or clip_dict.get("handle", "")
         result["handle"] = clip_dict.get("handle", "")
         result["created_at"] = clip_dict.get("created_at", "")
@@ -134,8 +195,12 @@ def parse_suno_combined_stream(combined: str, raw_html: str = "") -> Dict[str, A
 
         meta = clip_dict.get("metadata") or {}
         if isinstance(meta, dict):
-            result["genre"] = meta.get("tags", "")
-            result["prompt"] = meta.get("prompt", "")
+            tags = meta.get("tags", "")
+            if isinstance(tags, str):
+                result["genre"] = tags.replace("\n", ", ").strip() if "\n" in tags else tags.strip()
+            prompt = meta.get("prompt", "")
+            if isinstance(prompt, str):
+                result["prompt"] = prompt.strip()
 
     # Extract Year from created_at or current date
     if result["created_at"]:
@@ -143,31 +208,36 @@ def parse_suno_combined_stream(combined: str, raw_html: str = "") -> Dict[str, A
         if year_match:
             result["year"] = year_match.group(1)
 
-    # 2. Extract structured lyrics from Next.js payload stream
-    # In Suno Next.js SSR, lyrics appear in stream before clip or inside text tokens
-    if clip_pos != -1:
-        pre_clip = combined[:clip_pos]
-        # Look for [Intro], [Verse], etc.
-        lyric_match = re.search(r"(\[(?:Intro|Verse|Chorus|Bridge|Hook|Outro|Drop|Solo|Interlude|Build|Vamp|End)[^\]]*\][\s\S]*?)(?:41:\[|\[\$|$)", pre_clip, re.IGNORECASE)
-        if lyric_match:
-            raw_lyrics = lyric_match.group(1).strip()
-            # Clean up Next.js stream artifacts if any
-            clean_lyrics = re.sub(r"\d+:[a-zA-Z0-9_\-\$]+,", "", raw_lyrics).strip()
-            result["lyrics"] = clean_lyrics
+    # 4. Resolve prompt if it is an RSC reference like '$bf'
+    raw_prompt = result.get("prompt", "")
+    if raw_prompt.startswith("$") and len(raw_prompt) > 1 and raw_prompt not in ["$undefined", "$null"]:
+        ref_id = raw_prompt[1:]
+        resolved_text = extract_rsc_ref(ref_id, combined)
+        if resolved_text:
+            if any(marker in resolved_text for marker in ["[Verse", "[Chorus", "[Intro", "[Bridge", "[Outro", "[Hook"]):
+                result["lyrics"] = resolved_text
+            else:
+                result["prompt"] = resolved_text
 
-    # If lyrics not found in stream, check prompt for lyric structures
-    if not result["lyrics"] and result["prompt"]:
-        if any(marker in result["prompt"] for marker in ["[Verse", "[Chorus", "[Intro", "[Bridge"]):
+    # 5. Extract structured lyrics from Next.js payload stream if not yet found
+    if not result["lyrics"]:
+        if result["prompt"] and any(marker in result["prompt"] for marker in ["[Verse", "[Chorus", "[Intro", "[Bridge", "[Outro", "[Hook"]):
             result["lyrics"] = result["prompt"]
+        else:
+            lyric_match = re.search(r"(\[(?:Intro|Verse|Chorus|Bridge|Hook|Outro|Drop|Solo|Interlude|Build|Vamp|End)[^\]]*\][\s\S]*?)(?:[0-9a-fA-F]+:\[|\[\$|$)", combined, re.IGNORECASE)
+            if lyric_match:
+                raw_lyrics = lyric_match.group(1).strip()
+                clean_lyrics = re.sub(r"\d+:[a-zA-Z0-9_\-\$]+,", "", raw_lyrics).strip()
+                result["lyrics"] = clean_lyrics
 
-    # 3. Build formatted comment
+    # 6. Build formatted comment
     prompt_val = result.get("prompt", "").strip()
-    # Filter out React internal stream references like $51, $52, $undefined
     is_internal_ref = bool(re.match(r"^\$[0-9a-zA-Z_]+$", prompt_val)) or prompt_val in ["null", "undefined"]
     
     parts = []
-    if prompt_val and not is_internal_ref:
-        parts.append(f"Prompt: {prompt_val}")
+    if prompt_val and not is_internal_ref and prompt_val != result.get("lyrics"):
+        if not any(marker in prompt_val for marker in ["[Verse", "[Chorus", "[Intro", "[Bridge", "[Outro", "[Hook"]):
+            parts.append(f"Prompt: {prompt_val}")
     if result.get("genre"):
         parts.append(f"Style: {result['genre']}")
     if result.get("handle"):

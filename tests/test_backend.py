@@ -2230,6 +2230,59 @@ def test_parse_next_f_payload_unicode_encoding():
     assert "â" not in data["lyrics"]
 
 
+def test_parse_suno_dehydrated_state_and_rsc_ref():
+    from backend.suno_extractor import parse_suno_combined_stream, extract_rsc_ref
+
+    stream_with_dehydrated = (
+        '40:I[428621,["/_next/static/immutable/chunks/04dur3iie4ddp.js"],"default"]\n'
+        'bf:T9d5,[Intro]\n\n[Verse]\nEchoes in the dark hallway\nSearching for another way\n[Chorus]\nBroken promises\n[End]'
+        '54:["$","$Lbe",null,{"prefetched":{"dehydratedState":{"mutations":[],"queries":[{"queryKey":[{"scope":"clips","entity":"clips","clipId":"a362dcef-6a63-423a-8f6b-8990ff370c06"}],"state":{"data":{"status":"complete","title":"Broken Promises","id":"a362dcef-6a63-423a-8f6b-8990ff370c06","entity_type":"song_schema","display_name":"Against The Grain","handle":"against_the_grain","created_at":"2026-09-03T21:26:05.728Z","image_url":"https://cdn2.suno.ai/art1.jpeg","image_large_url":"https://cdn2.suno.ai/art1_large.jpeg","major_model_version":"v5","model_name":"chirp-crow","metadata":{"tags":"acoustic progressive rock, raw vocals","prompt":"$bf"}}}}]}}}]\n'
+    )
+
+    # Test extract_rsc_ref directly
+    lyrics_ref = extract_rsc_ref("bf", stream_with_dehydrated)
+    assert lyrics_ref is not None
+    assert "[Intro]" in lyrics_ref
+    assert "Broken promises" in lyrics_ref
+
+    # Test stream parsing
+    res = parse_suno_combined_stream(stream_with_dehydrated)
+    assert res["id"] == "a362dcef-6a63-423a-8f6b-8990ff370c06"
+    assert res["title"] == "Broken Promises"
+    assert res["artist"] == "Against The Grain"
+    assert res["handle"] == "against_the_grain"
+    assert res["year"] == "2026"
+    assert res["genre"] == "acoustic progressive rock, raw vocals"
+    assert res["image_url"] == "https://cdn2.suno.ai/art1_large.jpeg"
+    assert res["model"] == "v5 chirp-crow"
+    assert "[Verse]" in res["lyrics"]
+    assert "Echoes in the dark hallway" in res["lyrics"]
+    assert "Style: acoustic progressive rock, raw vocals" in res["formatted_comment"]
+    assert "Created on Suno.com (@against_the_grain)" in res["formatted_comment"]
+    assert "$bf" not in res["formatted_comment"]
+
+
+def test_parse_suno_dehydrated_state_inline_prompt():
+    from backend.suno_extractor import parse_suno_combined_stream
+
+    stream_with_inline = (
+        '54:["$","$Lbe",null,{"prefetched":{"dehydratedState":{"mutations":[],"queries":[{"queryKey":[{"scope":"clips","entity":"clips","clipId":"7b9cfa43-d231-44e8-b69a-d9c0627b016d"}],"state":{"data":{"status":"complete","title":"In der Weihnachtsbäckerei ","id":"7b9cfa43-d231-44e8-b69a-d9c0627b016d","entity_type":"song_schema","display_name":"SalsaHardvapour517","handle":"salsahardvapour517","created_at":"2024-03-24T13:36:56.147Z","image_url":"https://cdn2.suno.ai/image_7b9cfa43.jpeg","image_large_url":"https://cdn2.suno.ai/image_large_7b9cfa43.jpeg","major_model_version":"v3","model_name":"chirp-v3","metadata":{"tags":"Rap\\nJapanese rock\\nPop","prompt":"[Chorus]\\nIn der Weihnachtsbäckerei\\nGibt es manche Leckerei"}}}}]}}}]\n'
+    )
+
+    res = parse_suno_combined_stream(stream_with_inline)
+    assert res["id"] == "7b9cfa43-d231-44e8-b69a-d9c0627b016d"
+    assert res["title"] == "In der Weihnachtsbäckerei"
+    assert res["artist"] == "SalsaHardvapour517"
+    assert res["handle"] == "salsahardvapour517"
+    assert res["year"] == "2024"
+    assert res["genre"] == "Rap, Japanese rock, Pop"
+    assert res["image_url"] == "https://cdn2.suno.ai/image_large_7b9cfa43.jpeg"
+    assert res["model"] == "v3 chirp-v3"
+    assert "[Chorus]" in res["lyrics"]
+    assert "In der Weihnachtsbäckerei" in res["lyrics"]
+    assert "Created on Suno.com (@salsahardvapour517)" in res["formatted_comment"]
+
+
 def test_api_suno_extract_endpoints(client):
     from backend.auth import auth_manager
 

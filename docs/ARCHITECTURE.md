@@ -154,7 +154,7 @@ MP3MetaFix integrates automated server-side extraction and non-destructive clien
 ### Extraction Architecture (`backend/suno_extractor.py`)
 1. **UUID Identification**: Matches standard v4 UUIDs from direct strings, song URLs (`https://suno.com/song/{uuid}`), and embedded comment tags (`made with suno; ... id={uuid}`).
 2. **Initial URL Construction**: Requests begin at `https://suno.com/song/{uuid}`. The shared outbound helper requires HTTPS/443, allowed hosts and public DNS addresses, pins the connection to a validated address with TLS hostname verification, rejects redirects/compression, and bounds HTML to 4 MiB. Fetches run in worker threads with 10-second socket/read deadlines; OS DNS resolution follows host resolver timing.
-3. **Next.js SSR Stream Deserializer**: Parses Server Component stream payloads (`self.__next_f.push`) to extract:
+3. **Next.js SSR Stream Deserializer**: Parses Server Component stream payloads (`self.__next_f.push`), resolving TanStack Query SSR cache dehydration (`dehydratedState`), RSC Flight text tokens (`extract_rsc_ref`), or legacy inline clip objects to extract:
    - Track Title (`TIT2`)
    - Creator Display Name & Handle (`TPE1`, `TPE2`, `@username`)
    - Musical Style & Prompt Tags (`TCON`)

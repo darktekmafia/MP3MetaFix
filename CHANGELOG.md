@@ -9,6 +9,9 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ## [Unreleased]
 
+### Fixed
+- **Suno AI Metadata Extraction & Stream Deserialization**: Updated `backend/suno_extractor.py` to support Suno's updated Next.js frontend architecture using TanStack Query (React Query) SSR cache dehydration (`dehydratedState`). Restored full extraction of Artist, Handle, Style/Genre tags, Structured Lyrics, Model, and Year for Suno Sync, and added byte-accurate React Server Component (RSC) Flight text token resolution (`extract_rsc_ref`) for referenced prompts and lyrics chunks. Maintained legacy inline `clip` object extraction and OpenGraph meta tag fallbacks for backwards compatibility.
+
 ## [0.6.0] - 2026-09-30
 
 ### Added
