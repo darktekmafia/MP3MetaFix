@@ -1047,6 +1047,47 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // --- Click-to-Insert Filename Pattern Tags ---
+  const patternTags = document.querySelectorAll('.naming-help code, .pattern-tag');
+  patternTags.forEach(tagEl => {
+    function insertPatternTag() {
+      const tag = tagEl.textContent.trim();
+      if (!tag || !inputCustomFilename) return;
+
+      const start = inputCustomFilename.selectionStart;
+      const end = inputCustomFilename.selectionEnd;
+      const currentVal = inputCustomFilename.value;
+
+      // Check if input is currently focused with an active cursor position
+      if (document.activeElement === inputCustomFilename && start !== null && end !== null) {
+        inputCustomFilename.value = currentVal.substring(0, start) + tag + currentVal.substring(end);
+        inputCustomFilename.selectionStart = inputCustomFilename.selectionEnd = start + tag.length;
+      } else {
+        // If not focused or cursor unknown, append intelligently
+        if (!currentVal) {
+          inputCustomFilename.value = tag;
+        } else {
+          // If existing value doesn't end with a separator or whitespace, add a space
+          const separatorNeeded = !/[\s\-_/]$/.test(currentVal) ? ' ' : '';
+          inputCustomFilename.value = currentVal + separatorNeeded + tag;
+        }
+        inputCustomFilename.selectionStart = inputCustomFilename.selectionEnd = inputCustomFilename.value.length;
+      }
+
+      inputCustomFilename.focus();
+      updateFilenamePreview();
+      showToast(`Inserted tag: ${tag}`, 'info', 1500);
+    }
+
+    tagEl.addEventListener('click', insertPatternTag);
+    tagEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        insertPatternTag();
+      }
+    });
+  });
+
   // --- Save & Download Workflow ---
   async function saveMetadata(downloadAfter = false) {
     if (!state.hasSession) return;

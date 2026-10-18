@@ -1144,12 +1144,40 @@ button {
   line-height: 1.6;
 }
 
-.naming-help code {
+.naming-help code,
+.pattern-tag {
   background: rgba(255, 255, 255, 0.08);
-  padding: 0.15rem 0.4rem;
+  padding: 0.18rem 0.45rem;
   border-radius: 4px;
   color: var(--accent-cyan);
   font-size: 0.84rem;
+  cursor: pointer;
+  user-select: none;
+  display: inline-block;
+  border: 1px solid rgba(0, 242, 254, 0.2);
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.naming-help code:hover,
+.pattern-tag:hover {
+  background: rgba(0, 242, 254, 0.18);
+  border-color: rgba(0, 242, 254, 0.45);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 242, 254, 0.25);
+}
+
+.naming-help code:active,
+.pattern-tag:active {
+  transform: translateY(0);
+  background: rgba(0, 242, 254, 0.32);
+  box-shadow: 0 1px 3px rgba(0, 242, 254, 0.2);
+}
+
+.naming-help code:focus-visible,
+.pattern-tag:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
 }
 
 .filename-input-wrapper {

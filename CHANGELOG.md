@@ -9,6 +9,9 @@ Historical release entries describe what was recorded at the time. Security comp
 
 ## [Unreleased]
 
+### Added
+- **Click-to-Insert Filename Pattern Tags (`/app`, `/manager`, `/projects`)**: Made dynamic pattern tags (`%artist%`, `%title%`, `%album%`, `%track%`, `%year%`) interactive in the File Naming studio across `/app`, `/manager`, and `/projects`. Clicking or keyboard activating any tag automatically inserts it at the active cursor position in the Output Filename Pattern textbox, updates the live preview in real-time, and provides subtle micro-pill hover animations and status toast feedback.
+
 ### Fixed
 - **Suno AI Metadata Extraction & Stream Deserialization**: Updated `backend/suno_extractor.py` to support Suno's updated Next.js frontend architecture using TanStack Query (React Query) SSR cache dehydration (`dehydratedState`). Restored full extraction of Artist, Handle, Style/Genre tags, Structured Lyrics, Model, and Year for Suno Sync, and added byte-accurate React Server Component (RSC) Flight text token resolution (`extract_rsc_ref`) for referenced prompts and lyrics chunks. Maintained legacy inline `clip` object extraction and OpenGraph meta tag fallbacks for backwards compatibility.
 
