@@ -126,14 +126,14 @@ Follow a strict 4-stage validation pipeline:
 - Manually verify UI interactions, error handling, and performance.
 - Inspect `git diff` to verify only intended changes are staged.
 
-### Stage 3: Local Commit First, Push Only When Verified
-- Commit to local Git with a clear conventional commit message (`feat:`, `fix:`, `docs:`, `chore:`).
-- **DO NOT** push to remote GitHub until local tests pass and verification is completely green.
-- Verify `git status` is clean before pushing upstream.
+### Stage 3: Local Commit on `development` (Local Commits Do Not Authorize Pushes)
+- Commit locally on the `development` branch with a clear conventional commit message (`feat:`, `fix:`, `docs:`, `chore:`). Normal development work must never be committed or pushed directly to `main`.
+- Local commits do not authorize remote pushes. **DO NOT** push to remote GitHub until local tests pass, verification is completely green, and the user has explicitly authorized the push.
+- Before an authorized push, verify the current branch, review the commits being pushed, and confirm that no unintended changes are included. Any remaining uncommitted or untracked files must be identified and left untouched unless separately authorized.
 
-### Stage 4: Continuous `development` Sync & Explicit `main` Release Gate
-- **Continuous `development` Sync**: Once local changes are verified with 0 test failures and committed locally, push them directly to remote GitHub branch `development` (`git push origin development`) to keep the remote `development` branch continuously in sync with local development.
-- **Strict `main` Release Gate**: Merging `development` into `main`, creating release tags, or triggering production deployment strictly requires explicit user approval. This can only take place after the user's own independent testing and security audits confirm release readiness.
+### Stage 4: Authorized `development` Push & Separate `main` Release Gate
+- **Authorized `development` Push**: `development` is the active development and pre-release testing branch, allowing interested users to install and test upcoming features (without the stability guarantee of `main`). Remote `development` (`git push origin development`) is normally pushed at the end of a development session following verification and explicit user authorization, or earlier when explicitly authorized by the user.
+- **Strict `main` Release Gate**: `main` represents the latest stable release. Merging `development` into `main`, creating release tags, or deploying a stable release requires separate explicit user approval. Authorization to push `development` does not authorize merging or releasing to `main`. This can only take place after the user's own independent testing and security audits confirm release readiness.
 - Apply the **Pre-Merge Release Gate** (Section 7) on `development` prior to executing any approved merge to `main`.
 - Keep `origin main` as the installer default release source. The installer enforces that standard updates are run only on a `main` checkout, fast-forwards strictly from `origin main`, and halts on fetch or branch errors without falling back to generic `git pull`. Development testing checkouts use `install.sh --update --dev`.
 - Validate installer and update changes in the designated disposable LXC before recommending wider deployment. Check service identity, listening ports, proxy behavior, data preservation, and recovery after failure.

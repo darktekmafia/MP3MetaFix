@@ -95,8 +95,8 @@ Governance must actively protect existing community workflows:
 MP3MetaFix uses a staged release workflow to ensure stability across heterogeneous environments:
 
 1. **Current Pipeline**:
-   - `development`: Active integration and stabilization branch. All features, fixes, and documentation updates are validated here first with the project's automated test suite.
-   - `main`: Clean, verified production branch. Merges from `development` occur strictly after explicit maintainer review, documentation synchronization, and security verification.
+   - `development`: Active development and pre-release testing branch. Features, fixes, and documentation updates are validated here first with the project's automated test suite, and remote `development` allows interested users to install and test upcoming features (without the stability guarantee of `main`).
+   - `main`: Latest stable release branch. Normal development work is never committed or pushed directly to `main`; merges from `development` occur strictly after separate explicit maintainer approval, documentation synchronization, and security verification.
 2. **Planned Release-Candidate (RC) Evolution**:
    - As the community expands across diverse Linux distributions, kernels, and container configurations, an intermediate **Release Candidate (RC) / Testing** branch workflow will be introduced.
    - The RC phase will allow real-world community testing on diverse hardware and environments prior to formal `main` release promotions.
