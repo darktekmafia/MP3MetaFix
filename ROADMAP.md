@@ -18,7 +18,7 @@ Although MP3MetaFix runs as a unified high-performance Python FastAPI service wi
 
 > [!NOTE]
 > **Architectural Principle: Workflow & Device-Driven Interface Selection (Superset Model)**  
-> **Required future architecture:** `/manager` must include every `/app` capability through shared backend services and an integrated inspector. That inspector is not implemented yet; the current manager is a shell. Desktop batch workflows, album project packaging, and mobile-focused editing are separate interface goals, not separate format engines.
+> **Required future architecture:** `/manager` is designed to include `/app`'s single-track capabilities through shared backend services and an integrated inspector. In the current implementation, `/manager` and `/projects` share the backend format/metadata engine and embed the single-track editor view alongside their workspace-specific tools (Synced Lyrics `SYLT`/`.lrc` studio, Track Workspaces, and Stems Manager), while multi-file batch queue, spreadsheet editing, and raw ID3 frame inspection in `/manager` remain planned backlog items. Desktop batch workflows, album project packaging, and mobile-focused editing are separate interface goals, not separate format engines.
 
 ---
 
@@ -45,9 +45,9 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - High-contrast footers, readable links, and glassmorphic telemetry cards across all screen resolutions (320px–4K).
 
 ### Active Backlog & Future Vision 📋
-- [x] **Display installed version publicly; check for updates only in `/admin`**:
-  - Keep the installed application version visible in the header for guests and signed-in users, using a read-only local version/health response. Displaying or clicking it does not trigger a remote update check.
-  - Removed automatic and manual update checks, update prompts, and update-check controls from `/app`, `/manager`, and the public hub. Confined update discovery and installation controls exclusively to `/admin`, gated by administrator authentication.
+- [x] **Display installed version publicly; restrict update checks to authenticated administrators**:
+  - Keep the installed application version visible in the header for guests and signed-in users, using a read-only local version/health response (`/api/version`). Displaying or clicking it does not trigger a remote update check.
+  - Removed automatic and guest/user update checks and prompts from `/app`, `/manager`, `/projects`, and the public hub. Restricted update discovery (`/api/updates/check`) and installation (`/api/updates/apply`) to authenticated administrators (managed in `/admin`, with an optional admin-only Quick Settings check shortcut when pinned by a signed-in administrator).
   - Verified guest startup, refresh, session restore, and version-display interactions never request `/api/updates/check`, eliminating unauthenticated 401 triggers while preserving authorized administrator update management.
 - [x] **Public & Guest Access to In-App Help & Documentation**:
   - In-app Help Modal and `/docs` documentation portal are directly accessible to unauthenticated visitors and guest mode users across all workspace headers, navigation drawers, and footers without requiring an active user login.
@@ -78,10 +78,10 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 - [x] **Native-format engine and UI implementation (v0.5.0)**:
   - Shared engine supports M4A AAC/ALAC/Opus atoms and WAV ID3 artwork/tags plus existing RIFF INFO text; encoded audio is preserved.
   - Synthetic MP3/AAC M4A/WAV tests verify upload, restore, playback, filename patterns, artwork, and export without changing format. Tested with WAV and real Suno Opus M4A files.
-  - `/manager` inherits these shared engine/API capabilities as part of its required `/app` feature parity; its current UI remains a placeholder.
+  - `/manager` and `/projects` reuse these shared backend engine/API capabilities (`audio_formats.py`, `metadata_engine.py`, and session endpoints) within their embedded single-track editor views.
 
 
-- [x] **Editor update-check compatibility**: Update results render correctly when the optional header badge is absent.
+- [x] **Editor version-dialog compatibility**: The version dialog renders local `/api/version` details cleanly when optional header badges are absent.
 - [x] **Fluid Mobile-First Responsive Layout (320px to 4K)**:
   - Latest browser checks found no horizontal document overflow at 320px, 375px, and 1440px widths; this is viewport testing, not a certification of every device/browser.
   - Balanced 2-column layout on tablets ($\ge 720\text{px}$) keeping artwork and metadata forms immediately accessible.
@@ -129,22 +129,23 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 
 ## 🗂️ Project C: MP3MetaManager (`/manager`) — Desktop Power-User Workspace Roadmap
 
-**MP3MetaManager** is the desktop-focused power-user interface engineered for heavy multi-track batch operations, album assembly, library management, and deep audio organization. **Its required future scope includes all `/app` features in the same workspace. Today only the shell/navigation exists; inspector and batch capabilities remain backlog items**.
+**MP3MetaManager** is the desktop-focused power-user interface engineered for multi-track organization, synchronized lyrics workflows, stem management, and planned batch operations. **Its target scope includes `/app`'s single-track editing capabilities in the same workspace. Currently, the embedded single-track editor view, Synchronized Lyrics (`SYLT`/`.lrc`) studio, Persistent Track Workspaces browser, and Stems Manager are implemented, while multi-file batch queue, spreadsheet editing, and raw ID3 frame inspection remain in the backlog.**
 
 ### Completed Features ✅
 - [x] **Desktop Workspace Foundation**:
-  - Multi-panel desktop shell with structured sidebar categories (Batch Queue, Suno AI Stems, Synced Lyrics, Karaoke Tap-to-Sync).
-  - High-density top toolbar with search filter and batch action controls.
+  - Multi-panel desktop shell with structured sidebar views (`Audio Editor`, `Synced Lyrics / SYLT`, `Track Workspaces`, `Stems Studio`) and live storage quota telemetry.
+  - High-density top toolbar with search filter and workspace controls.
 - [x] **Global Header Switcher Integration**:
-  - Unified app switcher navigation pill linking back to `/app` and `/` seamlessly.
-- [x] **Integrated MP3MetaFix Single-Track Inspector (`/manager` Sidebar → `MP3Metafix`)**:
-  - Direct single-track editor embedded within the `/manager` desktop workspace:
-    - *Full Tag Suite*: In-place editing for Track Title, Artist, Album, Album Artist, Genre, Year/Date, Track/Total, Disc/Total, BPM, Composer, Comments, and Unsynchronized Lyrics (`USLT`).
-    - *Album Artwork Studio*: Direct cover art drag-and-drop replacement, high-res preview, format normalization (JPEG/PNG/WebP), and removal.
+  - Unified app switcher navigation pill linking across `/`, `/app`, `/manager`, and `/projects`.
+- [x] **Embedded Single-Track Editor View (`/manager` Sidebar → `Audio Editor`)**:
+  - Single-track editor view (`frontend/js/app.js` + shared backend metadata engine) embedded within the `/manager` desktop workspace:
+    - *Standard Tag Suite*: In-place editing for Track Title, Artist, Album, Album Artist, Genre, Year/Date, Track/Total, Disc/Total, BPM, Composer, Comments, and Unsynchronized Lyrics (`USLT`).
+    - *Album Artwork Studio*: Direct cover art drag-and-drop replacement, preview, format normalization (JPEG/PNG/WebP), and removal.
     - *Canvas Audio Waveform Player*: Audio playback with dynamic waveform peaks, continuous drag scrubbing, and HTTP 206 streaming for loaded tracks.
     - *Canned Comment Presets & Preset Manager*: Quick-select preset dropdown and persistent custom preset creation.
     - *Dynamic Filename Formatter*: Instant pattern-based renaming (`%artist% - %title%.mp3`, `%track% - %title%.mp3`) with preset buttons.
     - *Suno.com Sync & Watermark Safety*: Ingest metadata and high-res art while preserving proprietary provenance tags.
+    - *Project Promotion*: One-click `Save to Project` handoff into persistent Track Workspaces.
 - [x] **Tap-to-Sync Karaoke Lyric Stamping (`.lrc` & ID3 `SYLT`) (`/manager` Sidebar → `Synced Lyrics / SYLT`)**:
   - Interactive "Tap-to-Sync" studio allowing creators to tap <kbd>Space</kbd> during playback to stamp precise millisecond timestamps onto lyric lines.
   - **Smart Structural Tag Handling**: Automatic `00:00.00` timing for opening `[Intro]` tags and automatic $500\text{ms}$ lead-in reduction on preceding section headers (`[Verse 1]`, `[Chorus]`, `[Bridge]`) when stamping first vocal lines.
@@ -152,6 +153,10 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - **Strip Section Tags Mode**: Toggleable complete exclusion of non-singable tags from stamping and export.
   - **Live Karaoke Visualizer**: Active-line spotlight, previous-line fade, and instrumental break cues.
   - **Atomic Save & Conversion**: Embed native ID3 `SYLT` frames directly into audio files, or import/export standard `.lrc` companion files.
+- [x] **Persistent Track Workspaces & Takes Browser (`/manager` Sidebar → `Track Workspaces`)**:
+  - Browse persistent Track Workspaces, inspect revision history, upload/stream/download versioned takes, and load stored takes into the embedded single-track editor or lyrics studio.
+- [x] **Separated Stems Manager (`/manager` Sidebar → `Stems Studio`)**:
+  - Batch multi-stem drag-and-drop upload with 18-role filename auto-detection, synchronized multi-stem preview playback (Mute, Solo, per-stem volume, master seek), individual stem download, and Stem Pack ZIP export.
 
 ### Active Backlog & Future Vision 📋
 - [ ] **Universal ID3 Frame & Raw Metadata Inspector / Editor ("View/Edit All Embedded Information")**:
@@ -202,21 +207,42 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
 
 ---
 
-## 🎛️ Project D: MP3Projects (`/projects`) — Multi-Track Project & Album Studio Roadmap
+## 🎛️ Project D: MP3Projects (`/projects`) — Music Project & Release Management Workspace Roadmap
 
-**MP3Projects** is the project-oriented studio workspace designed for grouping, sequencing, and packaging multi-track releases (EPs, LPs, single bundles with stems, podcast sets) under a unified persistent project state.
+**MP3Projects** is the music project and release management workspace designed for organizing track workspaces, versioned takes, separated stem bundles, and multi-track album/EP sequences under a persistent project state.
+
+### Completed Features ✅
+- [x] **Dispatcher Handoff & Workspace Access Control**:
+  - Active `/projects` workspace card on the `/` hub with configurable administrator access policies, Hub visibility toggles, and maintenance notices.
+- [x] **Persistent Track Workspaces & Multi-Take Management**:
+  - Save and resume Track Workspaces (`trk_...`) and versioned takes (`tak_...`) across sessions in POSIX `0700` tenant-isolated storage (`data/storage/tenants/`) within configured storage quotas, with revision history logs, master take designation, HTTP 206 streaming, and two-way session handoff with `/app` and `/manager`.
+- [x] **Stem Bundle Organization & Packager**:
+  - Organize separated stems (`stm_...`) across 18 stem roles with filename auto-detection, synchronized multi-stem preview playback (Mute, Solo, per-stem volume, master seek), and one-click take Stem Pack ZIP export (`/stems/download-pack`).
+- [x] **Album / EP Release Organization & Tracklist Sequencing**:
+  - Group tracks into named Album, EP, Single, or Compilation containers (`alb_...`) with track/disc order sequencing (`AlbumTrackEntry`), normalized cover art, and release metadata.
+- [x] **Embedded Single-Track Editor View**:
+  - In-place access to the single-track metadata and artwork editor view (`#viewEditor` using `frontend/js/app.js` and shared backend session APIs) without leaving `/projects`.
 
 ### Active Backlog & Future Vision 📋
-- [ ] **Dispatcher Handoff & Disabled State**:
-  - Initial presentation as a disabled / coming-soon card on `/` with configurable admin access status and maintenance messaging.
-- [ ] **Project-Centric Audio Bundling & Sequencing**:
-  - Group multiple audio files into a named project with track order numbers, unified album name, shared cover art, common artist/producer tags, and release metadata.
-- [ ] **Stem Bundle Packager**:
-  - Bundle vocal, instrumental, drum, and bass stems with synchronized timing, shared credits, and structured export packaging.
-- [ ] **Persistent Project State & Session Restoration**:
-  - Save project definitions to JSON/session files to resume album curation across sessions without losing staging edits.
-- [ ] **Mastering & Release Export**:
+- [ ] **Release Packaging & Export**:
   - One-click structured ZIP export containing sequenced, tag-sanitized audio files and companion cue sheets (`.cue`) or tracklists.
+
+### Lyrics Version Management — Planned
+
+Introduce persistent lyric management within `/projects`, allowing track workspaces and their associated takes to maintain current lyrics and historical revisions.
+
+**Proposed capabilities:**
+- Store and retrieve the current lyrics associated with a track or take.
+- Preserve previous lyric revisions rather than overwriting them permanently.
+- Allow users to browse, inspect, compare, and restore earlier revisions.
+- Record revision metadata, including timestamps and optional revision notes.
+- Integrate with the existing lyric editing and synchronization functionality in `/` and `/manager`.
+- Support separate lyric versions for different takes when their lyrics differ.
+- Preserve revision history independently of the current editing session.
+
+**Scope:** Lyrics management, revision tracking, and synchronization metadata. This feature does not introduce audio recording, mixing, or DAW functionality.
+
+**Status:** Proposed for roadmap; implementation and data model not yet defined.
 
 ---
 

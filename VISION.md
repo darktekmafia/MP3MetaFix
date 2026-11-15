@@ -35,10 +35,11 @@ The following core principles guide product design and technical execution:
 Today, MP3MetaFix exists to provide a high-performance, self-hosted, touch-friendly, and security-focused metadata editor and container tagger for **MP3, M4A (AAC/ALAC/Opus), and WAV** audio formats on Linux workstations, servers, and Proxmox LXC containers.
 
 Its current capabilities include:
-- **Mobile-First Track Tagging (`/app`)**: Rapid single-track metadata editing with live retina waveforms, APIC album art studio, and comment presets.
+- **Mobile-First Track Tagging (`/app`)**: Rapid single-track metadata editing with live retina waveforms, APIC album art studio, comment presets, and one-click promotion into persistent project workspaces.
 - **Selective AI Metadata Ingestion**: Non-destructive, field-by-field extraction and staging from Suno.com URLs and embedded creation tags with explicit merge previews.
-- **Power-User Desktop Shell (`/manager`)**: In-progress multi-panel workspace for batch operations, directory tree ingestion, and structured tag management.
-- **Administrative Control Center (`/admin`)**: Diagnostics, resource telemetry, security policy toggles, and authorized update management.
+- **Desktop Metadata & Lyrics Workspace (`/manager`)**: Multi-panel desktop workspace providing an embedded single-track editor view, a Synchronized Lyrics (`SYLT` / `.lrc`) & Tap-to-Sync studio, Persistent Track Workspaces, and a Stems Manager, with multi-file batch and raw frame inspection capabilities planned.
+- **Music Project & Release Management Workspace (`/projects`)**: Self-contained workspace for organizing persistent Track Workspaces, versioned takes, separated stem bundles with ZIP pack export, and Album/EP tracklist sequencing, alongside an embedded single-track editor view.
+- **Administrative Control Center (`/admin`)**: Diagnostics, resource telemetry, runtime storage/session quota policies, workspace access toggles, and authorized update management.
 - **In-App Documentation Portal (`/docs`)**: Synchronized, searchable architecture guides, workspace manuals, and API references.
 
 ---

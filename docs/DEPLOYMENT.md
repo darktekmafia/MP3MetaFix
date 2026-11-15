@@ -282,8 +282,8 @@ If you run MP3MetaFix behind a reverse proxy configured with an **Access List** 
 >
 > In certain browser and reverse proxy configurations (particularly when proxy-level HTTP Basic Auth is enabled), receiving a `401 Unauthorized` on this background API call could cause the browser to invalidate its cached proxy authentication credentials or stall subsequent multipart audio uploads.
 
-#### Resolution & Upcoming Fix
-- **Fixed in Development / Upcoming Release**: The unauthenticated background update check has been completely removed from `/app` and isolated exclusively to authenticated administrators visiting `/admin`.
+#### Resolution (`v0.5.3+`)
+- **Current Behavior**: Unauthenticated background update checks have been removed from `/app` and all public workspaces (which query only `GET /api/version`). Remote update checks (`GET /api/updates/check`) require administrator authentication (`require_admin`, managed in `/admin` or via the optional admin-only Quick Settings shortcut).
 - **For Older Installations**: If you experience stalled audio uploads when protected by a reverse proxy access list:
   1. **Option A (Recommended)**: Upgrade to the latest development build via CLI:
      ```bash
@@ -314,7 +314,7 @@ MP3MetaFix enforces strict security-by-design and least-privilege containment:
 > Always use `./install.sh --update` (or `./install.sh --update --dev`) when upgrading an existing installation.
 >
 > Running a plain `./install.sh` without the `--update` flag is treated as a **fresh setup** and will regenerate the systemd unit and environment configuration from default templates, which will overwrite custom reverse proxy domains, listening interfaces, and trusted proxy settings back to default `127.0.0.1:8844`.
-> *(An automated preflight guard is planned for an upcoming release to detect existing installations and prevent accidental configuration resets).*
+> *(An automated preflight guard in `install.sh` detects existing installations when invoked without `--update` and stops with guidance unless `--reinstall` is explicitly passed).*
 
 ---
 
@@ -453,7 +453,7 @@ The endpoint’s existing 150 MB upload limit applies to every format; WAV can r
 
 ## 6. Environment Variables & Security Configuration
 
-The server reads environment variables. Configure them in the service environment or export them before launch; the backend does not itself load a `.env` file. Persisted UI quota/TTL preferences currently do not reconfigure these runtime limits. ASGI admission now checks access before multipart parsing, counts actual body bytes, enforces read deadlines, and serializes storage mutations across workers. Keep proxy limits as an additional boundary.
+The server reads environment variables as startup defaults. Configure them in the service environment or export them before launch; the backend does not itself load a `.env` file. Administrator quota and TTL settings persisted in `data/auth/settings.json` (`max_upload_size_mb`, `max_global_storage_mb`, `max_sessions`, `session_ttl_minutes`) dynamically override the corresponding runtime limits without a service restart (`backend/config.py:get_runtime_*`). ASGI admission checks access before multipart parsing, counts actual body bytes, enforces read deadlines, and serializes storage mutations across workers. Keep proxy limits as an additional boundary.
 
 | Variable | Default | Description |
 |---|---|---|

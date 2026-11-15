@@ -18,7 +18,7 @@ MP3MetaFix is a client-server application:
 Current controls and remaining deployment tradeoffs are documented in [SECURITY_HARDENING.md](SECURITY_HARDENING.md) and the [v0.5.1 verification report](SECURITY_REMEDIATION_2026-09-21.md).
 
 - ASGI request admission checks editing access and upload rate limits before multipart parsing. Actual body bytes are bounded even without an honest Content-Length. Upload/artwork bodies allow 64 KiB overhead beyond their configured file limits; other mutations allow 256 KiB. Reads have 30-second idle and 300-second total deadlines.
-- A process-shared writer lease serializes storage mutations, including multipart spooling. Upload quota checks allow the maximum upload plus artwork; saves check space for up to two additional copies before modifying data. Runtime quotas still come from environment configuration, not persisted UI preferences.
+- A process-shared writer lease serializes storage mutations, including multipart spooling. Upload quota checks allow the maximum upload plus artwork; saves check space for up to two additional copies before modifying data. Runtime upload, storage, session-count, and TTL limits (`backend/config.py:get_runtime_*`) dynamically reflect administrator settings persisted in `data/auth/settings.json`, falling back to environment defaults.
 - Account identity and file-session cookies remain separate. Account signing keys incorporate the password hash and revocation epoch; password changes and logout invalidate all login tokens for that account. Invalid initialized account stores fail closed with HTTP 503. Account writes and signing-key initialization are serialized and atomic.
 - Session storage uses `SHA-256("storage_dir:" + secret + ":" + session_id)[:32]` with 0700 directories. File-session identifiers are not returned in JSON; authenticated account APIs return account IDs.
 - Uploaded and embedded artwork is decoded and normalized to bounded raster output before preview/serving. Unsafe embedded tags remain in the original audio unless explicitly removed, but are not served as active content. Artwork responses use a sandboxed deny-all CSP; the general UI CSP still allows inline scripts.
@@ -106,11 +106,11 @@ MP3MetaFix packages an intelligent, non-destructive maintenance engine for syste
 
 ## 7. Multi-Interface Architecture & Sub-Project Decoupling
 
-Four routes share one backend: `/` dispatches workspaces, `/admin` shows administrator diagnostics/updates, `/app` implements single-track editing, and `/manager` currently supplies a desktop shell with a coming-soon state.
+Six routes share one backend: `/` dispatches workspaces, `/app` implements mobile-first single-track editing, `/manager` provides a desktop metadata, synced lyrics, track workspace, and stem management interface, `/projects` provides the music project and release management workspace, `/admin` provides administrator diagnostics, policy controls, and update management, and `/docs` serves the built-in documentation portal.
 
 ### Architectural principle: shared capabilities
 
-Every `/app` capability must be available through the same engine/API for `/manager`. The planned integrated inspector, batch tools, raw frame inspector, stems, and synced lyrics are **not implemented**. See the [roadmap](../ROADMAP.md) for planned scope. Switching interfaces does not create a separate audio engine.
+`/app`, `/manager`, and `/projects` share the same backend format and metadata engine (`audio_formats.py`, `metadata_engine.py`, session and project storage APIs) and reuse `frontend/js/app.js` for their embedded single-track editor views. In `/manager`, the embedded single-track editor view, Synchronized Lyrics (`SYLT`/`.lrc`) studio, Persistent Track Workspaces browser, and Stems Manager are implemented, while multi-file batch queue, spreadsheet editing, and raw ID3 frame inspection remain disabled placeholders (`Soon`). In `/projects`, persistent Track Workspaces, versioned takes, separated stem bundles with ZIP pack export, Album/EP release sequencing, and the embedded single-track editor view are implemented, while full album release ZIP/`.cue` export and historical lyrics version management remain planned. See the [roadmap](../ROADMAP.md) for planned scope.
 
 ### 1. Gateway Hub (`/`) and Administrator Control Center (`/admin`)
 - **Gateway Hub**: Workspace selector with a one-time `GET /api/health` request for basic availability and version. No telemetry quickbar or recurring resource polling remains on this page.
@@ -120,7 +120,7 @@ Every `/app` capability must be available through the same engine/API for `/mana
 
 ### 2. MP3MetaFix Focused Editor (`/app`)
 
-The editor update inspector treats its header notification badge as optional; both update-result branches still render the version dialog when that badge is absent.
+The editor version badge and dialog query the public read-only `/api/version` endpoint and render cleanly when optional header badges are absent, without triggering remote update checks.
 - **Target Persona**: Mobile Creators, Smartphone/Tablet Users, Single-Track Producers.
 - **Design Philosophy**: Lightweight, touch-optimized, mobile-first design with zero horizontal overflow across 320px–4K displays.
 - **Responsive Architecture**:
@@ -128,22 +128,36 @@ The editor update inspector treats its header notification badge as optional; bo
   - Constrained album artwork preview dimensions (`max-width: 210px` on mobile phones) to prevent massive vertical scrolling.
   - Balanced 2-column workspace on tablets ($\ge 720\text{px}$) keeping artwork and metadata forms immediately accessible.
   - Responsive button label typography (`.btn-txt-full` / `.btn-txt-short`).
-- **Core Capabilities**: Editing the supported normalized fields in native MP3/M4A/WAV tags, Web Audio dynamic waveform canvas rendering, APIC cover art processing, canned comment presets, dynamic filename formatting, Suno link parsing, and File System Access API save integration.
+- **Core Capabilities**: Editing the supported normalized fields in native MP3/M4A/WAV tags, Web Audio dynamic waveform canvas rendering, APIC cover art processing, canned comment presets, dynamic filename formatting, Suno link parsing, one-click promotion to persistent project workspaces (`Save to Project`), and File System Access API save integration.
 
 ### 3. MP3MetaManager Desktop Workspace (`/manager`)
 - **Target Persona**: Desktop Power Users, DJs, Album Curators, Batch Producers.
 - **Design Philosophy**: High-density desktop workspace built for widescreen 1080p–4K displays.
 - **Implemented Capabilities**:
-  - **Integrated Single-Track Inspector**: Built-in access to all `/app` features (all ID3 fields, waveform scrubber, cover art studio, canned comment presets, dynamic filename generator, and Suno AI sync).
-  - **Karaoke Tap-to-Sync & Synced Lyrics Studio (`.lrc` / `SYLT`)**: Interactive playback timestamping tool for synced lyrics companion files (`.lrc`) and ID3 binary frames (`SYLT`, millisecond format), with smart auto-header timing ($500\text{ms}$ lead-in), tag stripping, selected line nudging, and live visualizer preview.
-- **Planned Superset Capabilities (in development)**:
+  - **Embedded Single-Track Editor View**: In-place access to the shared single-track metadata form, waveform scrubber, cover art studio, canned comment presets, dynamic filename generator, Suno AI sync, and `Save to Project` promotion (`frontend/js/app.js`).
+  - **Karaoke Tap-to-Sync & Synced Lyrics Studio (`.lrc` / `SYLT`)**: Interactive playback timestamping tool for synced lyrics companion files (`.lrc`) and ID3 binary frames (`SYLT`, millisecond format), with smart auto-header timing ($500\text{ms}$ lead-in), tag stripping, selected line nudging, and live visualizer preview (`frontend/js/lyrics.js`).
+  - **Persistent Track Workspaces & Separated Stems Studio**: Track/take library browser, take streaming/download/editor promotion, 18-role batch stem upload with filename auto-detection, synchronized multi-stem preview playback, and Stem Pack ZIP export (`frontend/js/storage_manager.js`).
+- **Planned Capabilities (in backlog)**:
   - **Multi-Track Batch Spreadsheet Editor**: High-density table with keyboard navigation (<kbd>Tab</kbd>, <kbd>Enter</kbd>), bulk tag propagation, regex find-and-replace, and auto-numbering.
   - **Universal ID3 Frame & Raw MPEG Byte Inspector**: Direct viewing, editing, and addition of any standard ID3 frame, custom `TXXX` key-values, multi-language `COMM`/`USLT` descriptors, multiple `APIC` pictures, and low-level hex inspection.
   - **Suno AI Stem & Generation Tree Organizer**: Visual lineage graph organizing extensions, variations, and split stems.
   - **Custom Lyric Video Studio & MP4 Generator (`.mp4`)**: Dynamic canvas preview and server-side FFmpeg composition for social video sharing.
 
-### 4. Global App Switcher
-- Embedded header pill navigation allowing instant switching between `/app`, `/manager`, and `/` across all interfaces without losing active context.
+### 4. MP3Projects Music Project & Release Management Workspace (`/projects`)
+- **Target Persona**: EP/Album Curators, Multi-Track Organizers, Stem Arrangers.
+- **Design Philosophy**: Self-contained workspace (`frontend/projects/index.html`, `frontend/js/projects.js`) backed by `backend/projects_api.py` and `backend/project_storage.py` for organizing multi-take tracks, stem bundles, and album/EP releases.
+- **Implemented Capabilities**:
+  - **Track Workspaces & Multi-Take Management**: Persistent tracks (`trk_<16hex>`) and takes (`tak_<16hex>`) with master take designation, revision history logs, HTTP 206 streaming, RFC 5987 downloads, and two-way session handoff (`/api/projects/ingest-session` and `/api/projects/tracks/{id}/takes/{id}/load-session`).
+  - **Separated Stems Studio**: Batch multi-stem uploads (`stm_<16hex>`) across 18 stem roles with filename auto-detection, synchronized multi-stem preview playback (Mute, Solo, per-stem volume, master seek), and Stem Pack ZIP export (`/stems/download-pack`).
+  - **Album / EP Release Organization**: Album containers (`alb_<16hex>`) with normalized cover art and interactive track/disc sequencing (`AlbumTrackEntry`).
+  - **Embedded Single-Track Editor View**: In-place single-track metadata and artwork editing (`#viewEditor` via `frontend/js/app.js`) without cross-section redirects.
+  - **Tenant-Isolated Storage**: Assets stored under `data/storage/tenants/<sha256_tenant_hash>/` with POSIX `0700` permissions, atomic `.tmp` JSON manifest swaps, and live quota telemetry (`GET /api/storage/quota`).
+- **Planned Capabilities (in backlog)**:
+  - **Release Packaging & Export**: One-click structured ZIP export containing sequenced, tag-sanitized audio files and companion `.cue` / tracklist sheets.
+  - **Lyrics Version Management**: Historical lyric revision storage, comparison, and restoration across tracks and takes.
+
+### 5. Global App Switcher
+- Embedded header pill and mobile drawer navigation allowing switching across `/`, `/app`, `/manager`, `/projects`, `/admin`, and `/docs`.
 
 ---
 
@@ -227,7 +241,7 @@ For full feature backlogs, milestones, and strategic plans for each interface, s
 
 The update endpoint requires administrator authorization and CSRF validation. It acquires a process-shared file lock before responding and runs installation in a background task that survives SSE disconnects. The child installer inherits the lock descriptor, preserving exclusion if its worker exits. Fixed status messages replace raw subprocess output. Web-triggered installation updates files/dependencies and requires a deliberate local service restart; it does not migrate units or invoke service managers. CLI updates retain service maintenance behavior.
 
-AuthManager persists Guest Mode and quota/TTL preferences. Guest Mode affects editing authorization; runtime limits still use environment-derived configuration. Private atomic account writes and an initialization marker prevent malformed or deleted initialized stores from reopening enrollment. Password changes and logout revoke account-wide login tokens.
+AuthManager persists Guest Mode, per-workspace access policies, and runtime quota/TTL preferences (`max_upload_size_mb`, `max_global_storage_mb`, `max_sessions`, `session_ttl_minutes`). Both Guest Mode authorization and runtime upload/storage/session/TTL limits are enforced dynamically via `backend/config.py:get_runtime_*()`, using environment variables as startup defaults. Private atomic account writes and an initialization marker prevent malformed or deleted initialized stores from reopening enrollment. Password changes and logout revoke account-wide login tokens.
 
 ## Local dedicated-account deployment (unreleased)
 
@@ -235,4 +249,4 @@ AuthManager persists Guest Mode and quota/TTL preferences. Guest Mode affects ed
 
 The local cutover has completed: the system service and workers run as `mp3metafix`; the old user service is disabled/inactive. The private data root and effective runtime restrictions were verified alongside a healthy v0.5.1 endpoint. General installation migration remains separate work.
 
-This documentation update changes no runtime interfaces or application behavior. Public installed-version display with update discovery restricted to `/admin` is planned in the [roadmap](../ROADMAP.md), not implemented in v0.5.1.
+Public workspaces display the installed version via the read-only `GET /api/version` endpoint without triggering remote update checks. Update discovery (`GET /api/updates/check`) and installation (`POST /api/updates/apply`) require administrator authentication (`require_admin`) and are managed in `/admin` (with an optional admin-only Quick Settings check shortcut when pinned by a signed-in administrator).

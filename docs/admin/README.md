@@ -16,8 +16,8 @@
 
 ### 1. Workspace Access Controls & Guest Mode
 - **Guest Mode Toggle**: Enable or disable guest access to the Gateway Hub (`/`) and Single-Track Editor (`/app`).
-- **Granular Workspace Gating** *(Planned)*: Individually enable or disable guest and user access for `/app`, `/manager`, and `/projects`.
-- **Maintenance Notices & Hub Card Visibility** *(Planned)*: Set custom maintenance/reason messages and configure whether disabled services render on the Hub or remain hidden.
+- **Granular Workspace Gating**: Individually enable or disable `/app`, `/manager`, and `/projects`, and configure per-workspace guest access policies (`workspace_access` in `data/auth/settings.json`).
+- **Maintenance Notices & Hub Card Visibility**: Set custom maintenance/reason messages and configure whether disabled workspaces render as maintenance cards on the `/` Hub or remain hidden (`hub_hide_disabled_cards`).
 
 ### 2. Dynamic Quick Settings Pinning
 - Administrators can designate specific settings to appear in the header **Quick Settings** modal across all app pages.

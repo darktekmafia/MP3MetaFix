@@ -120,8 +120,8 @@ sudo systemctl stop mp3metafix.service
 Explore dedicated guides in the [`docs/`](docs/) directory:
 
 - 📱 **[MP3MetaFix Editor Guide](docs/app/README.md)** — Single-track tagging, waveform scrubber, cover art studio, and Suno AI selective merge.
-- 🗂️ **[MP3MetaManager Guide](docs/manager/README.md)** — Desktop batch editor, spreadsheet controls, and raw ID3 frame manager *(Under Development)*.
-- 🎛️ **[MP3Projects Studio Guide](docs/projects/README.md)** — Multi-track album sequencing and stem bundle packaging *(Under Development)*.
+- 🗂️ **[MP3MetaManager Guide](docs/manager/README.md)** — Desktop single-track editor view, synchronized lyrics (`SYLT`/`.lrc`) studio, track workspaces, and stem manager *(batch queue and raw ID3 frame inspector planned)*.
+- 🎛️ **[MP3Projects Studio Guide](docs/projects/README.md)** — Music project and release management workspace for track takes, stem bundles, and album/EP sequencing.
 - 🛡️ **[Administrator Guide](docs/admin/README.md)** — Access controls, Quick Settings pinning, diagnostics, and update management.
 - 🌐 **[Production Deployment Guide](docs/DEPLOYMENT.md)** — Proxmox LXC setup, systemd hardening, reverse proxies, and CLI options.
 - 🔒 **[Account Migration & Hardening](docs/ACCOUNT_MIGRATION.md)** — Dedicated unprivileged `mp3metafix` service account migration.
