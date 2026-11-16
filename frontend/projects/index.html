@@ -947,7 +947,6 @@
             <select id="newAlbumStatus" class="form-select">
               <option value="draft" selected>Draft</option>
               <option value="in_progress">In Progress</option>
-              <option value="completed">Completed / Mastered</option>
               <option value="archived">Archived</option>
             </select>
           </div>
@@ -989,9 +988,10 @@
             </svg>
           </div>
           <div>
-            <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
               <h2 id="modalAlbumDetailTitle" class="modal-title">Album Sequencer & Master Credits</h2>
               <span id="albumDetailRevisionPill" class="revision-pill">Rev 1</span>
+              <span id="albumDetailFinalizedBadge" class="status-pill status-completed hidden">🔒 FINALIZED</span>
             </div>
             <p class="modal-subtitle">Sequence tracks, upload master artwork, and configure metadata</p>
           </div>
@@ -1063,11 +1063,11 @@
             <table class="sequencer-table" aria-label="Album Tracklist Table">
               <thead>
                 <tr>
-                  <th style="width: 50px;">#</th>
-                  <th>Title</th>
+                  <th style="width: 44px;">#</th>
+                  <th>Title &amp; Recording</th>
                   <th>Artist</th>
-                  <th style="width: 80px;">Disc</th>
-                  <th style="width: 100px;">Actions</th>
+                  <th style="width: 60px;">Disc</th>
+                  <th style="min-width: 140px;">Actions</th>
                 </tr>
               </thead>
               <tbody id="albumSequencerTbody">
@@ -1090,17 +1090,18 @@
           </div>
         </div>
 
-        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.25rem;">
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.25rem;">
           <button type="button" class="btn btn-secondary" data-close-modal="modalAlbumDetail">Close</button>
+          <button type="button" class="btn btn-secondary" id="btnFinalizeAlbum" title="Validate recordings and permanently finalize this album release">🔒 Finalize Album</button>
           <button type="button" class="btn btn-primary" id="btnSaveAlbumDetails">Save Album Changes</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Modal 6: Pick Track to Add to Album -->
+  <!-- Modal 6: Pick Track & Take to Add to Album -->
   <div id="modalPickTrackForAlbum" class="modal-overlay hidden" role="dialog" aria-labelledby="modalPickTrackTitle" aria-modal="true">
-    <div class="modal-card modal-sm">
+    <div class="modal-card modal-md">
       <div class="modal-header">
         <h2 id="modalPickTrackTitle" class="modal-title">Add Track to Album</h2>
         <button class="btn-close" data-close-modal="modalPickTrackForAlbum" aria-label="Close modal">&times;</button>
@@ -1112,9 +1113,59 @@
             <option value="">-- Choose Track --</option>
           </select>
         </div>
+        <div id="pickTrackTakesGroup" class="form-group hidden" style="margin-top: 1rem;">
+          <label class="form-label">Select Recording / Take:</label>
+          <div id="pickTrackTakesList" role="radiogroup" aria-label="Available Takes for Track" style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.35rem; max-height: 280px; overflow-y: auto;">
+            <!-- Dynamically populated with safe DOM nodes -->
+          </div>
+        </div>
         <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem;">
           <button type="button" class="btn btn-secondary" data-close-modal="modalPickTrackForAlbum">Cancel</button>
-          <button type="button" class="btn btn-primary" id="btnConfirmAddTrackToAlbum">Add Track</button>
+          <button type="button" class="btn btn-primary" id="btnConfirmAddTrackToAlbum">Add to Album</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 7: Refresh Album Entry from Source Take -->
+  <div id="modalRefreshAlbumEntry" class="modal-overlay hidden" role="dialog" aria-labelledby="modalRefreshEntryTitle" aria-modal="true">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <div>
+          <h2 id="modalRefreshEntryTitle" class="modal-title">Refresh from Source Take</h2>
+          <p class="modal-subtitle" id="refreshEntrySubtitle">Compare current album recording against the latest source take</p>
+        </div>
+        <button class="btn-close" data-close-modal="modalRefreshAlbumEntry" aria-label="Close modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="refreshStatusNotice" class="hidden" style="padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1rem; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35);"></div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+          <div style="padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(15, 23, 42, 0.5);">
+            <div style="font-weight: 600; margin-bottom: 0.35rem;">Current Album Copy</div>
+            <div id="refreshAlbumCopySummary" style="font-size: 0.8rem; opacity: 0.85; margin-bottom: 0.5rem;"></div>
+            <audio id="refreshAlbumCopyAudio" controls preload="none" style="width: 100%; height: 36px;"></audio>
+          </div>
+          <div style="padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.25); background: rgba(56, 189, 248, 0.06);">
+            <div style="font-weight: 600; margin-bottom: 0.35rem;">Candidate Source Take</div>
+            <div id="refreshSourceTakeSummary" style="font-size: 0.8rem; opacity: 0.85; margin-bottom: 0.5rem;"></div>
+            <audio id="refreshSourceTakeAudio" controls preload="none" style="width: 100%; height: 36px;"></audio>
+          </div>
+        </div>
+
+        <div id="refreshChangesContainer" class="hidden">
+          <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.4rem;">Changed Metadata Fields</div>
+          <div id="refreshMetadataChangesList" style="display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.75rem; font-size: 0.8rem;"></div>
+        </div>
+
+        <div id="refreshLyricsDiffContainer" class="hidden">
+          <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.4rem;">Lyrics Differences</div>
+          <pre id="refreshLyricsDiffPre" style="padding: 0.75rem; border-radius: 6px; background: rgba(0,0,0,0.35); overflow-x: auto; max-height: 180px; font-size: 0.78rem; white-space: pre-wrap;"></pre>
+        </div>
+
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem;">
+          <button type="button" class="btn btn-secondary" data-close-modal="modalRefreshAlbumEntry">Cancel</button>
+          <button type="button" class="btn btn-primary" id="btnConfirmRefreshAlbumEntry">Confirm &amp; Refresh Copy</button>
         </div>
       </div>
     </div>

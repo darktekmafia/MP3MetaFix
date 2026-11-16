@@ -94,7 +94,7 @@ def get_storage_dir_name(session_id: str) -> str:
 
 # --- Project Opaque Identifiers & Path Hashers ---
 
-PROJECT_ID_PATTERN = re.compile(r"^(trk|tak|stm|alb)_[A-Za-z0-9_-]{16,32}$")
+PROJECT_ID_PATTERN = re.compile(r"^(trk|tak|stm|alb|ale)_[A-Za-z0-9_-]{16,32}$")
 
 
 def generate_track_id() -> str:
@@ -115,6 +115,25 @@ def generate_stem_id() -> str:
 def generate_album_id() -> str:
     """Generate a high-entropy, opaque URL-safe album workspace identifier."""
     return f"alb_{secrets.token_urlsafe(16)}"
+
+
+def generate_album_entry_id() -> str:
+    """Generate a high-entropy, opaque URL-safe album entry identifier."""
+    return f"ale_{secrets.token_urlsafe(16)}"
+
+
+def generate_deterministic_legacy_entry_id(
+    album_id: str,
+    index: int,
+    track_id: str,
+    take_id: Optional[str] = None,
+) -> str:
+    """Generate a deterministic stable album entry ID when normalizing legacy manifests."""
+    import base64
+    seed = f"legacy_ale:{SESSION_SECRET_KEY}:{album_id}:{index}:{track_id}:{take_id or ''}".encode("utf-8")
+    digest_16 = hashlib.sha256(seed).digest()[:16]
+    b64 = base64.urlsafe_b64encode(digest_16).decode("ascii").rstrip("=")
+    return f"ale_{b64}"
 
 
 def is_valid_project_id(identifier: str, expected_prefix: Optional[str] = None) -> bool:
@@ -147,6 +166,11 @@ def get_take_dir_name(take_id: str) -> str:
 def get_album_dir_name(album_id: str) -> str:
     """Generate a decoupled one-way SHA-256 directory name for an album workspace."""
     return hashlib.sha256(f"album_dir:{SESSION_SECRET_KEY}:{album_id}".encode("utf-8")).hexdigest()[:32]
+
+
+def get_album_entry_dir_name(entry_id: str) -> str:
+    """Generate a decoupled one-way SHA-256 directory name for an album entry's owned recording."""
+    return hashlib.sha256(f"album_entry_dir:{SESSION_SECRET_KEY}:{entry_id}".encode("utf-8")).hexdigest()[:32]
 
 
 def sanitize_filename(filename: str, default: str = "track.mp3", extension: str = ".mp3") -> str:

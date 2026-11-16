@@ -49,11 +49,19 @@ from backend.project_models import (
     AlbumMetadata,
     AlbumCreateRequest,
     AlbumUpdateRequest,
+    AlbumEntryAddRequest,
+    AlbumEntryUpdateRequest,
+    AlbumEntryRefreshPreviewResponse,
+    AlbumEntryRefreshConfirmRequest,
     StorageQuotaStats,
 )
 from backend.project_storage import (
     project_storage_manager,
     ProjectStorageQuotaExceeded,
+    ProjectValidationError,
+    AlbumFinalizedError,
+    AlbumRefreshConflictError,
+    AlbumFinalizationError,
 )
 
 projects_router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -624,15 +632,18 @@ async def create_album(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Create a new album/EP project workspace."""
-    return project_storage_manager.create_album(
-        user_id=user["id"],
-        title=payload.title,
-        album_artist=payload.album_artist,
-        year=payload.year,
-        genre=payload.genre,
-        credits=payload.credits,
-        status=payload.status,
-    )
+    try:
+        return project_storage_manager.create_album(
+            user_id=user["id"],
+            title=payload.title,
+            album_artist=payload.album_artist,
+            year=payload.year,
+            genre=payload.genre,
+            credits=payload.credits,
+            status=payload.status,
+        )
+    except ProjectValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @projects_router.get("/albums/{album_id}", response_model=AlbumMetadata)
@@ -659,7 +670,14 @@ async def update_album(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
 
     updates = payload.model_dump(exclude_unset=True)
-    updated = project_storage_manager.update_album(user["id"], album_id, updates)
+    try:
+        updated = project_storage_manager.update_album(user["id"], album_id, updates)
+    except AlbumFinalizedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ProjectValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProjectStorageQuotaExceeded as e:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
     if not updated:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update album.")
     return updated
@@ -675,6 +693,216 @@ async def delete_album(
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
     return {"status": "deleted", "id": album_id}
+
+
+@projects_router.post("/albums/{album_id}/entries", response_model=AlbumMetadata, status_code=status.HTTP_201_CREATED)
+async def add_album_entry(
+    album_id: str,
+    payload: AlbumEntryAddRequest,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    """Add a Track Workspace entry (explicit Take copy or placeholder) to an unfinished album."""
+    album = project_storage_manager.get_album(user["id"], album_id)
+    if not album:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+
+    try:
+        updated = project_storage_manager.add_album_entry(
+            user_id=user["id"],
+            album_id=album_id,
+            track_id=payload.track_id,
+            take_id=payload.take_id,
+            disc_number=payload.disc_number,
+            track_number=payload.track_number,
+            custom_title=payload.custom_title,
+        )
+    except AlbumFinalizedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ProjectValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProjectStorageQuotaExceeded as e:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
+
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    return updated
+
+
+@projects_router.patch("/albums/{album_id}/entries/{entry_id}", response_model=AlbumMetadata)
+async def update_album_entry(
+    album_id: str,
+    entry_id: str,
+    payload: AlbumEntryUpdateRequest,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    """Update an unfinished album entry's selected Take, placeholder state, or entry metadata."""
+    album = project_storage_manager.get_album(user["id"], album_id)
+    if not album:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+
+    try:
+        updated = project_storage_manager.update_album_entry(
+            user_id=user["id"],
+            album_id=album_id,
+            entry_id=entry_id,
+            take_id=payload.take_id,
+            clear_take_to_placeholder=payload.clear_take_to_placeholder,
+            disc_number=payload.disc_number,
+            custom_title=payload.custom_title,
+        )
+    except AlbumFinalizedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ProjectValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProjectStorageQuotaExceeded as e:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
+
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    return updated
+
+
+@projects_router.delete("/albums/{album_id}/entries/{entry_id}", response_model=AlbumMetadata)
+async def remove_album_entry(
+    album_id: str,
+    entry_id: str,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    """Remove an entry from an unfinished album and clean up its album-owned audio copy."""
+    album = project_storage_manager.get_album(user["id"], album_id)
+    if not album:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+
+    try:
+        updated = project_storage_manager.remove_album_entry(user["id"], album_id, entry_id)
+    except AlbumFinalizedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ProjectValidationError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    return updated
+
+
+@projects_router.get("/albums/{album_id}/entries/{entry_id}/stream")
+async def stream_album_entry_audio(
+    album_id: str,
+    entry_id: str,
+    request: Request,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    """Stream an album entry's owned audio copy using HTTP 206 Partial Content range requests."""
+    audio_path = project_storage_manager.get_album_entry_audio_path(user["id"], album_id, entry_id)
+    if not audio_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album entry audio copy not found.")
+    return serve_audio_range_stream(audio_path, request)
+
+
+@projects_router.get("/albums/{album_id}/entries/{entry_id}/download")
+async def download_album_entry_audio(
+    album_id: str,
+    entry_id: str,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    """Download an album entry's owned audio copy with RFC 5987 filename headers."""
+    album = project_storage_manager.get_album(user["id"], album_id)
+    if not album:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    entry = next((t for t in album.tracks if t.id == entry_id), None)
+    audio_path = project_storage_manager.get_album_entry_audio_path(user["id"], album_id, entry_id)
+    if not entry or not audio_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album entry audio copy not found.")
+
+    orig_name = (entry.snapshot.source_filename if entry.snapshot else None) or f"track_{entry.track_number}{audio_path.suffix}"
+    ascii_name = orig_name.encode("ascii", "ignore").decode("ascii") or f"track_{entry.track_number}{audio_path.suffix}"
+    encoded_name = urllib.parse.quote(orig_name)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+    }
+    return FileResponse(
+        path=audio_path,
+        media_type=audio_format(audio_path)["mime_type"],
+        headers=headers,
+    )
+
+
+@projects_router.get("/albums/{album_id}/entries/{entry_id}/refresh-preview", response_model=AlbumEntryRefreshPreviewResponse)
+async def preview_album_entry_refresh(
+    album_id: str,
+    entry_id: str,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    """Return a read-only comparison between the album-owned copy and latest source take."""
+    album = project_storage_manager.get_album(user["id"], album_id)
+    if not album:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+
+    try:
+        preview = project_storage_manager.preview_album_entry_refresh(user["id"], album_id, entry_id)
+    except AlbumFinalizedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ProjectValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    if not preview:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    return preview
+
+
+@projects_router.post("/albums/{album_id}/entries/{entry_id}/refresh", response_model=AlbumMetadata)
+async def confirm_album_entry_refresh(
+    album_id: str,
+    entry_id: str,
+    payload: AlbumEntryRefreshConfirmRequest,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    """Confirm replacing an album entry's owned copy from its source take if the previewed version still matches."""
+    album = project_storage_manager.get_album(user["id"], album_id)
+    if not album:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+
+    try:
+        updated = project_storage_manager.confirm_album_entry_refresh(
+            user_id=user["id"],
+            album_id=album_id,
+            entry_id=entry_id,
+            expected_source_revision=payload.expected_source_revision,
+            expected_source_audio_sha256=payload.expected_source_audio_sha256,
+            expected_source_updated_at=payload.expected_source_updated_at,
+        )
+    except (AlbumFinalizedError, AlbumRefreshConflictError) as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ProjectValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProjectStorageQuotaExceeded as e:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
+
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    return updated
+
+
+@projects_router.post("/albums/{album_id}/finalize", response_model=AlbumMetadata)
+async def finalize_album(
+    album_id: str,
+    user: Dict[str, Any] = Depends(require_auth),
+):
+    """Validate all album recordings and atomically mark an album release as finalized and immutable."""
+    album = project_storage_manager.get_album(user["id"], album_id)
+    if not album:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+
+    try:
+        finalized = project_storage_manager.finalize_album(user["id"], album_id)
+    except AlbumFinalizedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except AlbumFinalizationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"message": str(e), "errors": e.errors})
+
+    if not finalized:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    return finalized
 
 
 @projects_router.post("/albums/{album_id}/artwork")
@@ -695,6 +923,8 @@ async def upload_album_artwork(
     try:
         project_storage_manager.save_album_cover(user["id"], album_id, clean_bytes, extension=ext)
         return {"status": "saved", "mime_type": mime_type}
+    except AlbumFinalizedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except ProjectStorageQuotaExceeded as e:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
 

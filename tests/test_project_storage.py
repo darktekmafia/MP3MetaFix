@@ -11,11 +11,14 @@ from backend.security import (
     generate_take_id,
     generate_stem_id,
     generate_album_id,
+    generate_album_entry_id,
+    generate_deterministic_legacy_entry_id,
     is_valid_project_id,
     get_tenant_storage_dir_name,
     get_track_dir_name,
     get_take_dir_name,
     get_album_dir_name,
+    get_album_entry_dir_name,
 )
 from backend.project_models import (
     WorkspaceStatus,
@@ -26,6 +29,10 @@ from backend.project_models import (
 from backend.project_storage import (
     ProjectStorageManager,
     ProjectStorageQuotaExceeded,
+    ProjectValidationError,
+    AlbumFinalizedError,
+    AlbumRefreshConflictError,
+    AlbumFinalizationError,
 )
 
 
@@ -658,6 +665,434 @@ def test_direct_take_creation_probes_duration_and_preserves_existing_takes(custo
     assert custom_storage.get_take(user_id, track.id, t1.id).is_master is False
     assert custom_storage.get_track(user_id, track.id).primary_take_id == t2.id
     assert custom_storage.get_take_audio_path(user_id, track.id, t1.id).read_bytes() == wav_half
+
+
+def test_album_entry_opaque_and_legacy_ids():
+    """Verify ale_ entry ID generation, validation, hashing, and deterministic legacy assignment."""
+    eid = generate_album_entry_id()
+    assert eid.startswith("ale_")
+    assert is_valid_project_id(eid, expected_prefix="ale")
+    assert not is_valid_project_id(eid, expected_prefix="trk")
+    assert not is_valid_project_id("ale_../evil", expected_prefix="ale")
+
+    dir_hash = get_album_entry_dir_name(eid)
+    assert len(dir_hash) == 32
+    assert eid not in dir_hash
+
+    legacy_1 = generate_deterministic_legacy_entry_id("alb_abc", 0, "trk_1", None)
+    legacy_1_again = generate_deterministic_legacy_entry_id("alb_abc", 0, "trk_1", None)
+    legacy_2 = generate_deterministic_legacy_entry_id("alb_abc", 1, "trk_1", "tak_9")
+    assert legacy_1 == legacy_1_again
+    assert is_valid_project_id(legacy_1, expected_prefix="ale")
+    assert is_valid_project_id(legacy_2, expected_prefix="ale")
+    assert legacy_1 != legacy_2
+
+
+def test_album_placeholder_and_explicit_take_ownership(custom_storage):
+    """Verify 0-take placeholders and explicit non-master take copies without mutating track masters."""
+    user_id = "user_album_ownership"
+    empty_track = custom_storage.create_track(user_id=user_id, title="Sketch Zero")
+    recorded_track = custom_storage.create_track(user_id=user_id, title="Recorded Song", artist="Tester")
+
+    wav_master = _make_pcm_wav_bytes(0.4)
+    wav_alt = _make_pcm_wav_bytes(0.8)
+    t_master = custom_storage.create_take(
+        user_id=user_id,
+        track_id=recorded_track.id,
+        audio_bytes=wav_master,
+        original_filename="master.wav",
+        extension=".wav",
+        label="Master Take",
+        is_master=True,
+    )
+    t_alt = custom_storage.create_take(
+        user_id=user_id,
+        track_id=recorded_track.id,
+        audio_bytes=wav_alt,
+        original_filename="alt.wav",
+        extension=".wav",
+        label="Acoustic Alt",
+        notes="Stripped vocal take",
+        prompt="acoustic guitar ballad",
+        style_tags="acoustic, stripped",
+        is_master=False,
+    )
+    custom_storage.save_take_lyrics(user_id, recorded_track.id, t_alt.id, "Alt verse one", LyricsFormat.LRC)
+
+    album = custom_storage.create_album(user_id=user_id, title="Draft LP")
+
+    # 1. Add 0-take track as placeholder
+    album = custom_storage.add_album_entry(user_id, album.id, empty_track.id, take_id=None)
+    assert len(album.tracks) == 1
+    p_entry = album.tracks[0]
+    assert is_valid_project_id(p_entry.id, expected_prefix="ale")
+    assert p_entry.is_placeholder is True
+    assert p_entry.has_owned_audio is False
+    assert p_entry.take_id is None
+    assert p_entry.snapshot is None
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, p_entry.id) is None
+    assert custom_storage.get_track(user_id, empty_track.id).primary_take_id is None
+
+    # 2. Add explicit non-master Take t_alt -> owns copy and snapshot, preserves t_master as track master
+    album = custom_storage.add_album_entry(user_id, album.id, recorded_track.id, take_id=t_alt.id)
+    assert len(album.tracks) == 2
+    r_entry = album.tracks[1]
+    assert is_valid_project_id(r_entry.id, expected_prefix="ale")
+    assert r_entry.is_placeholder is False
+    assert r_entry.has_owned_audio is True
+    assert r_entry.take_id == t_alt.id
+    assert r_entry.snapshot is not None
+    assert r_entry.snapshot.source_take_id == t_alt.id
+    assert r_entry.snapshot.source_take_label == "Acoustic Alt"
+    assert r_entry.snapshot.format == "wav"
+    assert r_entry.snapshot.size_bytes == len(wav_alt)
+    assert r_entry.snapshot.duration_seconds == pytest.approx(0.8, abs=0.02)
+    assert r_entry.snapshot.embedded_lyrics == "Alt verse one"
+    assert r_entry.snapshot.take_notes == "Stripped vocal take"
+    assert r_entry.snapshot.take_prompt == "acoustic guitar ballad"
+    assert r_entry.snapshot.take_style_tags == "acoustic, stripped"
+
+    owned_audio = custom_storage.get_album_entry_audio_path(user_id, album.id, r_entry.id)
+    assert owned_audio is not None and owned_audio.read_bytes() == wav_alt
+    assert (owned_audio.parent / "snapshot.json").is_file()
+    assert stat.S_IMODE(os.stat(owned_audio.parent).st_mode) == 0o700
+
+    # Master selection on Track Workspace must remain untouched
+    refreshed_trk = custom_storage.get_track(user_id, recorded_track.id)
+    assert refreshed_trk.primary_take_id == t_master.id
+    assert custom_storage.get_take(user_id, recorded_track.id, t_master.id).is_master is True
+    assert custom_storage.get_take(user_id, recorded_track.id, t_alt.id).is_master is False
+
+
+def test_album_owned_audio_independence_multi_entry_and_identity(custom_storage):
+    """Verify multi-entry support, stable ale_ identity, and isolation from source take edits/deletion."""
+    user_id = "user_isolation_multi"
+    trk = custom_storage.create_track(user_id=user_id, title="Suite")
+    wav_1 = _make_pcm_wav_bytes(0.3)
+    wav_2 = _make_pcm_wav_bytes(0.6)
+    wav_3 = _make_pcm_wav_bytes(0.9)
+
+    t1 = custom_storage.create_take(user_id, trk.id, wav_1, "t1.wav", ".wav", label="Part I", is_master=True)
+    t2 = custom_storage.create_take(user_id, trk.id, wav_2, "t2.wav", ".wav", label="Part II", is_master=False)
+
+    album = custom_storage.create_album(user_id=user_id, title="Double Cut")
+    album = custom_storage.add_album_entry(user_id, album.id, trk.id, take_id=t1.id)
+    album = custom_storage.add_album_entry(user_id, album.id, trk.id, take_id=t2.id)
+    album = custom_storage.add_album_entry(user_id, album.id, trk.id, take_id=t2.id, custom_title="Suite (Reprise)")
+
+    assert len(album.tracks) == 3
+    e1, e2, e3 = album.tracks
+    assert len({e1.id, e2.id, e3.id}) == 3
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e1.id).read_bytes() == wav_1
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id).read_bytes() == wav_2
+
+    # Mutate t2 audio & delete t2 -> e2 and e3 keep wav_2 untouched
+    custom_storage.update_take_audio(user_id, trk.id, t2.id, wav_3, extension=".wav")
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
+    custom_storage.delete_take(user_id, trk.id, t2.id)
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id).read_bytes() == wav_2
+
+    # Reordering keeps same ale_ entry IDs and owned audio paths
+    reordered = custom_storage.update_album(
+        user_id,
+        album.id,
+        {"tracks": [e3.model_dump(), e1.model_dump(), e2.model_dump()]},
+    )
+    assert [t.id for t in reordered.tracks] == [e3.id, e1.id, e2.id]
+    assert [t.track_number for t in reordered.tracks] == [1, 2, 3]
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
+
+    # Clear e3 to placeholder -> same entry id preserved, owned audio removed
+    cleared = custom_storage.update_album_entry(user_id, album.id, e3.id, clear_take_to_placeholder=True)
+    e3_after = next(t for t in cleared.tracks if t.id == e3.id)
+    assert e3_after.is_placeholder is True
+    assert e3_after.has_owned_audio is False
+    assert e3_after.take_id is None
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id) is None
+
+    # Remove e3 completely -> e1 and e2 unaffected
+    after_remove = custom_storage.remove_album_entry(user_id, album.id, e3.id)
+    assert [t.id for t in after_remove.tracks] == [e1.id, e2.id]
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
+
+
+def test_album_entry_staging_rollback_on_failure(custom_storage, monkeypatch):
+    """Verify transactional rollback restores prior owned copy and removes staging/backup artifacts on failure."""
+    import shutil
+    import backend.project_storage as ps_mod
+
+    user_id = "user_rollback"
+    trk = custom_storage.create_track(user_id=user_id, title="Rollback Song")
+    wav_1 = _make_pcm_wav_bytes(0.4)
+    wav_2 = _make_pcm_wav_bytes(0.7)
+    t1 = custom_storage.create_take(user_id, trk.id, wav_1, "v1.wav", ".wav", label="V1", is_master=True)
+    t2 = custom_storage.create_take(user_id, trk.id, wav_2, "v2.wav", ".wav", label="V2", is_master=False)
+
+    album = custom_storage.create_album(user_id=user_id, title="Rollback LP")
+    album = custom_storage.add_album_entry(user_id, album.id, trk.id, take_id=t1.id)
+    entry_id = album.tracks[0].id
+    entry_dir = custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).parent
+
+    # 1. Fail mid-staging copy
+    def broken_copy(*args, **kwargs):
+        raise OSError("Simulated disk full during copy")
+
+    monkeypatch.setattr(shutil, "copyfileobj", broken_copy)
+    with pytest.raises(OSError, match="Simulated disk full"):
+        custom_storage.update_album_entry(user_id, album.id, entry_id, take_id=t2.id)
+    monkeypatch.undo()
+
+    leftover_mid = [p.name for p in entry_dir.iterdir() if p.name.startswith((".staging_", ".backup_"))]
+    assert leftover_mid == []
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_1
+
+    # 2. Fail on final album.json atomic write after commit_fn() replaced audio.wav -> rollback_fn() restores wav_1
+    orig_atomic_json = ps_mod.atomic_json
+
+    def failing_manifest_write(target_path, payload):
+        if target_path.name == "album.json":
+            raise OSError("Simulated manifest commit failure")
+        return orig_atomic_json(target_path, payload)
+
+    monkeypatch.setattr(ps_mod, "atomic_json", failing_manifest_write)
+    with pytest.raises(OSError, match="Simulated manifest commit failure"):
+        custom_storage.update_album_entry(user_id, album.id, entry_id, take_id=t2.id)
+    monkeypatch.undo()
+
+    leftover_post = [p.name for p in entry_dir.iterdir() if p.name.startswith((".staging_", ".backup_"))]
+    assert leftover_post == []
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_1
+    assert custom_storage.get_album(user_id, album.id).tracks[0].take_id == t1.id
+
+
+def test_legacy_album_manifest_compatibility(custom_storage):
+    """Verify legacy manifests without id/snapshot/has_owned_audio or using track_ids load safely without blind resolution."""
+    import json
+    import time
+
+    user_id = "user_legacy"
+    trk_a = custom_storage.create_track(user_id=user_id, title="Legacy A")
+    custom_storage.create_take(user_id, trk_a.id, _make_pcm_wav_bytes(0.4), "a.wav", ".wav", label="Master A", is_master=True)
+
+    trk_b = custom_storage.create_track(user_id=user_id, title="Legacy B")
+    tb1 = custom_storage.create_take(user_id, trk_b.id, _make_pcm_wav_bytes(0.5), "b.wav", ".wav", label="Master B", is_master=True)
+
+    album = custom_storage.create_album(user_id=user_id, title="Legacy Manifest")
+    album_dir = custom_storage._get_album_dir(user_id, album.id)
+    manifest_path = album_dir / "album.json"
+
+    legacy_payload = {
+        "id": album.id,
+        "title": "Legacy Manifest",
+        "status": "draft",
+        "revision": 1,
+        "revisions": [],
+        "tracks": [
+            {"track_number": 1, "disc_number": 1, "track_id": trk_a.id, "take_id": None, "custom_title": None},
+            {"track_number": 2, "disc_number": 1, "track_id": trk_b.id, "take_id": tb1.id, "custom_title": None},
+        ],
+        "track_ids": [trk_a.id, trk_b.id],
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+    manifest_path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+    loaded = custom_storage.get_album(user_id, album.id)
+    assert loaded is not None
+    assert loaded.tracks[0].id.startswith("ale_")
+    assert loaded.tracks[0].take_id is None
+    assert loaded.tracks[0].is_placeholder is True
+    assert loaded.tracks[0].has_owned_audio is False
+
+    assert loaded.tracks[1].id.startswith("ale_")
+    assert loaded.tracks[1].take_id == tb1.id
+    assert loaded.tracks[1].is_placeholder is False
+    assert loaded.tracks[1].has_owned_audio is False
+
+    # Unrelated header save must preserve take_id=None (no auto-resolve to master) and not crash/auto-copy unowned legacy refs
+    updated = custom_storage.update_album(user_id, album.id, {"title": "Renamed Legacy"})
+    assert updated.tracks[0].take_id is None
+    assert updated.tracks[0].is_placeholder is True
+    assert updated.tracks[1].take_id == tb1.id
+    assert updated.tracks[1].has_owned_audio is False
+
+    # Pure legacy track_ids list without tracks field
+    legacy_ids_only = {
+        "id": album.id,
+        "title": "Very Old",
+        "status": "draft",
+        "revision": 1,
+        "track_ids": [trk_a.id],
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+    manifest_path.write_text(json.dumps(legacy_ids_only), encoding="utf-8")
+    loaded_ids = custom_storage.get_album(user_id, album.id)
+    assert len(loaded_ids.tracks) == 1
+    assert loaded_ids.tracks[0].track_id == trk_a.id
+    assert loaded_ids.tracks[0].is_placeholder is True
+
+
+def test_album_entry_refresh_preview_confirm_and_conflict(custom_storage):
+    """Verify source refresh preview diffing, stale-source conflict protection, confirmation, and deleted-source handling."""
+    user_id = "user_refresh"
+    trk = custom_storage.create_track(user_id=user_id, title="Refresh Song")
+    wav_v1 = _make_pcm_wav_bytes(0.4)
+    wav_v2 = _make_pcm_wav_bytes(0.8)
+    wav_v3 = _make_pcm_wav_bytes(1.1)
+
+    t1 = custom_storage.create_take(user_id, trk.id, wav_v1, "v1.wav", ".wav", label="Take 1", notes="Raw mix", is_master=True)
+    custom_storage.save_take_lyrics(user_id, trk.id, t1.id, "Line one\nLine two", LyricsFormat.LRC)
+    album = custom_storage.create_album(user_id=user_id, title="Refresh LP")
+    album = custom_storage.add_album_entry(user_id, album.id, trk.id, take_id=t1.id)
+    entry_id = album.tracks[0].id
+
+    clean_preview = custom_storage.preview_album_entry_refresh(user_id, album.id, entry_id)
+    assert clean_preview.source_available is True
+    assert clean_preview.has_changes is False
+
+    # Update source take audio, notes, and lyrics
+    custom_storage.update_take_audio(user_id, trk.id, t1.id, wav_v2, extension=".wav")
+    custom_storage.update_take(user_id, trk.id, t1.id, {"notes": "Mastered mix"})
+    custom_storage.save_take_lyrics(user_id, trk.id, t1.id, "Line one\nLine two revised", LyricsFormat.LRC)
+
+    # Owned album copy is still v1 until user explicitly refreshes
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v1
+
+    preview = custom_storage.preview_album_entry_refresh(user_id, album.id, entry_id)
+    assert preview.source_available is True
+    assert preview.has_changes is True
+    assert preview.audio_changed is True
+    assert preview.lyrics_changed is True
+    assert "-Line two" in preview.lyrics_diff
+    assert "+Line two revised" in preview.lyrics_diff
+    assert any(c["field"] == "take_notes" and c["old"] == "Raw mix" and c["new"] == "Mastered mix" for c in preview.metadata_changes)
+
+    # Modify source again after preview -> stale preview confirmation must fail with 409 conflict
+    custom_storage.update_take_audio(user_id, trk.id, t1.id, wav_v3, extension=".wav")
+    with pytest.raises(AlbumRefreshConflictError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id,
+            album.id,
+            entry_id,
+            expected_source_revision=preview.expected_source_revision,
+            expected_source_audio_sha256=preview.expected_source_audio_sha256,
+            expected_source_updated_at=preview.expected_source_updated_at,
+        )
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v1
+
+    # Fresh preview & confirm updates album copy to wav_v3 and refreshes snapshot
+    fresh_preview = custom_storage.preview_album_entry_refresh(user_id, album.id, entry_id)
+    refreshed = custom_storage.confirm_album_entry_refresh(
+        user_id,
+        album.id,
+        entry_id,
+        expected_source_revision=fresh_preview.expected_source_revision,
+        expected_source_audio_sha256=fresh_preview.expected_source_audio_sha256,
+        expected_source_updated_at=fresh_preview.expected_source_updated_at,
+    )
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v3
+    assert refreshed.tracks[0].snapshot.embedded_lyrics == "Line one\nLine two revised"
+    assert refreshed.tracks[0].snapshot.take_notes == "Mastered mix"
+
+    # Deleting source take -> source_available=False on preview, confirm raises conflict, album copy intact
+    custom_storage.delete_take(user_id, trk.id, t1.id)
+    gone_preview = custom_storage.preview_album_entry_refresh(user_id, album.id, entry_id)
+    assert gone_preview.source_available is False
+    assert gone_preview.album_snapshot is not None
+    with pytest.raises(AlbumRefreshConflictError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id,
+            album.id,
+            entry_id,
+            expected_source_revision=fresh_preview.expected_source_revision,
+            expected_source_audio_sha256=fresh_preview.expected_source_audio_sha256,
+        )
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v3
+
+
+def test_album_finalization_validation_locking_and_completion(custom_storage):
+    """Verify finalization validation checks, completion transition, and strict post-finalization immutability."""
+    user_id = "user_finalize"
+    with pytest.raises(ProjectValidationError):
+        custom_storage.create_album(user_id=user_id, title="Bad Init", status=WorkspaceStatus.COMPLETED)
+
+    trk_empty = custom_storage.create_track(user_id=user_id, title="Placeholder Song")
+    trk_ok = custom_storage.create_track(user_id=user_id, title="Final Song")
+    wav_ok = _make_pcm_wav_bytes(0.5)
+    t_ok = custom_storage.create_take(user_id, trk_ok.id, wav_ok, "ok.wav", ".wav", label="Master", is_master=True)
+
+    album = custom_storage.create_album(user_id=user_id, title="Finalize Test LP")
+
+    # 1. Empty album rejected
+    with pytest.raises(AlbumFinalizationError) as exc_empty:
+        custom_storage.finalize_album(user_id, album.id)
+    assert len(exc_empty.value.errors) == 1
+
+    # 2. Placeholder entry rejected
+    album = custom_storage.add_album_entry(user_id, album.id, trk_empty.id, take_id=None)
+    album = custom_storage.add_album_entry(user_id, album.id, trk_ok.id, take_id=t_ok.id)
+    p_id = album.tracks[0].id
+    r_id = album.tracks[1].id
+
+    with pytest.raises(AlbumFinalizationError) as exc_ph:
+        custom_storage.finalize_album(user_id, album.id)
+    assert any("placeholder" in err["reason"].lower() for err in exc_ph.value.errors)
+
+    # Remove placeholder so only recorded entry remains
+    album = custom_storage.remove_album_entry(user_id, album.id, p_id)
+
+    # 3. Corrupt audio fails checksum/container verification
+    owned_path = custom_storage.get_album_entry_audio_path(user_id, album.id, r_id)
+    owned_path.write_bytes(b"NOT_AUDIO_CORRUPT_DATA_BYTES_1234567890")
+    with pytest.raises(AlbumFinalizationError) as exc_corrupt:
+        custom_storage.finalize_album(user_id, album.id)
+    assert any(r_id == err["entry_id"] for err in exc_corrupt.value.errors)
+
+    # Restore valid audio, verify incomplete .staging_ file fails finalization
+    owned_path.write_bytes(wav_ok)
+    staging_junk = owned_path.parent / ".staging_orphan_audio.wav"
+    staging_junk.write_bytes(b"partial")
+    with pytest.raises(AlbumFinalizationError) as exc_staging:
+        custom_storage.finalize_album(user_id, album.id)
+    assert any("incomplete" in err["reason"].lower() for err in exc_staging.value.errors)
+    staging_junk.unlink()
+
+    # 4. Orphan directory under entries/ fails finalization
+    orphan_dir = custom_storage._get_album_dir(user_id, album.id) / "entries" / "deadbeefdeadbeefdeadbeefdeadbeef"
+    orphan_dir.mkdir(parents=True, exist_ok=True)
+    (orphan_dir / "junk.bin").write_bytes(b"123")
+    with pytest.raises(AlbumFinalizationError) as exc_orphan:
+        custom_storage.finalize_album(user_id, album.id)
+    assert any("inconsistent" in err["reason"].lower() for err in exc_orphan.value.errors)
+    (orphan_dir / "junk.bin").unlink()
+    orphan_dir.rmdir()
+
+    # 5. Passing finalization sets is_finalized, completed status, and locks all mutations
+    finalized = custom_storage.finalize_album(user_id, album.id)
+    assert finalized.is_finalized is True
+    assert finalized.status == WorkspaceStatus.COMPLETED
+    assert finalized.finalized_at is not None
+
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.update_album(user_id, album.id, {"title": "Locked Edit"})
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.add_album_entry(user_id, album.id, trk_ok.id, take_id=t_ok.id)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.update_album_entry(user_id, album.id, r_id, clear_take_to_placeholder=True)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.remove_album_entry(user_id, album.id, r_id)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.preview_album_entry_refresh(user_id, album.id, r_id)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.confirm_album_entry_refresh(user_id, album.id, r_id, 1, "sha")
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.save_album_cover(user_id, album.id, b"\xff\xd8\xff\xe0", extension=".jpg")
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.finalize_album(user_id, album.id)
+
 
 
 

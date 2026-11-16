@@ -17,6 +17,8 @@
     albumSearch: '',
     quota: null,
     activeAlbum: null,
+    pickTrackEditingEntryId: null,
+    pendingRefreshPreview: null,
     loadedProjectTake: null,
     expandedTrackIds: new Set(),
     isUploadingTake: false,
@@ -124,6 +126,7 @@
     dom.modalAlbumDetail = document.getElementById('modalAlbumDetail');
     dom.albumDetailId = document.getElementById('albumDetailId');
     dom.albumDetailRevisionPill = document.getElementById('albumDetailRevisionPill');
+    dom.albumDetailFinalizedBadge = document.getElementById('albumDetailFinalizedBadge');
     dom.albumRevisionContainer = document.getElementById('albumRevisionContainer');
     dom.albumRevisionList = document.getElementById('albumRevisionList');
     dom.albumDetailArtwork = document.getElementById('albumDetailArtwork');
@@ -137,11 +140,28 @@
     dom.albumTrackCountDisplay = document.getElementById('albumTrackCountDisplay');
     dom.albumSequencerTbody = document.getElementById('albumSequencerTbody');
     dom.btnAddTrackToSequencer = document.getElementById('btnAddTrackToSequencer');
+    dom.btnFinalizeAlbum = document.getElementById('btnFinalizeAlbum');
     dom.btnSaveAlbumDetails = document.getElementById('btnSaveAlbumDetails');
 
     dom.modalPickTrackForAlbum = document.getElementById('modalPickTrackForAlbum');
+    dom.modalPickTrackTitle = document.getElementById('modalPickTrackTitle');
     dom.selectPickTrack = document.getElementById('selectPickTrack');
+    dom.pickTrackTakesGroup = document.getElementById('pickTrackTakesGroup');
+    dom.pickTrackTakesList = document.getElementById('pickTrackTakesList');
     dom.btnConfirmAddTrackToAlbum = document.getElementById('btnConfirmAddTrackToAlbum');
+
+    dom.modalRefreshAlbumEntry = document.getElementById('modalRefreshAlbumEntry');
+    dom.refreshEntrySubtitle = document.getElementById('refreshEntrySubtitle');
+    dom.refreshStatusNotice = document.getElementById('refreshStatusNotice');
+    dom.refreshAlbumCopySummary = document.getElementById('refreshAlbumCopySummary');
+    dom.refreshAlbumCopyAudio = document.getElementById('refreshAlbumCopyAudio');
+    dom.refreshSourceTakeSummary = document.getElementById('refreshSourceTakeSummary');
+    dom.refreshSourceTakeAudio = document.getElementById('refreshSourceTakeAudio');
+    dom.refreshChangesContainer = document.getElementById('refreshChangesContainer');
+    dom.refreshMetadataChangesList = document.getElementById('refreshMetadataChangesList');
+    dom.refreshLyricsDiffContainer = document.getElementById('refreshLyricsDiffContainer');
+    dom.refreshLyricsDiffPre = document.getElementById('refreshLyricsDiffPre');
+    dom.btnConfirmRefreshAlbumEntry = document.getElementById('btnConfirmRefreshAlbumEntry');
   }
 
   // --- View Switcher ---
@@ -773,6 +793,69 @@
     return card;
   }
 
+  function formatDurationSeconds(sec) {
+    const val = Number(sec);
+    if (!val || val <= 0) return '';
+    const mins = Math.floor(val / 60);
+    const secs = Math.floor(val % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }
+
+  function applyAlbumModalLockState(album) {
+    const isFinalized = !!(album && (album.is_finalized || album.status === 'completed'));
+    if (dom.albumDetailFinalizedBadge) {
+      dom.albumDetailFinalizedBadge.classList.toggle('hidden', !isFinalized);
+    }
+    [
+      dom.editAlbumTitle,
+      dom.editAlbumArtist,
+      dom.editAlbumYear,
+      dom.editAlbumGenre,
+      dom.editAlbumCatalog,
+      dom.inputAlbumCoverFile,
+      dom.btnAddTrackToSequencer,
+      dom.btnFinalizeAlbum,
+      dom.btnSaveAlbumDetails,
+    ].forEach(el => {
+      if (el) el.disabled = isFinalized;
+    });
+  }
+
+  function renderAlbumRevisionHistory(album) {
+    if (!dom.albumRevisionContainer || !dom.albumRevisionList) return;
+    dom.albumRevisionList.innerHTML = '';
+    const revs = Array.isArray(album.revisions) ? album.revisions : [];
+    if (revs.length > 0) {
+      dom.albumRevisionContainer.classList.remove('hidden');
+      [...revs].reverse().forEach(r => {
+        const item = document.createElement('div');
+        item.className = 'revision-history-item';
+
+        const badge = document.createElement('span');
+        badge.className = 'revision-pill';
+        badge.textContent = `Rev ${r.revision}`;
+        item.appendChild(badge);
+
+        const summary = document.createElement('span');
+        summary.className = 'revision-history-summary';
+        summary.textContent = r.change_summary || 'Updated album';
+        item.appendChild(summary);
+
+        const dateSpan = document.createElement('span');
+        dateSpan.className = 'revision-history-date';
+        if (r.timestamp) {
+          const d = new Date(r.timestamp * 1000);
+          dateSpan.textContent = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        item.appendChild(dateSpan);
+
+        dom.albumRevisionList.appendChild(item);
+      });
+    } else {
+      dom.albumRevisionContainer.classList.add('hidden');
+    }
+  }
+
   // --- Album Detail / Sequencer Modal ---
   async function openAlbumDetailModal(albumId) {
     try {
@@ -784,7 +867,6 @@
       const album = await res.json();
       state.activeAlbum = album;
 
-      // Ensure tracks array is normalized
       if (!Array.isArray(state.activeAlbum.tracks)) {
         if (Array.isArray(state.activeAlbum.track_ids)) {
           state.activeAlbum.tracks = state.activeAlbum.track_ids.map((tid, i) => ({
@@ -793,6 +875,7 @@
             track_id: tid,
             take_id: null,
             custom_title: null,
+            is_placeholder: true,
           }));
         } else {
           state.activeAlbum.tracks = [];
@@ -809,7 +892,6 @@
       dom.editAlbumGenre.value = album.genre || '';
       dom.editAlbumCatalog.value = album.catalog_number || '';
 
-      // Check Artwork
       if (album.has_cover) {
         dom.albumDetailArtwork.src = `/api/projects/albums/${album.id}/artwork?t=${Date.now()}`;
         dom.albumDetailArtwork.classList.remove('hidden');
@@ -820,42 +902,8 @@
         dom.albumDetailPlaceholder.classList.remove('hidden');
       }
 
-      // Render Revision History
-      if (dom.albumRevisionContainer && dom.albumRevisionList) {
-        dom.albumRevisionList.innerHTML = '';
-        const revs = Array.isArray(album.revisions) ? album.revisions : [];
-        if (revs.length > 0) {
-          dom.albumRevisionContainer.classList.remove('hidden');
-          // Show newest revisions first
-          [...revs].reverse().forEach(r => {
-            const item = document.createElement('div');
-            item.className = 'revision-history-item';
-
-            const badge = document.createElement('span');
-            badge.className = 'revision-pill';
-            badge.textContent = `Rev ${r.revision}`;
-            item.appendChild(badge);
-
-            const summary = document.createElement('span');
-            summary.className = 'revision-history-summary';
-            summary.textContent = r.change_summary || 'Updated album';
-            item.appendChild(summary);
-
-            const dateSpan = document.createElement('span');
-            dateSpan.className = 'revision-history-date';
-            if (r.timestamp) {
-              const d = new Date(r.timestamp * 1000);
-              dateSpan.textContent = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            }
-            item.appendChild(dateSpan);
-
-            dom.albumRevisionList.appendChild(item);
-          });
-        } else {
-          dom.albumRevisionContainer.classList.add('hidden');
-        }
-      }
-
+      applyAlbumModalLockState(album);
+      renderAlbumRevisionHistory(album);
       renderSequencerTable(state.activeAlbum);
 
       if (dom.modalAlbumDetail) dom.modalAlbumDetail.classList.remove('hidden');
@@ -868,6 +916,7 @@
     if (!dom.albumSequencerTbody) return;
     dom.albumSequencerTbody.innerHTML = '';
 
+    const isFinalized = !!(album && (album.is_finalized || album.status === 'completed'));
     const tracks = album.tracks || [];
     if (dom.albumTrackCountDisplay) dom.albumTrackCountDisplay.textContent = tracks.length;
 
@@ -887,62 +936,113 @@
       const track = state.tracks.find(t => t.id === trackId);
       const tr = document.createElement('tr');
 
-      // # Track num
       const tdNum = document.createElement('td');
       tdNum.className = 'font-mono text-dim';
       tdNum.textContent = String(entry.track_number || (index + 1)).padStart(2, '0');
       tr.appendChild(tdNum);
 
-      // Title
       const tdTitle = document.createElement('td');
-      tdTitle.className = 'font-bold';
-      tdTitle.textContent = (entry.custom_title) || (track ? track.title : `[Track ${trackId.slice(0, 8)}]`);
+      const titleDiv = document.createElement('div');
+      titleDiv.className = 'font-bold';
+      titleDiv.textContent =
+        entry.custom_title ||
+        (entry.snapshot && entry.snapshot.source_track_title) ||
+        (track ? track.title : `[Track ${trackId.slice(0, 8)}]`);
+      tdTitle.appendChild(titleDiv);
+
+      const takePill = document.createElement('div');
+      takePill.style.fontSize = '0.75rem';
+      takePill.style.marginTop = '0.2rem';
+      if (entry.is_placeholder || !entry.take_id) {
+        takePill.style.color = '#fbbf24';
+        takePill.textContent = '⚠ Placeholder — No Take Selected';
+      } else if (entry.snapshot) {
+        const durText = formatDurationSeconds(entry.snapshot.duration_seconds);
+        const fmtText = (entry.snapshot.format || 'mp3').toUpperCase();
+        const revText = entry.snapshot.source_take_revision || 1;
+        takePill.style.opacity = '0.85';
+        takePill.textContent = `🎵 ${entry.snapshot.source_take_label} • ${fmtText}${durText ? ' (' + durText + ')' : ''} • Rev ${revText}${entry.has_owned_audio ? ' • Owned Copy' : ''}`;
+      } else {
+        takePill.style.opacity = '0.75';
+        takePill.textContent = `🎵 Take ${entry.take_id.slice(0, 10)}`;
+      }
+      tdTitle.appendChild(takePill);
       tr.appendChild(tdTitle);
 
-      // Artist
       const tdArtist = document.createElement('td');
       tdArtist.className = 'text-muted';
-      tdArtist.textContent = track && track.artist ? track.artist : '—';
+      tdArtist.textContent =
+        (track && track.artist) ||
+        (entry.snapshot && entry.snapshot.source_track_artist) ||
+        '—';
       tr.appendChild(tdArtist);
 
-      // Disc #
       const tdDisc = document.createElement('td');
       tdDisc.className = 'font-mono text-dim';
       tdDisc.textContent = String(entry.disc_number || 1);
       tr.appendChild(tdDisc);
 
-      // Actions
       const tdActions = document.createElement('td');
       const actionGroup = document.createElement('div');
       actionGroup.className = 'sequencer-action-btns';
+      actionGroup.style.flexWrap = 'wrap';
 
-      // Move Up
-      if (index > 0) {
-        const btnUp = document.createElement('button');
-        btnUp.className = 'btn btn-ghost btn-xs';
-        btnUp.title = 'Move Up';
-        btnUp.innerHTML = '▲';
-        btnUp.addEventListener('click', () => moveAlbumTrack(index, -1));
-        actionGroup.appendChild(btnUp);
+      if (!isFinalized) {
+        const btnChangeTake = document.createElement('button');
+        btnChangeTake.type = 'button';
+        btnChangeTake.className = 'btn btn-secondary btn-xs';
+        btnChangeTake.title = entry.is_placeholder ? 'Assign Take' : 'Change Selected Take';
+        btnChangeTake.textContent = entry.is_placeholder ? 'Select Take' : 'Take';
+        btnChangeTake.addEventListener('click', () => openPickTrackModal(entry));
+        actionGroup.appendChild(btnChangeTake);
+
+        if (!entry.is_placeholder && entry.take_id) {
+          const btnRefresh = document.createElement('button');
+          btnRefresh.type = 'button';
+          btnRefresh.className = 'btn btn-secondary btn-xs';
+          btnRefresh.title = 'Compare & Refresh from Source Take';
+          btnRefresh.textContent = '↻';
+          btnRefresh.addEventListener('click', () => openRefreshEntryModal(album.id, entry.id));
+          actionGroup.appendChild(btnRefresh);
+        }
+
+        if (index > 0) {
+          const btnUp = document.createElement('button');
+          btnUp.type = 'button';
+          btnUp.className = 'btn btn-ghost btn-xs';
+          btnUp.title = 'Move Up';
+          btnUp.textContent = '▲';
+          btnUp.addEventListener('click', () => moveAlbumTrack(index, -1));
+          actionGroup.appendChild(btnUp);
+        }
+
+        if (index < tracks.length - 1) {
+          const btnDown = document.createElement('button');
+          btnDown.type = 'button';
+          btnDown.className = 'btn btn-ghost btn-xs';
+          btnDown.title = 'Move Down';
+          btnDown.textContent = '▼';
+          btnDown.addEventListener('click', () => moveAlbumTrack(index, 1));
+          actionGroup.appendChild(btnDown);
+        }
+
+        const btnRemove = document.createElement('button');
+        btnRemove.type = 'button';
+        btnRemove.className = 'btn btn-ghost btn-xs text-danger';
+        btnRemove.title = 'Remove from Album';
+        btnRemove.textContent = '✕';
+        btnRemove.addEventListener('click', () => removeAlbumTrack(entry));
+        actionGroup.appendChild(btnRemove);
       }
 
-      // Move Down
-      if (index < tracks.length - 1) {
-        const btnDown = document.createElement('button');
-        btnDown.className = 'btn btn-ghost btn-xs';
-        btnDown.title = 'Move Down';
-        btnDown.innerHTML = '▼';
-        btnDown.addEventListener('click', () => moveAlbumTrack(index, 1));
-        actionGroup.appendChild(btnDown);
+      if (entry.has_owned_audio && entry.id) {
+        const dlBtn = document.createElement('a');
+        dlBtn.className = 'btn btn-ghost btn-xs';
+        dlBtn.title = 'Download Album Copy';
+        dlBtn.href = `/api/projects/albums/${album.id}/entries/${entry.id}/download`;
+        dlBtn.textContent = '⬇';
+        actionGroup.appendChild(dlBtn);
       }
-
-      // Remove
-      const btnRemove = document.createElement('button');
-      btnRemove.className = 'btn btn-ghost btn-xs text-danger';
-      btnRemove.title = 'Remove from Album';
-      btnRemove.innerHTML = '✕';
-      btnRemove.addEventListener('click', () => removeAlbumTrack(index));
-      actionGroup.appendChild(btnRemove);
 
       tdActions.appendChild(actionGroup);
       tr.appendChild(tdActions);
@@ -953,6 +1053,7 @@
 
   function moveAlbumTrack(currentIndex, offset) {
     if (!state.activeAlbum || !state.activeAlbum.tracks) return;
+    if (state.activeAlbum.is_finalized || state.activeAlbum.status === 'completed') return;
     const tracks = [...state.activeAlbum.tracks];
     const targetIndex = currentIndex + offset;
     if (targetIndex < 0 || targetIndex >= tracks.length) return;
@@ -961,7 +1062,6 @@
     tracks[currentIndex] = tracks[targetIndex];
     tracks[targetIndex] = temp;
 
-    // Re-index track numbers
     tracks.forEach((t, i) => {
       t.track_number = i + 1;
     });
@@ -971,64 +1071,466 @@
     renderSequencerTable(state.activeAlbum);
   }
 
-  function removeAlbumTrack(index) {
-    if (!state.activeAlbum || !state.activeAlbum.tracks) return;
-    const tracks = [...state.activeAlbum.tracks];
-    tracks.splice(index, 1);
-
-    // Re-index track numbers
-    tracks.forEach((t, i) => {
-      t.track_number = i + 1;
-    });
-
-    state.activeAlbum.tracks = tracks;
-    state.activeAlbum.track_ids = tracks.map(t => t.track_id);
-    renderSequencerTable(state.activeAlbum);
-  }
-
-  function openPickTrackModal() {
-    if (!dom.selectPickTrack) return;
-    dom.selectPickTrack.innerHTML = '<option value="">-- Choose Track --</option>';
-
-    const currentTrackIds = new Set((state.activeAlbum && state.activeAlbum.tracks ? state.activeAlbum.tracks.map(t => t.track_id) : []));
-
-    state.tracks.forEach(t => {
-      if (!currentTrackIds.has(t.id)) {
-        const opt = document.createElement('option');
-        opt.value = t.id;
-        opt.textContent = `${t.title}${t.artist ? ` - ${t.artist}` : ''}`;
-        dom.selectPickTrack.appendChild(opt);
+  async function removeAlbumTrack(entry) {
+    if (!state.activeAlbum || !entry || !entry.id) return;
+    if (state.activeAlbum.is_finalized || state.activeAlbum.status === 'completed') return;
+    const albumId = state.activeAlbum.id;
+    try {
+      const res = await fetch(`/api/projects/albums/${albumId}/entries/${entry.id}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        state.activeAlbum = updated;
+        if (dom.albumDetailRevisionPill) {
+          dom.albumDetailRevisionPill.textContent = `Rev ${updated.revision || 1}`;
+        }
+        renderAlbumRevisionHistory(updated);
+        renderSequencerTable(state.activeAlbum);
+        fetchAlbums();
+        fetchQuota();
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to remove entry from album', 'error');
       }
+    } catch (e) {
+      showToast('Network error removing entry', 'error');
+    }
+  }
+
+  async function loadTakesForPickTrackModal(trackId, preferredTakeId = null, preferPlaceholder = false) {
+    if (!dom.pickTrackTakesGroup || !dom.pickTrackTakesList) return;
+    dom.pickTrackTakesList.innerHTML = '';
+
+    if (!trackId) {
+      dom.pickTrackTakesGroup.classList.add('hidden');
+      return;
+    }
+
+    dom.pickTrackTakesGroup.classList.remove('hidden');
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'takes-loading-spinner';
+    loadingEl.textContent = 'Loading takes...';
+    dom.pickTrackTakesList.appendChild(loadingEl);
+
+    try {
+      const res = await fetch(`/api/projects/tracks/${trackId}`);
+      if (!res.ok) {
+        dom.pickTrackTakesList.innerHTML = '';
+        const errEl = document.createElement('div');
+        errEl.className = 'takes-error';
+        errEl.textContent = 'Failed to load takes for selected track.';
+        dom.pickTrackTakesList.appendChild(errEl);
+        return;
+      }
+      const data = await res.json();
+      const track = data.track || {};
+      const takes = Array.isArray(data.takes) ? data.takes : [];
+      dom.pickTrackTakesList.innerHTML = '';
+
+      let defaultVal = '';
+      if (!preferPlaceholder && takes.length > 0) {
+        if (preferredTakeId && takes.some(t => t.id === preferredTakeId)) {
+          defaultVal = preferredTakeId;
+        } else {
+          const masterTake = takes.find(t => t.is_master) || takes.find(t => t.id === track.primary_take_id) || takes[0];
+          defaultVal = masterTake ? masterTake.id : '';
+        }
+      }
+
+      function appendTakeRadioRow(value, titleText, metaText, isMasterBadge, checked) {
+        const lbl = document.createElement('label');
+        lbl.style.display = 'flex';
+        lbl.style.alignItems = 'center';
+        lbl.style.gap = '0.6rem';
+        lbl.style.padding = '0.6rem 0.75rem';
+        lbl.style.minHeight = '44px';
+        lbl.style.borderRadius = '8px';
+        lbl.style.border = '1px solid rgba(255, 255, 255, 0.12)';
+        lbl.style.background = 'rgba(15, 23, 42, 0.45)';
+        lbl.style.cursor = 'pointer';
+
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'pickAlbumTakeId';
+        radio.value = value;
+        radio.checked = !!checked;
+        lbl.appendChild(radio);
+
+        const body = document.createElement('div');
+        body.style.flex = '1';
+        body.style.minWidth = '0';
+
+        const top = document.createElement('div');
+        top.style.display = 'flex';
+        top.style.alignItems = 'center';
+        top.style.flexWrap = 'wrap';
+        top.style.gap = '0.4rem';
+
+        const labelSpan = document.createElement('span');
+        labelSpan.style.fontWeight = '600';
+        labelSpan.textContent = titleText;
+        top.appendChild(labelSpan);
+
+        if (isMasterBadge) {
+          const badge = document.createElement('span');
+          badge.className = 'master-badge';
+          badge.textContent = '★ MASTER';
+          top.appendChild(badge);
+        }
+
+        body.appendChild(top);
+
+        if (metaText) {
+          const sub = document.createElement('div');
+          sub.style.fontSize = '0.78rem';
+          sub.style.opacity = '0.8';
+          sub.textContent = metaText;
+          body.appendChild(sub);
+        }
+
+        lbl.appendChild(body);
+        dom.pickTrackTakesList.appendChild(lbl);
+      }
+
+      if (takes.length === 0) {
+        appendTakeRadioRow(
+          '',
+          'Placeholder (No Takes Uploaded)',
+          'No recordings exist yet for this Track Workspace. Will be added as an editable placeholder.',
+          false,
+          true
+        );
+      } else {
+        takes.forEach(take => {
+          const durStr = formatDurationSeconds(take.duration_seconds);
+          const mbStr = `${((take.size_bytes || 0) / (1024 * 1024)).toFixed(2)} MB`;
+          const metaParts = [
+            (take.format || 'mp3').toUpperCase(),
+            durStr || null,
+            mbStr,
+            `Rev ${take.revision || 1}`,
+          ].filter(Boolean);
+          const isMaster = !!(take.is_master || (track.primary_take_id && track.primary_take_id === take.id));
+          appendTakeRadioRow(take.id, take.label || 'Take', metaParts.join(' • '), isMaster, defaultVal === take.id);
+        });
+
+        appendTakeRadioRow(
+          '',
+          'Placeholder (Unassigned — Choose Take Later)',
+          'Keep entry in tracklist without copying a recording yet.',
+          false,
+          defaultVal === ''
+        );
+      }
+    } catch (e) {
+      dom.pickTrackTakesList.innerHTML = '';
+      const errEl = document.createElement('div');
+      errEl.className = 'takes-error';
+      errEl.textContent = 'Network error loading track takes.';
+      dom.pickTrackTakesList.appendChild(errEl);
+    }
+  }
+
+  async function openPickTrackModal(editingEntry = null) {
+    if (!dom.selectPickTrack || !state.activeAlbum) return;
+    if (state.activeAlbum.is_finalized || state.activeAlbum.status === 'completed') {
+      showToast('Finalized albums cannot be modified', 'error');
+      return;
+    }
+
+    const entry = (editingEntry && editingEntry.id && editingEntry.track_id) ? editingEntry : null;
+    state.pickTrackEditingEntryId = entry ? entry.id : null;
+
+    dom.selectPickTrack.innerHTML = '<option value="">-- Choose Track --</option>';
+    state.tracks.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      const takeCount = t.takes_count || 0;
+      const takeSuffix = takeCount === 0 ? 'No takes — Placeholder' : `${takeCount} take${takeCount === 1 ? '' : 's'}`;
+      opt.textContent = `${t.title}${t.artist ? ` - ${t.artist}` : ''} (${takeSuffix})`;
+      dom.selectPickTrack.appendChild(opt);
     });
+
+    if (entry) {
+      if (dom.modalPickTrackTitle) dom.modalPickTrackTitle.textContent = 'Change Selected Recording';
+      if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.textContent = 'Save Take Selection';
+      dom.selectPickTrack.value = entry.track_id;
+      dom.selectPickTrack.disabled = true;
+      await loadTakesForPickTrackModal(entry.track_id, entry.take_id, !!(entry.is_placeholder || !entry.take_id));
+    } else {
+      if (dom.modalPickTrackTitle) dom.modalPickTrackTitle.textContent = 'Add Track to Album';
+      if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.textContent = 'Add to Album';
+      dom.selectPickTrack.disabled = false;
+      dom.selectPickTrack.value = '';
+      if (dom.pickTrackTakesGroup) dom.pickTrackTakesGroup.classList.add('hidden');
+      if (dom.pickTrackTakesList) dom.pickTrackTakesList.innerHTML = '';
+    }
 
     if (dom.modalPickTrackForAlbum) dom.modalPickTrackForAlbum.classList.remove('hidden');
   }
 
-  function confirmAddTrackToAlbum() {
-    const trackId = dom.selectPickTrack.value;
+  async function confirmAddTrackToAlbum() {
+    const trackId = dom.selectPickTrack ? dom.selectPickTrack.value : '';
     if (!trackId) {
-      showToast('Please select a track', 'error');
+      showToast('Please select a track workspace', 'error');
       return;
     }
     if (!state.activeAlbum) return;
 
-    if (!Array.isArray(state.activeAlbum.tracks)) state.activeAlbum.tracks = [];
-    const nextTrackNum = state.activeAlbum.tracks.length + 1;
-    state.activeAlbum.tracks.push({
-      track_number: nextTrackNum,
-      disc_number: 1,
-      track_id: trackId,
-      take_id: null,
-      custom_title: null,
-    });
-    state.activeAlbum.track_ids = state.activeAlbum.tracks.map(t => t.track_id);
+    const checkedRadio = dom.pickTrackTakesList
+      ? dom.pickTrackTakesList.querySelector('input[name="pickAlbumTakeId"]:checked')
+      : null;
+    const takeId = checkedRadio && checkedRadio.value ? checkedRadio.value : null;
+    const albumId = state.activeAlbum.id;
 
-    if (dom.modalPickTrackForAlbum) dom.modalPickTrackForAlbum.classList.add('hidden');
-    renderSequencerTable(state.activeAlbum);
+    if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.disabled = true;
+    try {
+      let res;
+      if (state.pickTrackEditingEntryId) {
+        res = await fetch(`/api/projects/albums/${albumId}/entries/${state.pickTrackEditingEntryId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            take_id: takeId,
+            clear_take_to_placeholder: takeId === null,
+          }),
+        });
+      } else {
+        res = await fetch(`/api/projects/albums/${albumId}/entries`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            track_id: trackId,
+            take_id: takeId,
+            disc_number: 1,
+          }),
+        });
+      }
+
+      if (res.ok) {
+        const updated = await res.json();
+        state.activeAlbum = updated;
+        state.pickTrackEditingEntryId = null;
+        if (dom.albumDetailRevisionPill) {
+          dom.albumDetailRevisionPill.textContent = `Rev ${updated.revision || 1}`;
+        }
+        renderAlbumRevisionHistory(updated);
+        renderSequencerTable(state.activeAlbum);
+        if (dom.modalPickTrackForAlbum) dom.modalPickTrackForAlbum.classList.add('hidden');
+        showToast(takeId ? '✨ Recording copied into album!' : '📌 Placeholder added to album tracklist', 'success');
+        fetchAlbums();
+        fetchQuota();
+      } else {
+        let detail = 'Failed to update album tracklist';
+        try {
+          const err = await res.json();
+          if (err && err.detail) detail = err.detail;
+        } catch (_) {}
+        showToast(detail, 'error');
+      }
+    } catch (e) {
+      showToast('Network error saving album recording', 'error');
+    } finally {
+      if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.disabled = false;
+    }
+  }
+
+  async function openRefreshEntryModal(albumId, entryId) {
+    if (!dom.modalRefreshAlbumEntry) return;
+    state.pendingRefreshPreview = null;
+
+    if (dom.refreshStatusNotice) {
+      dom.refreshStatusNotice.textContent = '';
+      dom.refreshStatusNotice.classList.add('hidden');
+    }
+    if (dom.refreshChangesContainer) dom.refreshChangesContainer.classList.add('hidden');
+    if (dom.refreshLyricsDiffContainer) dom.refreshLyricsDiffContainer.classList.add('hidden');
+    if (dom.btnConfirmRefreshAlbumEntry) dom.btnConfirmRefreshAlbumEntry.disabled = true;
+
+    try {
+      const res = await fetch(`/api/projects/albums/${albumId}/entries/${entryId}/refresh-preview`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || 'Failed to load refresh comparison', 'error');
+        return;
+      }
+      const preview = await res.json();
+
+      if (dom.refreshEntrySubtitle) {
+        const trackTitle = (preview.album_snapshot && preview.album_snapshot.source_track_title) || preview.track_id;
+        dom.refreshEntrySubtitle.textContent = `${trackTitle} • Compare current album recording with latest source take`;
+      }
+
+      if (dom.refreshAlbumCopySummary) {
+        if (preview.album_snapshot) {
+          const a = preview.album_snapshot;
+          const copiedDate = a.copied_at ? new Date(a.copied_at * 1000).toLocaleString() : '—';
+          dom.refreshAlbumCopySummary.textContent = `${a.source_take_label} • Rev ${a.source_take_revision} • ${(a.format || '').toUpperCase()} • ${formatDurationSeconds(a.duration_seconds) || '0:00'} • Copied ${copiedDate}`;
+        } else {
+          dom.refreshAlbumCopySummary.textContent = 'No album-owned copy exists yet (legacy reference).';
+        }
+      }
+
+      if (dom.refreshAlbumCopyAudio) {
+        dom.refreshAlbumCopyAudio.src = preview.album_audio_stream_url || '';
+      }
+
+      if (!preview.source_available) {
+        if (dom.refreshSourceTakeSummary) {
+          dom.refreshSourceTakeSummary.textContent = 'Source take unavailable / deleted.';
+        }
+        if (dom.refreshSourceTakeAudio) dom.refreshSourceTakeAudio.src = '';
+        if (dom.refreshStatusNotice) {
+          dom.refreshStatusNotice.textContent = preview.unavailable_reason || 'Source take is unavailable. Existing album recording will be preserved.';
+          dom.refreshStatusNotice.classList.remove('hidden');
+        }
+        dom.modalRefreshAlbumEntry.classList.remove('hidden');
+        return;
+      }
+
+      if (dom.refreshSourceTakeSummary && preview.source_snapshot) {
+        const s = preview.source_snapshot;
+        const modDate = s.source_take_updated_at ? new Date(s.source_take_updated_at * 1000).toLocaleString() : '—';
+        dom.refreshSourceTakeSummary.textContent = `${s.source_take_label} • Rev ${s.source_take_revision} • ${(s.format || '').toUpperCase()} • ${formatDurationSeconds(s.duration_seconds) || '0:00'} • Updated ${modDate}`;
+      }
+
+      if (dom.refreshSourceTakeAudio) {
+        dom.refreshSourceTakeAudio.src = preview.source_audio_stream_url || '';
+      }
+
+      if (dom.refreshMetadataChangesList && dom.refreshChangesContainer) {
+        dom.refreshMetadataChangesList.innerHTML = '';
+        const changes = Array.isArray(preview.metadata_changes) ? preview.metadata_changes : [];
+        if (changes.length > 0 || preview.audio_changed) {
+          dom.refreshChangesContainer.classList.remove('hidden');
+          if (preview.audio_changed) {
+            const audioRow = document.createElement('div');
+            audioRow.textContent = '🔊 Audio file checksum / audio stream differs from source take.';
+            audioRow.style.color = '#38bdf8';
+            dom.refreshMetadataChangesList.appendChild(audioRow);
+          }
+          changes.forEach(c => {
+            const row = document.createElement('div');
+            row.textContent = `${c.label || c.field}: "${c.old ?? '—'}" → "${c.new ?? '—'}"`;
+            dom.refreshMetadataChangesList.appendChild(row);
+          });
+        }
+      }
+
+      if (dom.refreshLyricsDiffContainer && dom.refreshLyricsDiffPre) {
+        if (preview.lyrics_changed) {
+          dom.refreshLyricsDiffContainer.classList.remove('hidden');
+          dom.refreshLyricsDiffPre.textContent = preview.lyrics_diff || '(Lyrics changed)';
+        }
+      }
+
+      if (!preview.has_changes && dom.refreshStatusNotice) {
+        dom.refreshStatusNotice.textContent = 'Album copy is already up to date with the latest source take.';
+        dom.refreshStatusNotice.classList.remove('hidden');
+      }
+
+      state.pendingRefreshPreview = {
+        albumId,
+        entryId,
+        expected_source_revision: preview.expected_source_revision,
+        expected_source_audio_sha256: preview.expected_source_audio_sha256,
+        expected_source_updated_at: preview.expected_source_updated_at,
+      };
+      if (dom.btnConfirmRefreshAlbumEntry) {
+        dom.btnConfirmRefreshAlbumEntry.disabled = false;
+      }
+      dom.modalRefreshAlbumEntry.classList.remove('hidden');
+    } catch (e) {
+      showToast('Network error loading refresh preview', 'error');
+    }
+  }
+
+  async function confirmRefreshAlbumEntry() {
+    const pending = state.pendingRefreshPreview;
+    if (!pending) return;
+
+    if (dom.btnConfirmRefreshAlbumEntry) dom.btnConfirmRefreshAlbumEntry.disabled = true;
+    try {
+      const res = await fetch(`/api/projects/albums/${pending.albumId}/entries/${pending.entryId}/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expected_source_revision: pending.expected_source_revision,
+          expected_source_audio_sha256: pending.expected_source_audio_sha256,
+          expected_source_updated_at: pending.expected_source_updated_at,
+        }),
+      });
+
+      if (res.ok) {
+        const updated = await res.json();
+        state.activeAlbum = updated;
+        state.pendingRefreshPreview = null;
+        if (dom.albumDetailRevisionPill) {
+          dom.albumDetailRevisionPill.textContent = `Rev ${updated.revision || 1}`;
+        }
+        renderAlbumRevisionHistory(updated);
+        renderSequencerTable(state.activeAlbum);
+        if (dom.modalRefreshAlbumEntry) dom.modalRefreshAlbumEntry.classList.add('hidden');
+        showToast('✨ Album entry refreshed from source take!', 'success');
+        fetchAlbums();
+        fetchQuota();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || 'Could not refresh album entry', 'error', 5000);
+      }
+    } catch (e) {
+      showToast('Network error confirming refresh', 'error');
+    } finally {
+      if (dom.btnConfirmRefreshAlbumEntry) dom.btnConfirmRefreshAlbumEntry.disabled = false;
+    }
+  }
+
+  async function handleFinalizeAlbum() {
+    if (!state.activeAlbum) return;
+    const albumId = state.activeAlbum.id;
+    if (!confirm('Finalize this album release? Finalized albums become locked and cannot have tracks, takes, recordings, or metadata modified.')) {
+      return;
+    }
+    if (dom.btnFinalizeAlbum) dom.btnFinalizeAlbum.disabled = true;
+    try {
+      const res = await fetch(`/api/projects/albums/${albumId}/finalize`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const finalized = await res.json();
+        state.activeAlbum = finalized;
+        if (dom.albumDetailRevisionPill) {
+          dom.albumDetailRevisionPill.textContent = `Rev ${finalized.revision || 1}`;
+        }
+        applyAlbumModalLockState(finalized);
+        renderAlbumRevisionHistory(finalized);
+        renderSequencerTable(finalized);
+        showToast('🔒 Album finalized and locked!', 'success');
+        fetchAlbums();
+      } else {
+        let msg = 'Album finalization failed validation.';
+        try {
+          const err = await res.json();
+          if (err && err.detail) {
+            msg = typeof err.detail === 'string' ? err.detail : (err.detail.message || msg);
+          }
+        } catch (_) {}
+        showToast(msg, 'error', 6000);
+        if (dom.btnFinalizeAlbum) dom.btnFinalizeAlbum.disabled = false;
+      }
+    } catch (e) {
+      showToast('Network error finalizing album', 'error');
+      if (dom.btnFinalizeAlbum) dom.btnFinalizeAlbum.disabled = false;
+    }
   }
 
   async function saveAlbumChanges() {
     if (!state.activeAlbum) return;
+    if (state.activeAlbum.is_finalized) {
+      showToast('Finalized albums are locked and cannot be edited.', 'error');
+      return;
+    }
     const albumId = state.activeAlbum.id;
 
     const payload = {
@@ -1047,12 +1549,21 @@
       });
 
       if (res.ok) {
+        const updated = await res.json().catch(() => null);
+        if (updated && updated.id) {
+          state.activeAlbum = updated;
+          if (dom.albumDetailRevisionPill) {
+            dom.albumDetailRevisionPill.textContent = `Rev ${updated.revision || 1}`;
+          }
+          renderAlbumRevisionHistory(updated);
+        }
         showToast('✨ Album project updated successfully!', 'success');
         if (dom.modalAlbumDetail) dom.modalAlbumDetail.classList.add('hidden');
         fetchAlbums();
       } else {
-        const err = await res.json();
-        showToast(err.detail || 'Failed to update album', 'error');
+        const err = await res.json().catch(() => ({}));
+        const msg = err.detail && typeof err.detail === 'object' ? (err.detail.message || 'Failed to update album') : (err.detail || 'Failed to update album');
+        showToast(msg, 'error');
       }
     } catch (e) {
       showToast('Network error saving album', 'error');
@@ -1061,6 +1572,10 @@
 
   async function handleAlbumCoverUpload(file) {
     if (!state.activeAlbum) return;
+    if (state.activeAlbum.is_finalized) {
+      showToast('Finalized albums are locked and cannot be edited.', 'error');
+      return;
+    }
     const albumId = state.activeAlbum.id;
 
     const formData = new FormData();
@@ -1074,14 +1589,24 @@
       });
 
       if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const updated = (data && data.album) ? data.album : (data && data.id ? data : null);
+        if (updated) {
+          state.activeAlbum = updated;
+          if (dom.albumDetailRevisionPill) {
+            dom.albumDetailRevisionPill.textContent = `Rev ${updated.revision || 1}`;
+          }
+          renderAlbumRevisionHistory(updated);
+        }
         showToast('✨ Master album artwork saved!', 'success');
         dom.albumDetailArtwork.src = `/api/projects/albums/${albumId}/artwork?t=${Date.now()}`;
         dom.albumDetailArtwork.classList.remove('hidden');
         dom.albumDetailPlaceholder.classList.add('hidden');
         fetchAlbums();
       } else {
-        const err = await res.json();
-        showToast(err.detail || 'Failed to upload artwork', 'error');
+        const err = await res.json().catch(() => ({}));
+        const msg = err.detail && typeof err.detail === 'object' ? (err.detail.message || 'Failed to upload artwork') : (err.detail || 'Failed to upload artwork');
+        showToast(msg, 'error');
       }
     } catch (e) {
       showToast('Network error uploading cover art', 'error');
@@ -2409,8 +2934,15 @@
     }
 
     // Album Sequencer & Artwork
-    if (dom.btnAddTrackToSequencer) dom.btnAddTrackToSequencer.addEventListener('click', openPickTrackModal);
+    if (dom.btnAddTrackToSequencer) dom.btnAddTrackToSequencer.addEventListener('click', () => openPickTrackModal(null));
+    if (dom.selectPickTrack) {
+      dom.selectPickTrack.addEventListener('change', (e) => {
+        loadTakesForPickTrackModal(e.target.value);
+      });
+    }
     if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.addEventListener('click', confirmAddTrackToAlbum);
+    if (dom.btnConfirmRefreshAlbumEntry) dom.btnConfirmRefreshAlbumEntry.addEventListener('click', confirmRefreshAlbumEntry);
+    if (dom.btnFinalizeAlbum) dom.btnFinalizeAlbum.addEventListener('click', handleFinalizeAlbum);
     if (dom.btnSaveAlbumDetails) dom.btnSaveAlbumDetails.addEventListener('click', saveAlbumChanges);
     if (dom.inputAlbumCoverFile) {
       dom.inputAlbumCoverFile.addEventListener('change', (e) => {
@@ -2438,6 +2970,7 @@
           dom.modalNewAlbum,
           dom.modalAlbumDetail,
           dom.modalPickTrackForAlbum,
+          dom.modalRefreshAlbumEntry,
           dom.modalSaveToProject,
         ].forEach(m => {
           if (m && !m.classList.contains('hidden')) m.classList.add('hidden');

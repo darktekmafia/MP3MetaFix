@@ -43,6 +43,10 @@ def setup_auth_environment(tmp_path, monkeypatch):
     test_storage = ProjectStorageManager(root_dir=tmp_path / "tenants")
     monkeypatch.setattr("backend.projects_api.project_storage_manager", test_storage)
 
+    test_temp_dir = tmp_path / "temp"
+    test_temp_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(storage_manager, "temp_dir", test_temp_dir)
+
     from backend.security import upload_rate_limiter
     login_rate_limiter.failed_attempts.clear()
     login_rate_limiter.blocked_until.clear()
@@ -1431,6 +1435,737 @@ vm.runInNewContext(code, context);
         )
         assert proc.returncode == 0, f"Node harness failed for {js_path.name}:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
         assert "NODE_HARNESS_OK" in proc.stdout
+
+
+def _make_api_wav_bytes(duration_sec: float = 0.4, sample_rate: int = 44100) -> bytes:
+    """Build valid uncompressed mono PCM WAV bytes of the requested duration."""
+    import struct
+    import wave
+
+    num_frames = int(duration_sec * sample_rate)
+    out = io.BytesIO()
+    with wave.open(out, "wb") as wf:
+        wf.setparams((1, 2, sample_rate, 0, "NONE", "not compressed"))
+        wf.writeframes(struct.pack("<h", 0) * num_frames)
+    return out.getvalue()
+
+
+def test_album_entries_take_selection_streaming_and_isolation(client, auth_cookies):
+    """Verify REST album entry CRUD, explicit take vs placeholder, multi-entry from same track, range streaming, and isolation."""
+    wav_master = _make_api_wav_bytes(0.4)
+    wav_alt = _make_api_wav_bytes(0.8)
+    wav_updated = _make_api_wav_bytes(1.1)
+
+    trk_zero = client.post("/api/projects/tracks", json={"title": "Empty Sketch"}, cookies=auth_cookies).json()
+    trk_rec = client.post("/api/projects/tracks", json={"title": "Main Song", "artist": "Synth"}, cookies=auth_cookies).json()
+
+    t_master = client.post(
+        f"/api/projects/tracks/{trk_rec['id']}/takes",
+        data={"label": "Studio Master", "is_master": "true"},
+        files={"file": ("master.wav", wav_master, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    t_alt = client.post(
+        f"/api/projects/tracks/{trk_rec['id']}/takes",
+        data={"label": "Unplugged Alt", "is_master": "false"},
+        files={"file": ("alt.wav", wav_alt, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    album = client.post("/api/projects/albums", json={"title": "Studio Collection"}, cookies=auth_cookies).json()
+    album_id = album["id"]
+
+    # 1. Add 0-take track as placeholder
+    r1 = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"track_id": trk_zero["id"], "take_id": None, "disc_number": 1},
+        cookies=auth_cookies,
+    )
+    assert r1.status_code == 201
+    a1 = r1.json()
+    e_placeholder = a1["tracks"][0]
+    assert e_placeholder["id"].startswith("ale_")
+    assert e_placeholder["is_placeholder"] is True
+    assert e_placeholder["has_owned_audio"] is False
+
+    # 2. Add explicit non-master take -> does NOT alter track master
+    r2 = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"track_id": trk_rec["id"], "take_id": t_alt["id"], "disc_number": 1},
+        cookies=auth_cookies,
+    )
+    assert r2.status_code == 201
+    a2 = r2.json()
+    e_alt = a2["tracks"][1]
+    assert e_alt["take_id"] == t_alt["id"]
+    assert e_alt["is_placeholder"] is False
+    assert e_alt["has_owned_audio"] is True
+    assert e_alt["snapshot"]["source_take_label"] == "Unplugged Alt"
+
+    trk_check = client.get(f"/api/projects/tracks/{trk_rec['id']}", cookies=auth_cookies).json()
+    assert trk_check["track"]["primary_take_id"] == t_master["id"]
+
+    # 3. Add same track again using master take with custom_title
+    r3 = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"track_id": trk_rec["id"], "take_id": t_master["id"], "custom_title": "Main Song (Master Cut)"},
+        cookies=auth_cookies,
+    )
+    assert r3.status_code == 201
+    assert len(r3.json()["tracks"]) == 3
+    assert len({t["id"] for t in r3.json()["tracks"]}) == 3
+
+    # 4. Mutate & delete source t_alt -> album stream, HTTP 206 range, and download still serve wav_alt
+    ingest_edit_sess = storage_manager.create_session("alt_changed.wav", ".wav")
+    with open(ingest_edit_sess[1], "wb") as f:
+        f.write(wav_updated)
+    from backend.security import create_signed_session_token
+    ingest_res = client.post(
+        "/api/projects/ingest-session",
+        json={"track_id": trk_rec["id"], "take_id": t_alt["id"]},
+        cookies={**auth_cookies, SESSION_COOKIE_NAME: create_signed_session_token(ingest_edit_sess[0])},
+    )
+    assert ingest_res.status_code in (200, 201)
+    storage_manager.cleanup_session(ingest_edit_sess[0])
+
+    del_take_res = client.delete(f"/api/projects/tracks/{trk_rec['id']}/takes/{t_alt['id']}", cookies=auth_cookies)
+    assert del_take_res.status_code == 200
+
+    full_stream = client.get(f"/api/projects/albums/{album_id}/entries/{e_alt['id']}/stream", cookies=auth_cookies)
+    assert full_stream.status_code == 200
+    assert full_stream.content == wav_alt
+
+    range_stream = client.get(
+        f"/api/projects/albums/{album_id}/entries/{e_alt['id']}/stream",
+        headers={"Range": "bytes=0-63"},
+        cookies=auth_cookies,
+    )
+    assert range_stream.status_code == 206
+    assert range_stream.content == wav_alt[:64]
+
+    dl_res = client.get(f"/api/projects/albums/{album_id}/entries/{e_alt['id']}/download", cookies=auth_cookies)
+    assert dl_res.status_code == 200
+    assert dl_res.content == wav_alt
+
+    # 5. Clear e_alt to placeholder via PATCH, then delete it via DELETE
+    p_res = client.patch(
+        f"/api/projects/albums/{album_id}/entries/{e_alt['id']}",
+        json={"clear_take_to_placeholder": True},
+        cookies=auth_cookies,
+    )
+    assert p_res.status_code == 200
+    cleared_entry = next(t for t in p_res.json()["tracks"] if t["id"] == e_alt["id"])
+    assert cleared_entry["is_placeholder"] is True
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{e_alt['id']}/stream", cookies=auth_cookies).status_code == 404
+
+    d_res = client.delete(f"/api/projects/albums/{album_id}/entries/{e_alt['id']}", cookies=auth_cookies)
+    assert d_res.status_code == 200
+    assert len(d_res.json()["tracks"]) == 2
+
+
+def test_album_entries_cross_track_and_cross_tenant_rejected(client, setup_auth_environment, auth_cookies):
+    """Reject cross-track take mismatches and cross-tenant track/take/album entry requests."""
+    import uuid
+
+    mgr = setup_auth_environment["manager"]
+    bob_id = str(uuid.uuid4())
+    mgr._save_users(mgr._load_users() + [{
+        "id": bob_id,
+        "username": "bob_album",
+        "password_hash": "pbkdf2_sha256$600000$" + ("0" * 32) + "$" + ("0" * 64),
+        "role": "user",
+        "revocation_epoch": 0,
+    }])
+    bob_cookies = {AUTH_COOKIE_NAME: mgr.issue_token(bob_id)}
+
+    wav_a = _make_api_wav_bytes(0.3)
+    trk_a = client.post("/api/projects/tracks", json={"title": "Track A"}, cookies=auth_cookies).json()
+    trk_b = client.post("/api/projects/tracks", json={"title": "Track B"}, cookies=auth_cookies).json()
+    tak_a = client.post(
+        f"/api/projects/tracks/{trk_a['id']}/takes",
+        data={"label": "Take A"},
+        files={"file": ("a.wav", wav_a, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    tak_b = client.post(
+        f"/api/projects/tracks/{trk_b['id']}/takes",
+        data={"label": "Take B"},
+        files={"file": ("b.wav", wav_a, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    bob_trk = client.post("/api/projects/tracks", json={"title": "Bob Track"}, cookies=bob_cookies).json()
+    bob_tak = client.post(
+        f"/api/projects/tracks/{bob_trk['id']}/takes",
+        data={"label": "Bob Take"},
+        files={"file": ("bob.wav", wav_a, "audio/wav")},
+        cookies=bob_cookies,
+    ).json()
+
+    album = client.post("/api/projects/albums", json={"title": "Admin Isolated LP"}, cookies=auth_cookies).json()
+    album_id = album["id"]
+
+    # Valid entry on Track A
+    ok_res = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"track_id": trk_a["id"], "take_id": tak_a["id"]},
+        cookies=auth_cookies,
+    )
+    assert ok_res.status_code == 201
+    entry_id = ok_res.json()["tracks"][0]["id"]
+
+    # Wrong track for take on POST -> 400
+    bad_post = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"track_id": trk_a["id"], "take_id": tak_b["id"]},
+        cookies=auth_cookies,
+    )
+    assert bad_post.status_code == 400
+
+    # Wrong track for take on PATCH -> 400
+    bad_patch = client.patch(
+        f"/api/projects/albums/{album_id}/entries/{entry_id}",
+        json={"take_id": tak_b["id"]},
+        cookies=auth_cookies,
+    )
+    assert bad_patch.status_code == 400
+
+    # Cross-tenant track/take reference -> 400
+    bad_tenant = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"track_id": bob_trk["id"], "take_id": bob_tak["id"]},
+        cookies=auth_cookies,
+    )
+    assert bad_tenant.status_code == 400
+
+    # Bob cannot access or mutate admin album entry endpoints
+    assert client.post(f"/api/projects/albums/{album_id}/entries", json={"track_id": bob_trk["id"], "take_id": bob_tak["id"]}, cookies=bob_cookies).status_code == 404
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{entry_id}/stream", cookies=bob_cookies).status_code == 404
+    assert client.post(f"/api/projects/albums/{album_id}/finalize", cookies=bob_cookies).status_code == 404
+
+
+def test_album_entry_refresh_api_preview_confirm_and_conflict(client, auth_cookies):
+    """Verify REST source refresh preview diff, 409 conflict on concurrent source change, and confirmed refresh."""
+    wav_1 = _make_api_wav_bytes(0.4)
+    wav_2 = _make_api_wav_bytes(0.7)
+    wav_3 = _make_api_wav_bytes(1.0)
+
+    trk = client.post("/api/projects/tracks", json={"title": "Refresh API Song"}, cookies=auth_cookies).json()
+    tak = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        data={"label": "Take 1", "notes": "Rough mix"},
+        files={"file": ("v1.wav", wav_1, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    client.post(
+        f"/api/projects/tracks/{trk['id']}/takes/{tak['id']}/lyrics",
+        json={"lyrics": "Verse A\nOld Chorus", "format": "lrc"},
+        cookies=auth_cookies,
+    )
+
+    album = client.post("/api/projects/albums", json={"title": "Refresh API LP"}, cookies=auth_cookies).json()
+    album = client.post(
+        f"/api/projects/albums/{album['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tak["id"]},
+        cookies=auth_cookies,
+    ).json()
+    entry_id = album["tracks"][0]["id"]
+
+    # Mutate source take audio & lyrics
+    sess_id, sess_path = storage_manager.create_session("v2.wav", ".wav")
+    with open(sess_path, "wb") as f:
+        f.write(wav_2)
+    client.post(
+        "/api/projects/ingest-session",
+        json={"track_id": trk["id"], "take_id": tak["id"], "notes": "Refined mix"},
+        cookies={**auth_cookies, SESSION_COOKIE_NAME: create_signed_session_token(sess_id)},
+    )
+    storage_manager.cleanup_session(sess_id)
+    client.post(
+        f"/api/projects/tracks/{trk['id']}/takes/{tak['id']}/lyrics",
+        json={"lyrics": "Verse A\nNew Chorus", "format": "lrc"},
+        cookies=auth_cookies,
+    )
+
+    prev_res = client.get(f"/api/projects/albums/{album['id']}/entries/{entry_id}/refresh-preview", cookies=auth_cookies)
+    assert prev_res.status_code == 200
+    preview = prev_res.json()
+    assert preview["source_available"] is True
+    assert preview["has_changes"] is True
+    assert preview["audio_changed"] is True
+    assert preview["lyrics_changed"] is True
+    assert "+New Chorus" in preview["lyrics_diff"]
+    assert preview["album_audio_stream_url"].endswith(f"/entries/{entry_id}/stream")
+    assert preview["source_audio_stream_url"].endswith(f"/takes/{tak['id']}/stream")
+
+    # Mutate source again after preview -> 409 Conflict
+    sess2_id, sess2_path = storage_manager.create_session("v3.wav", ".wav")
+    with open(sess2_path, "wb") as f:
+        f.write(wav_3)
+    client.post(
+        "/api/projects/ingest-session",
+        json={"track_id": trk["id"], "take_id": tak["id"]},
+        cookies={**auth_cookies, SESSION_COOKIE_NAME: create_signed_session_token(sess2_id)},
+    )
+    storage_manager.cleanup_session(sess2_id)
+
+    conflict_res = client.post(
+        f"/api/projects/albums/{album['id']}/entries/{entry_id}/refresh",
+        json={
+            "expected_source_revision": preview["expected_source_revision"],
+            "expected_source_audio_sha256": preview["expected_source_audio_sha256"],
+            "expected_source_updated_at": preview["expected_source_updated_at"],
+        },
+        cookies=auth_cookies,
+    )
+    assert conflict_res.status_code == 409
+    assert client.get(f"/api/projects/albums/{album['id']}/entries/{entry_id}/download", cookies=auth_cookies).content == wav_1
+
+    # Fresh preview & confirm succeeds
+    fresh = client.get(f"/api/projects/albums/{album['id']}/entries/{entry_id}/refresh-preview", cookies=auth_cookies).json()
+    ok_refresh = client.post(
+        f"/api/projects/albums/{album['id']}/entries/{entry_id}/refresh",
+        json={
+            "expected_source_revision": fresh["expected_source_revision"],
+            "expected_source_audio_sha256": fresh["expected_source_audio_sha256"],
+            "expected_source_updated_at": fresh["expected_source_updated_at"],
+        },
+        cookies=auth_cookies,
+    )
+    assert ok_refresh.status_code == 200
+    assert client.get(f"/api/projects/albums/{album['id']}/entries/{entry_id}/download", cookies=auth_cookies).content == wav_3
+
+
+def test_album_finalization_api_validation_and_lock_enforcement(client, auth_cookies):
+    """Verify REST finalization validation errors and strict 409 immutability enforcement."""
+    # Creating an album directly as completed is rejected
+    bad_create = client.post(
+        "/api/projects/albums",
+        json={"title": "Premature Release", "status": "completed"},
+        cookies=auth_cookies,
+    )
+    assert bad_create.status_code == 400
+
+    wav_ok = _make_api_wav_bytes(0.5)
+    trk = client.post("/api/projects/tracks", json={"title": "Release Track"}, cookies=auth_cookies).json()
+    tak = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        data={"label": "Master Wav"},
+        files={"file": ("rel.wav", wav_ok, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    album = client.post("/api/projects/albums", json={"title": "Final LP"}, cookies=auth_cookies).json()
+    album_id = album["id"]
+
+    # Add placeholder -> finalize fails 400 with structured error list
+    add_ph = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"track_id": trk["id"], "take_id": None},
+        cookies=auth_cookies,
+    ).json()
+    entry_id = add_ph["tracks"][0]["id"]
+
+    fail_fin = client.post(f"/api/projects/albums/{album_id}/finalize", cookies=auth_cookies)
+    assert fail_fin.status_code == 400
+    detail = fail_fin.json()["detail"]
+    assert isinstance(detail, dict) and len(detail.get("errors", [])) >= 1
+
+    # Assign real take -> finalize succeeds
+    assign_res = client.patch(
+        f"/api/projects/albums/{album_id}/entries/{entry_id}",
+        json={"take_id": tak["id"]},
+        cookies=auth_cookies,
+    )
+    assert assign_res.status_code == 200
+
+    fin_res = client.post(f"/api/projects/albums/{album_id}/finalize", cookies=auth_cookies)
+    assert fin_res.status_code == 200
+    fin_album = fin_res.json()
+    assert fin_album["is_finalized"] is True
+    assert fin_album["status"] == "completed"
+    assert fin_album["finalized_at"] is not None
+
+    # All prohibited mutating / refresh routes return 409 Conflict
+    assert client.patch(f"/api/projects/albums/{album_id}", json={"title": "Edited"}, cookies=auth_cookies).status_code == 409
+    assert client.post(
+        f"/api/projects/albums/{album_id}/artwork",
+        files={"file": ("cover.jpg", VALID_JPEG_BYTES, "image/jpeg")},
+        cookies=auth_cookies,
+    ).status_code == 409
+    assert client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"track_id": trk["id"], "take_id": tak["id"]},
+        cookies=auth_cookies,
+    ).status_code == 409
+    assert client.patch(
+        f"/api/projects/albums/{album_id}/entries/{entry_id}",
+        json={"clear_take_to_placeholder": True},
+        cookies=auth_cookies,
+    ).status_code == 409
+    assert client.delete(f"/api/projects/albums/{album_id}/entries/{entry_id}", cookies=auth_cookies).status_code == 409
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{entry_id}/refresh-preview", cookies=auth_cookies).status_code == 409
+    assert client.post(
+        f"/api/projects/albums/{album_id}/entries/{entry_id}/refresh",
+        json={"expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
+        cookies=auth_cookies,
+    ).status_code == 409
+    assert client.post(f"/api/projects/albums/{album_id}/finalize", cookies=auth_cookies).status_code == 409
+
+    # Read-only download & stream still work
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{entry_id}/stream", cookies=auth_cookies).status_code == 200
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{entry_id}/download", cookies=auth_cookies).status_code == 200
+
+
+def test_frontend_album_track_take_selection_and_sequencer_behavior():
+    """Execute frontend/js/projects.js in Node VM to verify nested Track/Take selection, Change Take, and finalized locks."""
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node_bin = shutil.which("node")
+    assert node_bin is not None, "node is required to execute frontend behavior tests"
+
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+
+    harness = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
+
+const elements = {};
+function collectText(el) {
+  let out = el.textContent || '';
+  if (Array.isArray(el.children)) {
+    for (const c of el.children) out += ' ' + collectText(c);
+  }
+  return out;
+}
+function matchSimple(el, sel) {
+  if (sel === 'input[name="pickAlbumTakeId"]:checked') {
+    return el.tagName === 'INPUT' && el.name === 'pickAlbumTakeId' && !!el.checked;
+  }
+  if (sel === 'input[name="pickAlbumTakeId"]') {
+    return el.tagName === 'INPUT' && el.name === 'pickAlbumTakeId';
+  }
+  if (sel === 'button') return el.tagName === 'BUTTON';
+  if (sel === 'tr') return el.tagName === 'TR';
+  if (sel === 'option') return el.tagName === 'OPTION';
+  if (sel === 'a') return el.tagName === 'A';
+  return false;
+}
+function findAll(root, sel, out = []) {
+  for (const c of (root.children || [])) {
+    if (matchSimple(c, sel)) out.push(c);
+    findAll(c, sel, out);
+  }
+  return out;
+}
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set();
+  const el = {
+    id,
+    tagName: tag.toUpperCase(),
+    value: '',
+    name: '',
+    type: '',
+    textContent: '',
+    checked: false,
+    disabled: false,
+    files: [],
+    listeners,
+    dataset: {},
+    style: {},
+    children: [],
+    _innerHTML: '',
+    classList: {
+      add: (c) => classSet.add(c),
+      remove: (c) => classSet.delete(c),
+      contains: (c) => classSet.has(c),
+      toggle: (c, force) => {
+        if (force === true) classSet.add(c);
+        else if (force === false) classSet.delete(c);
+        else if (classSet.has(c)) classSet.delete(c);
+        else classSet.add(c);
+      },
+    },
+    set innerHTML(val) {
+      this._innerHTML = val;
+      if (val === '' || (typeof val === 'string' && val.startsWith('<option'))) {
+        this.children = [];
+      }
+    },
+    get innerHTML() {
+      return this._innerHTML;
+    },
+    addEventListener: (ev, fn) => {
+      if (!listeners[ev]) listeners[ev] = [];
+      listeners[ev].push(fn);
+    },
+    dispatchEvent: async (ev) => {
+      if (!ev.target) ev.target = el;
+      const fns = listeners[ev.type] || [];
+      for (const fn of fns) {
+        await fn(ev);
+      }
+    },
+    setAttribute: () => {},
+    appendChild: (child) => {
+      el.children.push(child);
+      if (tag.toUpperCase() === 'SELECT' && child.tagName === 'OPTION' && !el.value) {
+        el.value = child.value;
+      }
+      return child;
+    },
+    querySelector: (sel) => findAll(el, sel)[0] || null,
+    querySelectorAll: (sel) => findAll(el, sel),
+    reset: () => {},
+  };
+  return el;
+}
+
+const getEl = (id) => {
+  if (!elements[id]) elements[id] = makeEl(id);
+  return elements[id];
+};
+
+const docListeners = {};
+const toasts = [];
+const fetchCalls = [];
+
+let mockAlbum = {
+  id: 'alb_demo01',
+  title: 'Test LP',
+  album_artist: 'Artist',
+  status: 'draft',
+  is_finalized: false,
+  revision: 1,
+  revisions: [],
+  has_cover: false,
+  tracks: [
+    {
+      id: 'ale_existing01',
+      track_number: 1,
+      disc_number: 1,
+      track_id: 'trk_multi',
+      take_id: 'tak_2',
+      is_placeholder: false,
+      has_owned_audio: true,
+      snapshot: { source_track_title: 'Multi Song', source_take_label: 'Master Cut', format: 'wav', duration_seconds: 125, source_take_revision: 1 },
+    },
+  ],
+};
+
+const context = {
+  console,
+  setTimeout,
+  clearTimeout,
+  Set,
+  Map,
+  Number,
+  Date,
+  CustomEvent: class CustomEvent { constructor(n, o) { this.type = n; this.detail = o && o.detail; } },
+  FormData: class FormData { constructor() { this.fields = []; } append(k, v) { this.fields.push([k, v]); } },
+  sessionStorage: { _s: {}, getItem(k) { return this._s[k] || null; }, setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } },
+  document: {
+    getElementById: getEl,
+    createElement(tag) { return makeEl('', tag); },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: (ev, fn) => {
+      if (!docListeners[ev]) docListeners[ev] = [];
+      docListeners[ev].push(fn);
+    },
+  },
+  window: {
+    MP3MetaFixMaxUploadSizeMb: 150,
+    showToast: (msg, type) => toasts.push({ msg, type }),
+    addEventListener: () => {},
+    dispatchEvent: () => {},
+  },
+  confirm: () => true,
+  fetch: async (url, opts) => {
+    fetchCalls.push({ url, opts });
+    if (url === '/api/projects/tracks') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ([
+          { id: 'trk_empty', title: 'Empty Idea', artist: 'Writer', status: 'draft', takes_count: 0 },
+          { id: 'trk_multi', title: 'Multi Song', artist: 'Writer', status: 'draft', takes_count: 2 },
+        ]),
+      };
+    }
+    if (url === '/api/projects/tracks/trk_multi') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          track: { id: 'trk_multi', title: 'Multi Song', primary_take_id: 'tak_2' },
+          takes: [
+            { id: 'tak_1', label: 'Acoustic Alt', format: 'wav', size_bytes: 2048, duration_seconds: 90, revision: 1, is_master: false },
+            { id: 'tak_2', label: 'Master Cut', format: 'wav', size_bytes: 4096, duration_seconds: 125, revision: 2, is_master: true },
+          ],
+        }),
+      };
+    }
+    if (url === '/api/projects/tracks/trk_empty') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          track: { id: 'trk_empty', title: 'Empty Idea', primary_take_id: null },
+          takes: [],
+        }),
+      };
+    }
+    if (url === '/api/projects/albums') {
+      return { ok: true, status: 200, json: async () => ([mockAlbum]) };
+    }
+    if (url === '/api/projects/albums/alb_demo01' && (!opts || opts.method === 'GET' || !opts.method)) {
+      return { ok: true, status: 200, json: async () => mockAlbum };
+    }
+    if (url === '/api/projects/albums/alb_demo01/entries' && opts && opts.method === 'POST') {
+      const body = JSON.parse(opts.body);
+      const nextEntry = {
+        id: 'ale_added_' + (mockAlbum.tracks.length + 1),
+        track_number: mockAlbum.tracks.length + 1,
+        disc_number: 1,
+        track_id: body.track_id,
+        take_id: body.take_id,
+        is_placeholder: body.take_id === null,
+        has_owned_audio: body.take_id !== null,
+        snapshot: body.take_id ? { source_track_title: 'Multi Song', source_take_label: 'Acoustic Alt', format: 'wav', source_take_revision: 1 } : null,
+      };
+      mockAlbum = { ...mockAlbum, revision: mockAlbum.revision + 1, tracks: [...mockAlbum.tracks, nextEntry] };
+      return { ok: true, status: 201, json: async () => mockAlbum };
+    }
+    if (url === '/api/projects/albums/alb_demo01/entries/ale_existing01' && opts && opts.method === 'PATCH') {
+      const body = JSON.parse(opts.body);
+      mockAlbum = {
+        ...mockAlbum,
+        revision: mockAlbum.revision + 1,
+        tracks: mockAlbum.tracks.map(t => t.id === 'ale_existing01' ? { ...t, take_id: body.take_id, is_placeholder: body.take_id === null } : t),
+      };
+      return { ok: true, status: 200, json: async () => mockAlbum };
+    }
+    if (url === '/api/storage/quota') {
+      return { ok: true, status: 200, json: async () => ({ used_bytes: 0, limit_bytes: 1000, usage_percent: 0 }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+};
+context.window.window = context.window;
+
+vm.runInNewContext(code, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  await new Promise(r => setTimeout(r, 20));
+  // Open Album Detail modal via album card's inspect button
+  const albumCardButtons = getEl('albumsGridContainer').querySelectorAll('button');
+  if (albumCardButtons.length === 0) throw new Error('Album card inspect button missing');
+  await albumCardButtons[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+
+  // Sequencer should display existing take badge & Change Take button
+  const seqText = collectText(getEl('albumSequencerTbody'));
+  if (!seqText.includes('Master Cut') || !seqText.includes('Owned Copy')) {
+    throw new Error('Sequencer missing take pill details: ' + seqText);
+  }
+
+  // Click "+ Add Track"
+  await getEl('btnAddTrackToSequencer').listeners['click'][0]();
+  const trackOptions = getEl('selectPickTrack').querySelectorAll('option').map(o => o.value);
+  if (!trackOptions.includes('trk_multi') || !trackOptions.includes('trk_empty')) {
+    throw new Error('Pick track dropdown must include already-added and 0-take tracks: ' + JSON.stringify(trackOptions));
+  }
+
+  // Select trk_multi -> loads takes, preselects master (tak_2) with master badge
+  getEl('selectPickTrack').value = 'trk_multi';
+  await getEl('selectPickTrack').dispatchEvent({ type: 'change' });
+  await new Promise(r => setTimeout(r, 20));
+  const radios = getEl('pickTrackTakesList').querySelectorAll('input[name="pickAlbumTakeId"]');
+  if (radios.length !== 3) throw new Error('Expected 2 takes + placeholder radio, got ' + radios.length);
+  const checkedRadio = getEl('pickTrackTakesList').querySelector('input[name="pickAlbumTakeId"]:checked');
+  if (!checkedRadio || checkedRadio.value !== 'tak_2') {
+    throw new Error('Expected master tak_2 preselected by default');
+  }
+  if (!collectText(getEl('pickTrackTakesList')).includes('MASTER')) {
+    throw new Error('Expected ★ MASTER badge in takes list');
+  }
+
+  // Switch selection to non-master tak_1 and confirm
+  radios.forEach(r => { r.checked = (r.value === 'tak_1'); });
+  await getEl('btnConfirmAddTrackToAlbum').listeners['click'][0]();
+  const addNonMaster = fetchCalls.find(c => c.url === '/api/projects/albums/alb_demo01/entries' && c.opts && c.opts.method === 'POST' && JSON.parse(c.opts.body).take_id === 'tak_1');
+  if (!addNonMaster) throw new Error('Expected POST /entries with non-master tak_1');
+  if (fetchCalls.some(c => c.url.includes('set-master'))) {
+    throw new Error('Selecting non-master take must NEVER mutate track workspace master!');
+  }
+
+  // Select 0-take trk_empty -> placeholder auto-checked and submitted as take_id: null
+  await getEl('btnAddTrackToSequencer').listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 10));
+  getEl('selectPickTrack').value = 'trk_empty';
+  await getEl('selectPickTrack').dispatchEvent({ type: 'change' });
+  await new Promise(r => setTimeout(r, 20));
+  await getEl('btnConfirmAddTrackToAlbum').listeners['click'][0]();
+  const addPlaceholder = fetchCalls.find(c => c.url === '/api/projects/albums/alb_demo01/entries' && c.opts && c.opts.method === 'POST' && JSON.parse(c.opts.body).track_id === 'trk_empty' && JSON.parse(c.opts.body).take_id === null);
+  if (!addPlaceholder) throw new Error('Expected POST /entries with take_id: null for 0-take track');
+  if (!collectText(getEl('albumSequencerTbody')).includes('Placeholder')) {
+    throw new Error('Expected sequencer to render Placeholder badge');
+  }
+
+  // Click "Take" (Change Selected Take) on first row and change tak_2 -> tak_1
+  const firstRowButtons = getEl('albumSequencerTbody').children[0].querySelectorAll('button');
+  const changeBtn = firstRowButtons.find(b => b.textContent === 'Take');
+  if (!changeBtn) throw new Error('Change Take button missing in sequencer row');
+  await changeBtn.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (!getEl('selectPickTrack').disabled) throw new Error('selectPickTrack should be disabled in Change Take mode');
+  const editRadios = getEl('pickTrackTakesList').querySelectorAll('input[name="pickAlbumTakeId"]');
+  editRadios.forEach(r => { r.checked = (r.value === 'tak_1'); });
+  await getEl('btnConfirmAddTrackToAlbum').listeners['click'][0]();
+  const patchEntry = fetchCalls.find(c => c.url === '/api/projects/albums/alb_demo01/entries/ale_existing01' && c.opts && c.opts.method === 'PATCH');
+  if (!patchEntry || JSON.parse(patchEntry.opts.body).take_id !== 'tak_1') {
+    throw new Error('Expected PATCH /entries/ale_existing01 with tak_1');
+  }
+
+  // Simulate opening a finalized album -> controls locked
+  mockAlbum = { ...mockAlbum, is_finalized: true, status: 'completed' };
+  await albumCardButtons[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (!getEl('btnSaveAlbumDetails').disabled || !getEl('btnAddTrackToSequencer').disabled || !getEl('btnFinalizeAlbum').disabled) {
+    throw new Error('Expected finalized album save/add/finalize buttons disabled');
+  }
+  if (getEl('albumDetailFinalizedBadge').classList.contains('hidden')) {
+    throw new Error('Expected albumDetailFinalizedBadge visible once finalized');
+  }
+  const finalizedRowBtns = getEl('albumSequencerTbody').children[0].querySelectorAll('button');
+  if (finalizedRowBtns.length > 0) {
+    throw new Error('Finalized album sequencer must not render mutating buttons');
+  }
+  console.log('NODE_ALBUM_VM_OK');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    env = os.environ.copy()
+    env["TARGET_JS_PATH"] = str(projects_js_path)
+    proc = subprocess.run(
+        [node_bin, "-e", harness],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert proc.returncode == 0, f"Node Album VM test failed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+    assert "NODE_ALBUM_VM_OK" in proc.stdout
+
 
 
 
