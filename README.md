@@ -1,5 +1,38 @@
 # MP3MetaFix 🎵
 
+---
+
+## ⚠️ DEVELOPMENT BRANCH — CRITICAL DATA SAFETY WARNING
+
+**November 16, 2026 — Development build `5e79f16`**
+
+An independent code audit has identified critical data-integrity defects in the new Album/Take functionality.
+
+**DO NOT upgrade an installation containing important or irreplaceable data to the current development build.**
+
+This includes installations using the documented `--upgrade -- dev` update procedure.
+
+Potential problems include:
+
+- Loss of access to album-owned recordings during failed replacement operations.
+- Unsafe behavior when album operations overlap.
+- Unintended removal of album-owned recordings through certain sequencing operations.
+- Deletion of finalized albums despite their intended protection.
+
+**If you have already updated:**
+
+1. Back up your complete MP3MetaFix data directory before making further changes.
+2. Avoid modifying, reordering, replacing recordings in, finalizing, or deleting Albums until corrective updates are available.
+3. Do not assume downgrading the application will restore data affected by these issues.
+
+These defects were identified through code review. **No actual user data-loss incident has been confirmed.**
+
+Corrective development is planned. This warning will remain until the identified data-integrity issues have been addressed and independently reviewed.
+
+**This warning concerns the development branch. It does not establish that other branches or releases are affected.**
+
+---
+
 [![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](VERSION)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%28Fedora%20%7C%20Ubuntu%20%7C%20Debian%20%7C%20LXC%29-purple.svg)](#)
