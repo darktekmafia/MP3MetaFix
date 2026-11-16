@@ -787,32 +787,6 @@ async def ingest_session(
                 is_master=payload.is_master,
                 change_summary=payload.notes,
             )
-
-            # Synchronize parent track workspace tags and increment revision
-            track_updates = {}
-            if tags.get("title") and tags.get("title") != existing_track.title:
-                track_updates["title"] = tags.get("title")
-            if tags.get("artist") and tags.get("artist") != existing_track.artist:
-                track_updates["artist"] = tags.get("artist")
-            if bpm_val is not None and bpm_val != existing_track.bpm:
-                track_updates["bpm"] = bpm_val
-            if key_tag and key_tag != existing_track.musical_key:
-                track_updates["musical_key"] = key_tag
-            if tags.get("lyrics") and tags.get("lyrics") != existing_track.master_lyrics:
-                track_updates["master_lyrics"] = tags.get("lyrics")
-            if payload.notes and payload.notes != existing_track.notes:
-                track_updates["notes"] = payload.notes
-            if payload.is_master:
-                track_updates["primary_take_id"] = payload.take_id
-
-            summary = payload.notes or f"Updated {take.label}"
-            project_storage_manager.update_track(
-                user_id=user["id"],
-                track_id=payload.track_id,
-                updates=track_updates,
-                change_summary=summary,
-            )
-
             return take
         except ProjectStorageQuotaExceeded as e:
             raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
@@ -849,31 +823,6 @@ async def ingest_session(
             notes=payload.notes,
             is_master=payload.is_master,
         )
-
-        if payload.track_id:
-            # Sync parent track workspace metadata
-            track_updates = {}
-            if tags.get("title") and tags.get("title") != existing_track.title:
-                track_updates["title"] = tags.get("title")
-            if tags.get("artist") and tags.get("artist") != existing_track.artist:
-                track_updates["artist"] = tags.get("artist")
-            if bpm_val is not None and bpm_val != existing_track.bpm:
-                track_updates["bpm"] = bpm_val
-            if key_tag and key_tag != existing_track.musical_key:
-                track_updates["musical_key"] = key_tag
-            if tags.get("lyrics") and tags.get("lyrics") != existing_track.master_lyrics:
-                track_updates["master_lyrics"] = tags.get("lyrics")
-            if payload.is_master:
-                track_updates["primary_take_id"] = take.id
-
-            summary = payload.notes or f"Added take: {take.label}"
-            project_storage_manager.update_track(
-                user_id=user["id"],
-                track_id=target_track_id,
-                updates=track_updates,
-                change_summary=summary,
-            )
-
         return take
     except ProjectStorageQuotaExceeded as e:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
@@ -888,6 +837,7 @@ async def load_take_into_session(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Load a persistent take from storage into an active editing session."""
+    track = project_storage_manager.get_track(user["id"], track_id)
     take = project_storage_manager.get_take(user["id"], track_id, take_id)
     audio_path = project_storage_manager.get_take_audio_path(user["id"], track_id, take_id)
     if not take or not audio_path or not audio_path.is_file():
@@ -907,6 +857,18 @@ async def load_take_into_session(
             with open(lfile, "w", encoding="utf-8") as f:
                 f.write(lyrics_txt)
 
+    loaded_take_ref = {
+        "track_id": track_id,
+        "take_id": take_id,
+        "track_title": track.title if track else "Workspace Track",
+        "take_label": take.label,
+        "filename": take.filename,
+    }
+    storage_manager.update_session_info(
+        session_id,
+        {"loaded_project_take": loaded_take_ref},
+    )
+
     token = create_signed_session_token(session_id)
     is_https = (request.url.scheme == "https")
     response.set_cookie(
@@ -925,4 +887,5 @@ async def load_take_into_session(
         "label": take.label,
         "track_id": track_id,
         "take_id": take_id,
+        "loaded_project_take": loaded_take_ref,
     }

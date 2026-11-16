@@ -460,3 +460,204 @@ def test_album_revision_tracking(custom_storage):
     assert refetched.revisions[2].change_summary == "Updated album cover artwork"
     assert refetched.revisions[2].changed_fields == ["cover_art"]
 
+
+def test_first_take_auto_master_and_single_track_revision(custom_storage):
+    """Verify the first take auto-sets is_master=True, primary_take_id, and records one track revision."""
+    user_id = "user_first_take"
+    track = custom_storage.create_track(user_id=user_id, title="First Take Song")
+    assert track.revision == 1
+    assert track.primary_take_id is None
+
+    take1 = custom_storage.create_take(
+        user_id=user_id,
+        track_id=track.id,
+        audio_bytes=b"FIRST_TAKE_AUDIO",
+        original_filename="first.mp3",
+        extension=".mp3",
+        label="Take 1",
+        is_master=False,  # Even if False, first take becomes master
+    )
+    assert take1.is_master is True
+
+    refetched_take = custom_storage.get_take(user_id, track.id, take1.id)
+    assert refetched_take.is_master is True
+
+    updated_track = custom_storage.get_track(user_id, track.id)
+    assert updated_track.primary_take_id == take1.id
+    assert updated_track.revision == 2
+    assert len(updated_track.revisions) == 2
+    assert set(updated_track.revisions[-1].changed_fields) == {"takes", "primary_take_id"}
+
+
+def test_exclusive_master_invariant_across_all_operations(custom_storage):
+    """Verify at most one take is_master=True and primary_take_id stays synced across all mutations."""
+    user_id = "user_master_inv"
+    track = custom_storage.create_track(user_id=user_id, title="Master Invariant Track")
+
+    audio_1 = b"AUDIO_TAKE_ONE_BYTES"
+    audio_2 = b"AUDIO_TAKE_TWO_BYTES"
+    audio_3 = b"AUDIO_TAKE_THREE_BYTES"
+
+    t1 = custom_storage.create_take(user_id, track.id, audio_1, "t1.mp3", ".mp3", label="T1", is_master=False)
+    t2 = custom_storage.create_take(user_id, track.id, audio_2, "t2.mp3", ".mp3", label="T2", is_master=False)
+    t3 = custom_storage.create_take(user_id, track.id, audio_3, "t3.mp3", ".mp3", label="T3", is_master=False)
+
+    def _assert_master(expected_master_id):
+        trk = custom_storage.get_track(user_id, track.id)
+        takes = custom_storage.list_takes(user_id, track.id)
+        masters = [t.id for t in takes if t.is_master]
+        assert trk.primary_take_id == expected_master_id
+        if expected_master_id is None:
+            assert masters == []
+        else:
+            assert masters == [expected_master_id]
+
+    # Initially t1 is master
+    _assert_master(t1.id)
+
+    # Cannot un-master the active master via update_take(is_master=False)
+    custom_storage.update_take(user_id, track.id, t1.id, {"is_master": False})
+    _assert_master(t1.id)
+
+    # Switch master to t2 via update_take
+    custom_storage.update_take(user_id, track.id, t2.id, {"is_master": True})
+    _assert_master(t2.id)
+
+    # Switch master to t3 via update_track(primary_take_id=t3.id)
+    custom_storage.update_track(user_id, track.id, {"primary_take_id": t3.id})
+    _assert_master(t3.id)
+
+    # Switch master back to t1 via update_take_audio(is_master=True) with updated bytes
+    audio_1_v2 = b"AUDIO_TAKE_ONE_UPDATED"
+    custom_storage.update_take_audio(user_id, track.id, t1.id, audio_1_v2, extension=".mp3", is_master=True)
+    _assert_master(t1.id)
+
+    # Verify sibling takes' audio bytes were never modified by master transitions
+    assert custom_storage.get_take_audio_path(user_id, track.id, t2.id).read_bytes() == audio_2
+    assert custom_storage.get_take_audio_path(user_id, track.id, t3.id).read_bytes() == audio_3
+
+    # Delete current master t1 -> promotes latest remaining take (t3)
+    assert custom_storage.delete_take(user_id, track.id, t1.id) is True
+    _assert_master(t3.id)
+
+    # Delete remaining master t3 -> promotes t2
+    assert custom_storage.delete_take(user_id, track.id, t3.id) is True
+    _assert_master(t2.id)
+
+    # Delete final take t2 -> clears primary_take_id to None
+    assert custom_storage.delete_take(user_id, track.id, t2.id) is True
+    _assert_master(None)
+
+
+def test_track_revision_semantics_ignore_routine_take_edits(custom_storage):
+    """Verify routine take note/label/lyrics/audio edits do not create parent track revisions."""
+    user_id = "user_rev_semantics"
+    track = custom_storage.create_track(user_id=user_id, title="Revision Semantics Track")
+    assert track.revision == 1
+
+    # Add take 1 (auto master) -> track revision 2
+    t1 = custom_storage.create_take(user_id, track.id, b"A1", "a1.mp3", ".mp3", label="Take 1")
+    assert custom_storage.get_track(user_id, track.id).revision == 2
+
+    # Add take 2 (non-master) -> track revision 3 (changed_fields == ["takes"])
+    t2 = custom_storage.create_take(user_id, track.id, b"A2", "a2.mp3", ".mp3", label="Take 2", is_master=False)
+    trk_3 = custom_storage.get_track(user_id, track.id)
+    assert trk_3.revision == 3
+    assert trk_3.revisions[-1].changed_fields == ["takes"]
+
+    # Routine take note + label edit -> take revision bumps, track revision unchanged (still 3)
+    t2_edited = custom_storage.update_take(user_id, track.id, t2.id, {"label": "Take 2 Renamed", "notes": "Better eq"})
+    assert t2_edited.revision == 2
+    assert custom_storage.get_track(user_id, track.id).revision == 3
+
+    # Take lyrics edit -> track revision unchanged (still 3)
+    assert custom_storage.save_take_lyrics(user_id, track.id, t2.id, "[00:01.00]Hello", LyricsFormat.LRC) is True
+    assert custom_storage.get_track(user_id, track.id).revision == 3
+
+    # Update take 2 audio without changing master -> take revision bumps, track revision unchanged (still 3)
+    t2_audio = custom_storage.update_take_audio(user_id, track.id, t2.id, b"A2_NEW", extension=".mp3", is_master=False)
+    assert t2_audio.revision == 4  # 1 init + 1 notes/label + 1 lyrics_format + 1 audio
+    assert custom_storage.get_track(user_id, track.id).revision == 3
+
+    # Promote take 2 to master -> track revision bumps to 4 with ["primary_take_id"]
+    custom_storage.update_take(user_id, track.id, t2.id, {"is_master": True})
+    trk_4 = custom_storage.get_track(user_id, track.id)
+    assert trk_4.revision == 4
+    assert trk_4.primary_take_id == t2.id
+    assert trk_4.revisions[-1].changed_fields == ["primary_take_id"]
+
+    # Remove non-master take 1 -> track revision bumps to 5 with ["takes"]
+    assert custom_storage.delete_take(user_id, track.id, t1.id) is True
+    trk_5 = custom_storage.get_track(user_id, track.id)
+    assert trk_5.revision == 5
+    assert trk_5.revisions[-1].changed_fields == ["takes"]
+
+
+def _make_pcm_wav_bytes(duration_sec: float = 0.5, sample_rate: int = 44100) -> bytes:
+    """Build valid uncompressed mono PCM WAV bytes of the requested duration."""
+    import io
+    import wave
+    import struct
+    num_frames = int(duration_sec * sample_rate)
+    out = io.BytesIO()
+    with wave.open(out, "wb") as wf:
+        wf.setparams((1, 2, sample_rate, 0, "NONE", "not compressed"))
+        wf.writeframes(struct.pack("<h", 0) * num_frames)
+    return out.getvalue()
+
+
+def test_direct_take_creation_probes_duration_and_preserves_existing_takes(custom_storage):
+    """Verify create_take & update_take_audio probe duration_seconds and isolate sibling audio files."""
+    user_id = "user_duration_probe"
+    track = custom_storage.create_track(user_id=user_id, title="Duration Track")
+
+    wav_half = _make_pcm_wav_bytes(0.5)
+    wav_one = _make_pcm_wav_bytes(1.0)
+    wav_two = _make_pcm_wav_bytes(2.0)
+
+    # First take auto-mastered with probed 0.5s duration
+    t1 = custom_storage.create_take(
+        user_id=user_id,
+        track_id=track.id,
+        audio_bytes=wav_half,
+        original_filename="half_sec.wav",
+        extension=".wav",
+        label="Half Sec",
+        is_master=False,
+    )
+    assert t1.duration_seconds == pytest.approx(0.5, abs=0.02)
+    assert t1.is_master is True
+
+    # Second non-master take gets 1.0s duration, does not alter t1 audio or master flag
+    t2 = custom_storage.create_take(
+        user_id=user_id,
+        track_id=track.id,
+        audio_bytes=wav_one,
+        original_filename="one_sec.wav",
+        extension=".wav",
+        label="One Sec",
+        is_master=False,
+    )
+    assert t2.duration_seconds == pytest.approx(1.0, abs=0.02)
+    assert t2.is_master is False
+    assert custom_storage.get_track(user_id, track.id).primary_take_id == t1.id
+    assert custom_storage.get_take_audio_path(user_id, track.id, t1.id).read_bytes() == wav_half
+    assert custom_storage.get_take_audio_path(user_id, track.id, t2.id).read_bytes() == wav_one
+
+    # Replace t2 audio with 2.0s WAV -> duration_seconds updates to 2.0
+    t2_updated = custom_storage.update_take_audio(
+        user_id=user_id,
+        track_id=track.id,
+        take_id=t2.id,
+        audio_bytes=wav_two,
+        extension=".wav",
+        is_master=True,
+    )
+    assert t2_updated.duration_seconds == pytest.approx(2.0, abs=0.02)
+    assert t2_updated.is_master is True
+    assert custom_storage.get_take(user_id, track.id, t1.id).is_master is False
+    assert custom_storage.get_track(user_id, track.id).primary_take_id == t2.id
+    assert custom_storage.get_take_audio_path(user_id, track.id, t1.id).read_bytes() == wav_half
+
+
+

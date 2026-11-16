@@ -762,13 +762,18 @@ def test_revision_tracking_api(client, auth_cookies):
 
 
 def test_ingest_session_updates_track_revision(client, auth_cookies):
-    """Verify that updating a take from the editor increments both the take and track revisions."""
-    # Create Track
-    res = client.post("/api/projects/tracks", json={"title": "Ingest Rev Track"}, cookies=auth_cookies)
+    """Verify revision semantics on ingest-session without overwriting parent track metadata."""
+    # Create Track with populated notes
+    res = client.post(
+        "/api/projects/tracks",
+        json={"title": "Ingest Rev Track", "artist": "Original Artist", "notes": "Original workspace notes"},
+        cookies=auth_cookies,
+    )
     assert res.status_code == 201
     track_id = res.json()["id"]
+    assert res.json()["revision"] == 1
 
-    # Upload Take
+    # Upload Take 1 (first take becomes master and bumps track revision to 2)
     files = {"file": ("song.mp3", io.BytesIO(VALID_MP3_HEADER), "audio/mpeg")}
     res = client.post(
         f"/api/projects/tracks/{track_id}/takes",
@@ -776,16 +781,19 @@ def test_ingest_session_updates_track_revision(client, auth_cookies):
         data={"label": "Take 1"},
         cookies=auth_cookies,
     )
+    assert res.status_code == 201
     take_id = res.json()["id"]
+    assert res.json()["is_master"] is True
 
     # Load take into session
     res_load = client.post(
         f"/api/projects/tracks/{track_id}/takes/{take_id}/load-session",
         cookies=auth_cookies,
     )
+    assert res_load.status_code == 200
     session_cookie = res_load.cookies[SESSION_COOKIE_NAME]
 
-    # Ingest session with Update Take mode and revision notes
+    # Ingest session with Update Take mode when Take 1 is already master
     res_ingest = client.post(
         "/api/projects/ingest-session",
         json={
@@ -801,16 +809,629 @@ def test_ingest_session_updates_track_revision(client, auth_cookies):
     updated_take = res_ingest.json()
     assert updated_take["revision"] == 2
     assert updated_take["revisions"][-1]["change_summary"] == "Added track and disc information"
+    assert updated_take["notes"] == "Added track and disc information"
 
-    # Verify that the parent track's revision was also incremented
+    # Routine update of the existing master take preserves parent track notes and does not add redundant track revision
     res_track = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
     assert res_track.status_code == 200
     track_data = res_track.json()["track"]
+    assert track_data["notes"] == "Original workspace notes"
     assert track_data["revision"] == 2
-    assert len(track_data["revisions"]) == 2
-    assert track_data["revisions"][-1]["change_summary"] == "Added track and disc information"
+
+    # Adding a second non-master take via ingest-session bumps parent track revision to 3 with ["takes"]
+    res_ingest_2 = client.post(
+        "/api/projects/ingest-session",
+        json={
+            "track_id": track_id,
+            "take_label": "Take 2 (Alt)",
+            "notes": "Alternate mix balance",
+            "is_master": False,
+        },
+        cookies={SESSION_COOKIE_NAME: session_cookie, **auth_cookies},
+    )
+    assert res_ingest_2.status_code == 201
+    take_2 = res_ingest_2.json()
+    assert take_2["is_master"] is False
+
+    res_track_after = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+    assert res_track_after.status_code == 200
+    track_after = res_track_after.json()["track"]
+    assert track_after["revision"] == 3
+    assert track_after["revisions"][-1]["changed_fields"] == ["takes"]
+    assert track_after["notes"] == "Original workspace notes"
+    assert track_after["primary_take_id"] == take_id
 
     # Clean up
+    client.delete("/api/session", cookies={SESSION_COOKIE_NAME: session_cookie, **auth_cookies})
     client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+
+
+def _build_tagged_mp3_bytes(title: str, artist: str, bpm: str, key: str, lyrics: str) -> bytes:
+    """Create valid synthetic MP3 bytes with embedded ID3 metadata frames."""
+    from mutagen.id3 import ID3, TIT2, TPE1, TBPM, TKEY, USLT
+    id3_header = b"ID3\x04\x00\x00\x00\x00\x00\x00"
+    mpeg_frame = b"\xff\xfb\x90\x44" + (b"\x00" * 413)
+    raw = id3_header + (mpeg_frame * 5)
+    bio = io.BytesIO(raw)
+    tags = ID3()
+    tags.add(TIT2(encoding=3, text=title))
+    tags.add(TPE1(encoding=3, text=artist))
+    tags.add(TBPM(encoding=3, text=bpm))
+    tags.add(TKEY(encoding=3, text=key))
+    tags.add(USLT(encoding=3, lang="eng", desc="", text=lyrics))
+    tags.save(bio, v2_version=4)
+    bio.seek(0)
+    return bio.read() + (mpeg_frame * 5)
+
+
+def test_load_take_session_provenance_cleared_on_unrelated_upload_and_delete(client, auth_cookies):
+    """Verify loaded_project_take provenance is set on load-session and cleared on new upload or session reset."""
+    res_trk = client.post("/api/projects/tracks", json={"title": "Provenance Track"}, cookies=auth_cookies)
+    assert res_trk.status_code == 201
+    track_id = res_trk.json()["id"]
+
+    res_take = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Take Alpha"},
+        files={"file": ("alpha.mp3", VALID_MP3_HEADER, "audio/mpeg")},
+        cookies=auth_cookies,
+    )
+    assert res_take.status_code == 201
+    take_id = res_take.json()["id"]
+
+    # 1. Load project take into session -> /api/session exposes loaded_project_take
+    res_load = client.post(
+        f"/api/projects/tracks/{track_id}/takes/{take_id}/load-session",
+        cookies=auth_cookies,
+    )
+    assert res_load.status_code == 200
+    load_data = res_load.json()
+    assert load_data["loaded_project_take"]["track_id"] == track_id
+    assert load_data["loaded_project_take"]["take_id"] == take_id
+    proj_session_cookie = res_load.cookies[SESSION_COOKIE_NAME]
+
+    res_sess_1 = client.get("/api/session", cookies={SESSION_COOKIE_NAME: proj_session_cookie, **auth_cookies})
+    assert res_sess_1.status_code == 200
+    assert res_sess_1.json()["active"] is True
+    assert res_sess_1.json()["loaded_project_take"]["track_id"] == track_id
+    assert res_sess_1.json()["loaded_project_take"]["take_id"] == take_id
+
+    # Legitimate update of the loaded take works cleanly
+    res_legit = client.post(
+        "/api/projects/ingest-session",
+        json={"track_id": track_id, "take_id": take_id, "take_label": "Take Alpha Edited", "is_master": True},
+        cookies={SESSION_COOKIE_NAME: proj_session_cookie, **auth_cookies},
+    )
+    assert res_legit.status_code == 201
+    assert res_legit.json()["id"] == take_id
+    assert res_legit.json()["label"] == "Take Alpha Edited"
+
+    # 2. Upload an unrelated audio file via /api/upload -> clears loaded_project_take
+    sample_mp3 = b"ID3\x04\x00\x00\x00\x00\x00\x00" + (b"\xff\xfb\x90\x44" + b"\x00" * 413) * 5
+    res_upload = client.post(
+        "/api/upload",
+        files={"file": ("unrelated_song.mp3", sample_mp3, "audio/mpeg")},
+        cookies={SESSION_COOKIE_NAME: proj_session_cookie, **auth_cookies},
+    )
+    assert res_upload.status_code == 200
+    assert res_upload.json()["loaded_project_take"] is None
+    new_session_cookie = res_upload.cookies[SESSION_COOKIE_NAME]
+
+    res_sess_2 = client.get("/api/session", cookies={SESSION_COOKIE_NAME: new_session_cookie, **auth_cookies})
+    assert res_sess_2.status_code == 200
+    assert res_sess_2.json()["active"] is True
+    assert res_sess_2.json()["loaded_project_take"] is None
+
+    # 3. Reset session via DELETE /api/session -> session inactive, no loaded_project_take
+    res_del = client.delete("/api/session", cookies={SESSION_COOKIE_NAME: new_session_cookie, **auth_cookies})
+    assert res_del.status_code == 200
+    res_sess_3 = client.get("/api/session", cookies=auth_cookies)
+    assert res_sess_3.status_code == 200
+    assert res_sess_3.json()["active"] is False
+    assert "loaded_project_take" not in res_sess_3.json()
+
+    # Clean up remaining sessions & track
+    client.delete("/api/session", cookies={SESSION_COOKIE_NAME: proj_session_cookie, **auth_cookies})
+    client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+
+
+@pytest.mark.parametrize("is_master_flag", [False, True])
+def test_ingest_session_protects_existing_parent_track_metadata(client, auth_cookies, is_master_flag):
+    """Verify ingest-session never overwrites populated or blank parent track fields when adding/updating takes."""
+    # Track 1: Populated parent metadata
+    res_trk = client.post(
+        "/api/projects/tracks",
+        json={
+            "title": "Workspace Title",
+            "artist": "Workspace Artist",
+            "bpm": 120,
+            "musical_key": "C minor",
+            "master_lyrics": "Original workspace lyrics line",
+            "notes": "Original workspace notes",
+        },
+        cookies=auth_cookies,
+    )
+    assert res_trk.status_code == 201
+    track_id = res_trk.json()["id"]
+
+    res_t1 = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Take 1"},
+        files={"file": ("t1.mp3", VALID_MP3_HEADER, "audio/mpeg")},
+        cookies=auth_cookies,
+    )
+    take1_id = res_t1.json()["id"]
+
+    # Track 2: Intentionally blank optional parent fields
+    res_blank_trk = client.post(
+        "/api/projects/tracks",
+        json={"title": "Blank Fields Workspace"},
+        cookies=auth_cookies,
+    )
+    assert res_blank_trk.status_code == 201
+    blank_track_id = res_blank_trk.json()["id"]
+
+    # Ephemeral session containing conflicting embedded ID3 metadata
+    tagged_bytes = _build_tagged_mp3_bytes(
+        title="Rogue Song Title",
+        artist="Rogue Artist",
+        bpm="145",
+        key="F#m",
+        lyrics="Completely different song lyrics!",
+    )
+    session_id, audio_path = storage_manager.create_session("different_song.mp3", ".mp3")
+    with open(audio_path, "wb") as f:
+        f.write(tagged_bytes)
+    session_token = create_signed_session_token(session_id)
+    cookies = {AUTH_COOKIE_NAME: auth_cookies[AUTH_COOKIE_NAME], SESSION_COOKIE_NAME: session_token}
+
+    # Case A: Add new take to existing populated track
+    res_add = client.post(
+        "/api/projects/ingest-session",
+        json={
+            "track_id": track_id,
+            "take_label": "Take 2 Rogue",
+            "notes": "Take 2 specific notes",
+            "is_master": is_master_flag,
+        },
+        cookies=cookies,
+    )
+    assert res_add.status_code == 201
+    assert res_add.json()["notes"] == "Take 2 specific notes"
+
+    trk_detail = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies).json()["track"]
+    assert trk_detail["title"] == "Workspace Title"
+    assert trk_detail["artist"] == "Workspace Artist"
+    assert trk_detail["bpm"] == 120
+    assert trk_detail["musical_key"] == "C minor"
+    assert trk_detail["master_lyrics"] == "Original workspace lyrics line"
+    assert trk_detail["notes"] == "Original workspace notes"
+
+    # Case B: Update existing take on populated track
+    res_upd = client.post(
+        "/api/projects/ingest-session",
+        json={
+            "track_id": track_id,
+            "take_id": take1_id,
+            "take_label": "Take 1 Edited",
+            "notes": "Take 1 revision note only",
+            "is_master": is_master_flag,
+        },
+        cookies=cookies,
+    )
+    assert res_upd.status_code == 201
+    assert res_upd.json()["notes"] == "Take 1 revision note only"
+
+    trk_detail_after_upd = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies).json()["track"]
+    assert trk_detail_after_upd["title"] == "Workspace Title"
+    assert trk_detail_after_upd["artist"] == "Workspace Artist"
+    assert trk_detail_after_upd["bpm"] == 120
+    assert trk_detail_after_upd["musical_key"] == "C minor"
+    assert trk_detail_after_upd["master_lyrics"] == "Original workspace lyrics line"
+    assert trk_detail_after_upd["notes"] == "Original workspace notes"
+
+    # Case C: Add new take to track with blank optional fields -> still does NOT auto-populate parent fields
+    res_add_blank = client.post(
+        "/api/projects/ingest-session",
+        json={
+            "track_id": blank_track_id,
+            "take_label": "Demo Take",
+            "notes": "Demo take notes only",
+            "is_master": is_master_flag,
+        },
+        cookies=cookies,
+    )
+    assert res_add_blank.status_code == 201
+    blank_detail = client.get(f"/api/projects/tracks/{blank_track_id}", cookies=auth_cookies).json()["track"]
+    assert blank_detail["title"] == "Blank Fields Workspace"
+    assert blank_detail["artist"] is None
+    assert blank_detail["bpm"] is None
+    assert blank_detail["musical_key"] is None
+    assert blank_detail["master_lyrics"] is None
+    assert blank_detail["notes"] is None
+
+    storage_manager.cleanup_session(session_id)
+    client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+    client.delete(f"/api/projects/tracks/{blank_track_id}", cookies=auth_cookies)
+
+
+def test_frontend_stale_take_invalidation_wiring():
+    """Verify app.js, projects.js, and storage_manager.js clear stale loadedProjectTake references consistently."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    app_js = (root / "frontend" / "js" / "app.js").read_text(encoding="utf-8")
+    projects_js = (root / "frontend" / "js" / "projects.js").read_text(encoding="utf-8")
+    storage_js = (root / "frontend" / "js" / "storage_manager.js").read_text(encoding="utf-8")
+
+    # app.js clears loaded project take on new file upload, new file button, non-project loadSession, and inactive restore
+    assert "function clearLoadedProjectTakeState()" in app_js
+    assert "sessionStorage.removeItem('mp3metafix_loaded_project_track')" in app_js
+    assert "window.dispatchEvent(new CustomEvent('mp3metafix:loaded-take-cleared'))" in app_js
+    assert app_js.count("clearLoadedProjectTakeState();") >= 4
+
+    # projects.js and storage_manager.js both expose global hooks and validate sessionStorage + active track list
+    for src in (projects_js, storage_js):
+        assert "window.clearLoadedProjectTake = clearLoadedProjectTakeRef;" in src
+        assert "window.setLoadedProjectTake = setLoadedProjectTakeRef;" in src
+        assert "window.addEventListener('mp3metafix:loaded-take-cleared'" in src
+        assert ".some(t => t.id === loadedTake.track_id)" in src
+
+
+def _build_pcm_wav_bytes(duration_sec: float = 0.5, sample_rate: int = 44100) -> bytes:
+    """Create valid PCM WAV audio bytes with exact duration."""
+    import wave
+    import struct
+    num_frames = int(duration_sec * sample_rate)
+    out = io.BytesIO()
+    with wave.open(out, "wb") as wf:
+        wf.setparams((1, 2, sample_rate, 0, "NONE", "not compressed"))
+        wf.writeframes(struct.pack("<h", 0) * num_frames)
+    return out.getvalue()
+
+
+def test_direct_take_upload_preserves_existing_audio_detects_duration_and_master_behavior(client, auth_cookies):
+    """Verify direct take upload creates independent audio, probes duration, and respects is_master."""
+    res_trk = client.post("/api/projects/tracks", json={"title": "Direct Upload Song"}, cookies=auth_cookies)
+    assert res_trk.status_code == 201
+    track_id = res_trk.json()["id"]
+
+    wav_1 = _build_pcm_wav_bytes(0.5)
+    wav_2 = _build_pcm_wav_bytes(1.0)
+    wav_3 = _build_pcm_wav_bytes(0.25)
+
+    # 1. First direct take upload (even with is_master=false) auto-masters and detects duration
+    res_1 = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Take 1", "is_master": "false"},
+        files={"file": ("take1.wav", io.BytesIO(wav_1), "audio/wav")},
+        cookies=auth_cookies,
+    )
+    assert res_1.status_code == 201
+    t1 = res_1.json()
+    assert t1["is_master"] is True
+    assert t1["duration_seconds"] == pytest.approx(0.5, abs=0.02)
+
+    # 2. Second upload with is_master=false keeps Take 1 as master and preserves Take 1 audio
+    res_2 = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Take 2", "is_master": "false"},
+        files={"file": ("take2.wav", io.BytesIO(wav_2), "audio/wav")},
+        cookies=auth_cookies,
+    )
+    assert res_2.status_code == 201
+    t2 = res_2.json()
+    assert t2["is_master"] is False
+    assert t2["duration_seconds"] == pytest.approx(1.0, abs=0.02)
+
+    detail = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies).json()
+    assert detail["track"]["primary_take_id"] == t1["id"]
+    assert client.get(f"/api/projects/tracks/{track_id}/takes/{t1['id']}/download", cookies=auth_cookies).content == wav_1
+    assert client.get(f"/api/projects/tracks/{track_id}/takes/{t2['id']}/download", cookies=auth_cookies).content == wav_2
+
+    # 3. Third upload with is_master=true switches master to Take 3 and clears Take 1 is_master
+    res_3 = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Take 3 Master", "is_master": "true"},
+        files={"file": ("take3.wav", io.BytesIO(wav_3), "audio/wav")},
+        cookies=auth_cookies,
+    )
+    assert res_3.status_code == 201
+    t3 = res_3.json()
+    assert t3["is_master"] is True
+    assert t3["duration_seconds"] == pytest.approx(0.25, abs=0.02)
+
+    detail_after = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies).json()
+    assert detail_after["track"]["primary_take_id"] == t3["id"]
+    by_id = {tk["id"]: tk for tk in detail_after["takes"]}
+    assert [tid for tid, tk in by_id.items() if tk["is_master"]] == [t3["id"]]
+    assert client.get(f"/api/projects/tracks/{track_id}/takes/{t1['id']}/download", cookies=auth_cookies).content == wav_1
+
+    client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+
+
+def test_direct_take_upload_rejects_invalid_audio_cleanly(client, auth_cookies):
+    """Verify invalid extensions, tiny files, and corrupt headers return 400 without affecting existing takes."""
+    res_trk = client.post("/api/projects/tracks", json={"title": "Validation Track"}, cookies=auth_cookies)
+    track_id = res_trk.json()["id"]
+
+    res_ok = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Valid Take"},
+        files={"file": ("valid.mp3", VALID_MP3_HEADER, "audio/mpeg")},
+        cookies=auth_cookies,
+    )
+    assert res_ok.status_code == 201
+    valid_id = res_ok.json()["id"]
+
+    # Unsupported extension
+    res_bad_ext = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Bad Ext"},
+        files={"file": ("notes.txt", b"not audio at all" * 5, "text/plain")},
+        cookies=auth_cookies,
+    )
+    assert res_bad_ext.status_code == 400
+    assert "Unsupported audio format" in res_bad_ext.json()["detail"]
+
+    # Empty / too small
+    res_tiny = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Tiny"},
+        files={"file": ("tiny.mp3", b"ID3short", "audio/mpeg")},
+        cookies=auth_cookies,
+    )
+    assert res_tiny.status_code == 400
+    assert "empty or too short" in res_tiny.json()["detail"]
+
+    # Invalid magic bytes
+    res_bad_magic = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Bad Magic"},
+        files={"file": ("fake.mp3", b"RIFF" + b"\x00" * 100, "audio/mpeg")},
+        cookies=auth_cookies,
+    )
+    assert res_bad_magic.status_code == 400
+    assert "Invalid audio file header" in res_bad_magic.json()["detail"]
+
+    # Existing valid take remains untouched
+    takes = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies).json()["takes"]
+    assert [t["id"] for t in takes] == [valid_id]
+    assert client.get(f"/api/projects/tracks/{track_id}/takes/{valid_id}/download", cookies=auth_cookies).content == VALID_MP3_HEADER
+
+    client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+
+
+def test_direct_take_upload_and_master_switch_album_release_compatibility(client, auth_cookies):
+    """Verify Album Releases remain compatible when takes are uploaded directly and master selection changes."""
+    res_trk = client.post("/api/projects/tracks", json={"title": "Album Track 1"}, cookies=auth_cookies)
+    track_id = res_trk.json()["id"]
+
+    t1 = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Take 1"},
+        files={"file": ("v1.wav", _build_pcm_wav_bytes(0.25), "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    alb = client.post("/api/projects/albums", json={"title": "Compat EP"}, cookies=auth_cookies).json()
+    alb_id = alb["id"]
+    client.patch(
+        f"/api/projects/albums/{alb_id}",
+        json={"tracks": [{"track_number": 1, "disc_number": 1, "track_id": track_id, "take_id": None}]},
+        cookies=auth_cookies,
+    )
+
+    # Direct upload of a new master take updates track primary_take_id
+    t2 = client.post(
+        f"/api/projects/tracks/{track_id}/takes",
+        data={"label": "Take 2 Master", "is_master": "true"},
+        files={"file": ("v2.wav", _build_pcm_wav_bytes(0.5), "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    trk_detail = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies).json()
+    assert trk_detail["track"]["primary_take_id"] == t2["id"]
+
+    # Switch master back to t1
+    res_patch = client.patch(
+        f"/api/projects/tracks/{track_id}/takes/{t1['id']}",
+        json={"is_master": True},
+        cookies=auth_cookies,
+    )
+    assert res_patch.status_code == 200
+    trk_detail_2 = client.get(f"/api/projects/tracks/{track_id}", cookies=auth_cookies).json()
+    assert trk_detail_2["track"]["primary_take_id"] == t1["id"]
+
+    # Album track entry stays valid and intact
+    alb_after = client.get(f"/api/projects/albums/{alb_id}", cookies=auth_cookies).json()
+    assert alb_after["track_ids"] == [track_id]
+    assert alb_after["tracks"][0]["track_id"] == track_id
+
+    client.delete(f"/api/projects/albums/{alb_id}", cookies=auth_cookies)
+    client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
+
+
+def test_frontend_direct_take_upload_form_submission_behavior():
+    """Execute projects.js upload take flow in Node to verify submit binding, validation, error handling, and drawer preservation."""
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node_bin = shutil.which("node")
+    assert node_bin is not None, "node is required to execute frontend behavior tests"
+
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+    storage_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "storage_manager.js"
+    storage_js = storage_js_path.read_text(encoding="utf-8")
+    assert "if (dom.formUploadTake)" in storage_js
+    assert "handleUploadTakeSubmit" in storage_js
+
+    # Run projects.js inside a lightweight Node DOM/fetch harness
+    harness = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
+
+const elements = {};
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set();
+  return {
+    id,
+    tagName: tag.toUpperCase(),
+    value: '',
+    textContent: '',
+    innerHTML: '',
+    checked: false,
+    disabled: false,
+    files: [],
+    listeners,
+    dataset: {},
+    style: {},
+    classList: {
+      add: (c) => classSet.add(c),
+      remove: (c) => classSet.delete(c),
+      contains: (c) => classSet.has(c),
+    },
+    addEventListener: (ev, fn) => {
+      if (!listeners[ev]) listeners[ev] = [];
+      listeners[ev].push(fn);
+    },
+    setAttribute: () => {},
+    appendChild: () => {},
+    querySelector: (sel) => sel === 'button[type="submit"]' ? submitBtn : null,
+    querySelectorAll: () => [],
+    reset: () => {},
+    _classSet: classSet,
+  };
+}
+const submitBtn = makeEl('submitUploadTake', 'button');
+submitBtn.textContent = 'Upload Take';
+
+const docListeners = {};
+const toasts = [];
+const fetchCalls = [];
+let nextFetchResponse = { ok: true, status: 201, json: async () => ({ id: 'tak_new' }) };
+
+const getEl = (id) => {
+  if (!elements[id]) elements[id] = makeEl(id);
+  return elements[id];
+};
+
+const context = {
+  console,
+  Set,
+  Map,
+  Number,
+  CustomEvent: class CustomEvent { constructor(n, o) { this.type = n; this.detail = o && o.detail; } },
+  FormData: class FormData {
+    constructor() { this.fields = []; }
+    append(k, v) { this.fields.push([k, v]); }
+  },
+  sessionStorage: {
+    _s: {},
+    getItem(k) { return this._s[k] || null; },
+    setItem(k, v) { this._s[k] = String(v); },
+    removeItem(k) { delete this._s[k]; },
+  },
+  document: {
+    getElementById: getEl,
+    createElement(tag) { return makeEl('', tag); },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: (ev, fn) => {
+      if (!docListeners[ev]) docListeners[ev] = [];
+      docListeners[ev].push(fn);
+    },
+  },
+  window: {
+    MP3MetaFixMaxUploadSizeMb: 150,
+    showToast: (msg, type) => toasts.push({ msg, type }),
+    addEventListener: () => {},
+    dispatchEvent: () => {},
+  },
+  fetch: async (url, opts) => {
+    fetchCalls.push({ url, opts });
+    if (url === '/api/projects/tracks') {
+      return { ok: true, status: 200, json: async () => ([{ id: 'trk_1234567890abcdef', title: 'Song', status: 'draft', takes_count: 1 }]) };
+    }
+    if (url.startsWith('/api/projects/tracks/trk_1234567890abcdef') && (!opts || opts.method !== 'POST')) {
+      return { ok: true, status: 200, json: async () => ({ track: { id: 'trk_1234567890abcdef' }, takes: [{ id: 'tak_1', label: 'Take 1', format: 'wav', size_bytes: 1024, is_master: true }] }) };
+    }
+    if (url === '/api/projects/albums' || url === '/api/storage/quota') {
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+    return nextFetchResponse;
+  },
+  confirm: () => true,
+};
+context.window.window = context.window;
+
+vm.runInNewContext(code, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  const form = getEl('formUploadTake');
+  if (!form || !form.listeners['submit'] || form.listeners['submit'].length === 0) {
+    throw new Error('formUploadTake submit handler was NOT registered!');
+  }
+  const submitHandler = form.listeners['submit'][0];
+
+  // 1. Unsupported extension rejected cleanly without POST upload
+  getEl('uploadTakeTrackId').value = 'trk_1234567890abcdef';
+  getEl('uploadTakeFileInput').files = [{ name: 'bad.txt', size: 128 }];
+  let prevented = false;
+  await submitHandler({ preventDefault: () => { prevented = true; } });
+  if (!prevented) throw new Error('e.preventDefault() not called');
+  if (fetchCalls.some(c => c.opts && c.opts.method === 'POST')) {
+    throw new Error('Invalid file triggered fetch POST!');
+  }
+  if (!toasts.some(t => t.type === 'error' && t.msg.includes('Unsupported file format'))) {
+    throw new Error('Expected unsupported format toast');
+  }
+
+  // 2. Non-JSON 500 response reports clear HTTP error without throwing
+  getEl('uploadTakeFileInput').files = [{ name: 'valid.wav', size: 4096 }];
+  nextFetchResponse = { ok: false, status: 502, json: async () => { throw new SyntaxError('Unexpected token <'); } };
+  await submitHandler({ preventDefault: () => {} });
+  if (!toasts.some(t => t.type === 'error' && t.msg.includes('HTTP 502'))) {
+    throw new Error('Expected non-JSON HTTP 502 error toast');
+  }
+  if (submitBtn.disabled) throw new Error('Submit button remained disabled after error');
+
+  // 3. Valid upload succeeds, hits POST /takes, closes modal, and expands/keeps drawer visible
+  getEl('modalUploadTake').classList.remove('hidden');
+  getEl('uploadTakeLabel').value = 'Alt Take';
+  nextFetchResponse = { ok: true, status: 201, json: async () => ({ id: 'tak_2' }) };
+  await submitHandler({ preventDefault: () => {} });
+  const uploadPost = fetchCalls.find(c => c.url === '/api/projects/tracks/trk_1234567890abcdef/takes' && c.opts && c.opts.method === 'POST');
+  if (!uploadPost) throw new Error('Expected POST /api/projects/tracks/{id}/takes call');
+  if (!getEl('modalUploadTake').classList.contains('hidden')) {
+    throw new Error('Expected modalUploadTake to be hidden after successful upload');
+  }
+  const trackDetailFetch = fetchCalls.filter(c => c.url === '/api/projects/tracks/trk_1234567890abcdef' && (!c.opts || c.opts.method !== 'POST'));
+  if (trackDetailFetch.length === 0) {
+    throw new Error('Expected expanded Takes Drawer to automatically load updated takes after upload');
+  }
+  console.log('NODE_HARNESS_OK');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    for js_path in (projects_js_path, storage_js_path):
+        env = os.environ.copy()
+        env["TARGET_JS_PATH"] = str(js_path)
+        proc = subprocess.run(
+            [node_bin, "-e", harness],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        assert proc.returncode == 0, f"Node harness failed for {js_path.name}:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+        assert "NODE_HARNESS_OK" in proc.stdout
+
+
 
 

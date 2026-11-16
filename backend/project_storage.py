@@ -5,6 +5,7 @@ cryptographic path hashing and strict POSIX 0700 filesystem isolation.
 """
 
 import os
+import json
 import time
 import shutil
 import logging
@@ -45,6 +46,32 @@ from backend.project_models import (
 from backend.audio_formats import AUDIO_FORMATS
 
 logger = logging.getLogger("mp3metafix.project_storage")
+
+
+def _probe_audio_duration(audio_path: Path) -> float:
+    """Probe audio duration in seconds via Mutagen with stdlib wave fallback for WAV files."""
+    try:
+        import mutagen
+        audio = mutagen.File(str(audio_path))
+        if audio is not None and getattr(audio, "info", None) is not None:
+            length = getattr(audio.info, "length", 0.0)
+            if length and float(length) > 0.0:
+                return round(float(length), 2)
+    except Exception as e:
+        logger.debug(f"Mutagen duration probe failed for {audio_path.name}: {e}")
+
+    if audio_path.suffix.lower() == ".wav":
+        try:
+            import wave
+            with wave.open(str(audio_path), "rb") as wav_file:
+                frames = wav_file.getnframes()
+                rate = wav_file.getframerate()
+                if rate > 0 and frames > 0:
+                    return round(frames / float(rate), 2)
+        except Exception as e:
+            logger.debug(f"Wave duration probe failed for {audio_path.name}: {e}")
+
+    return 0.0
 
 
 class ProjectStorageError(Exception):
@@ -281,6 +308,77 @@ class ProjectStorageManager:
         results.sort(key=lambda t: t.updated_at, reverse=True)
         return results
 
+    def _set_exclusive_master_flag(
+        self,
+        user_id: str,
+        track_id: str,
+        master_take_id: Optional[str],
+    ) -> None:
+        """Ensure at most one take in the track has is_master=True matching master_take_id."""
+        track_dir = self._get_track_dir(user_id, track_id)
+        takes_root = track_dir / "takes"
+        if not takes_root.exists():
+            return
+
+        for item in takes_root.iterdir():
+            if not item.is_dir():
+                continue
+            manifest_path = item / "take.json"
+            if not manifest_path.is_file():
+                continue
+            try:
+                with file_lock(manifest_path):
+                    with open(manifest_path, "r", encoding="utf-8") as f:
+                        t_data = json.load(f)
+                    should_be_master = (master_take_id is not None and t_data.get("id") == master_take_id)
+                    if bool(t_data.get("is_master", False)) != should_be_master:
+                        t_data["is_master"] = should_be_master
+                        TakeMetadata(**t_data)
+                        atomic_json(manifest_path, t_data)
+            except Exception as e:
+                logger.warning(f"Failed syncing master flag for take dir {item.name}: {e}")
+
+    def _record_track_revision(
+        self,
+        user_id: str,
+        track_id: str,
+        changed_fields: List[str],
+        change_summary: str,
+        field_updates: Optional[Dict[str, Any]] = None,
+    ) -> Optional[TrackMetadata]:
+        """Atomically update selected track fields and append one revision entry."""
+        try:
+            track_dir = self._get_track_dir(user_id, track_id)
+        except ValueError:
+            return None
+        manifest_path = track_dir / "track.json"
+        if not manifest_path.is_file():
+            return None
+
+        with file_lock(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if field_updates:
+                for k, v in field_updates.items():
+                    data[k] = v
+
+            new_rev = int(data.get("revision", 1)) + 1
+            now = time.time()
+            data["revision"] = new_rev
+            data["updated_at"] = now
+            if "revisions" not in data or not isinstance(data["revisions"], list):
+                data["revisions"] = []
+            data["revisions"].append({
+                "revision": new_rev,
+                "timestamp": now,
+                "change_summary": change_summary,
+                "changed_fields": changed_fields,
+            })
+            atomic_json(manifest_path, data)
+
+        return self.get_track(user_id, track_id)
+
     def update_track(
         self,
         user_id: str,
@@ -298,6 +396,11 @@ class ProjectStorageManager:
 
         data = track.model_dump()
         summary_text = updates.pop("change_summary", None) or change_summary
+
+        # Ignore unknown primary_take_id references so master takes remain valid
+        if "primary_take_id" in updates and updates["primary_take_id"] is not None:
+            if not self.get_take(user_id, track_id, updates["primary_take_id"]):
+                updates.pop("primary_take_id", None)
 
         ignored_fields = ("id", "created_at", "takes_count", "revisions", "revision", "updated_at")
         changed_fields = []
@@ -323,6 +426,9 @@ class ProjectStorageManager:
 
         with file_lock(manifest_path):
             atomic_json(manifest_path, data)
+
+        if "primary_take_id" in changed_fields and data.get("primary_take_id"):
+            self._set_exclusive_master_flag(user_id, track_id, data["primary_take_id"])
 
         return TrackMetadata(**data)
 
@@ -388,7 +494,13 @@ class ProjectStorageManager:
         except Exception:
             pass
 
+        if float(duration_seconds or 0.0) <= 0.0:
+            probed_duration = _probe_audio_duration(audio_file_path)
+            if probed_duration > 0.0:
+                duration_seconds = probed_duration
+
         now = time.time()
+        effective_is_master = bool(is_master) or (track.primary_take_id is None)
         take_label = label.strip() if label else f"Take {track.takes_count + 1}"
         take_meta = TakeMetadata(
             id=take_id,
@@ -397,7 +509,7 @@ class ProjectStorageManager:
             format=extension.lstrip(".").lower(),
             size_bytes=len(audio_bytes),
             duration_seconds=duration_seconds,
-            is_master=is_master,
+            is_master=effective_is_master,
             revision=1,
             revisions=[
                 RevisionEntry(
@@ -421,17 +533,30 @@ class ProjectStorageManager:
         with file_lock(manifest_path):
             atomic_json(manifest_path, take_meta.model_dump())
 
-        # If marked as master or if this is the first take, update track's primary_take_id
-        if track.primary_take_id is None:
-            track_manifest = self._get_track_dir(user_id, track_id) / "track.json"
-            if track_manifest.is_file():
-                tdata = track.model_dump()
-                tdata["primary_take_id"] = take_id
-                tdata["updated_at"] = time.time()
-                with file_lock(track_manifest):
-                    atomic_json(track_manifest, tdata)
-        elif is_master:
-            self.update_track(user_id, track_id, {"primary_take_id": take_id}, change_summary=f"Set master take to {take_meta.label}")
+        if effective_is_master:
+            self._set_exclusive_master_flag(user_id, track_id, take_id)
+            if track.primary_take_id != take_id:
+                self._record_track_revision(
+                    user_id,
+                    track_id,
+                    ["takes", "primary_take_id"],
+                    f"Added master take: {take_meta.label}",
+                    {"primary_take_id": take_id},
+                )
+            else:
+                self._record_track_revision(
+                    user_id,
+                    track_id,
+                    ["takes"],
+                    f"Added master take: {take_meta.label}",
+                )
+        else:
+            self._record_track_revision(
+                user_id,
+                track_id,
+                ["takes"],
+                f"Added take: {take_meta.label}",
+            )
 
         return take_meta
 
@@ -493,6 +618,7 @@ class ProjectStorageManager:
         if not take:
             return None
 
+        track = self.get_track(user_id, track_id)
         take_dir = self._get_take_dir(user_id, track_id, take_id)
         manifest_path = take_dir / "take.json"
 
@@ -502,43 +628,59 @@ class ProjectStorageManager:
         ignored_fields = ("id", "created_at", "filename", "format", "size_bytes", "revisions", "revision", "updated_at", "stems")
         changed_fields = []
         for k, v in updates.items():
-            if v is not None and k in data and k not in ignored_fields and data.get(k) != v:
+            if v is None or k not in data or k in ignored_fields:
+                continue
+            if k == "is_master":
+                # Keep the active primary take flagged as master until another take takes over
+                if v is False and track and track.primary_take_id == take_id:
+                    continue
+                v = bool(v)
+            if data.get(k) != v:
                 changed_fields.append(k)
                 data[k] = v
 
-        if changed_fields:
-            new_rev = int(data.get("revision", 1)) + 1
-            data["revision"] = new_rev
-            summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
-            if "revisions" not in data or not isinstance(data["revisions"], list):
-                data["revisions"] = []
-            data["revisions"].append({
-                "revision": new_rev,
-                "timestamp": time.time(),
-                "change_summary": summary,
-                "changed_fields": changed_fields,
-            })
+        if not changed_fields:
+            if updates.get("is_master") is True:
+                self._set_exclusive_master_flag(user_id, track_id, take_id)
+                if track and track.primary_take_id != take_id:
+                    self._record_track_revision(
+                        user_id,
+                        track_id,
+                        ["primary_take_id"],
+                        f"Set master take to {take.label}",
+                        {"primary_take_id": take_id},
+                    )
+            return self.get_take(user_id, track_id, take_id)
 
+        new_rev = int(data.get("revision", 1)) + 1
+        data["revision"] = new_rev
+        summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
+        if "revisions" not in data or not isinstance(data["revisions"], list):
+            data["revisions"] = []
+        data["revisions"].append({
+            "revision": new_rev,
+            "timestamp": time.time(),
+            "change_summary": summary,
+            "changed_fields": changed_fields,
+        })
         data["updated_at"] = time.time()
 
         with file_lock(manifest_path):
             atomic_json(manifest_path, data)
 
-        # If is_master was toggled True, update track's primary_take_id and unset on sibling takes
-        if updates.get("is_master") is True:
-            self.update_track(user_id, track_id, {"primary_take_id": take_id})
-            # Clear is_master on sibling takes
-            all_takes = self.list_takes(user_id, track_id)
-            for other_take in all_takes:
-                if other_take.id != take_id and other_take.is_master:
-                    sibling_dir = self._get_take_dir(user_id, track_id, other_take.id)
-                    s_manifest = sibling_dir / "take.json"
-                    s_data = other_take.model_dump()
-                    s_data["is_master"] = False
-                    with file_lock(s_manifest):
-                        atomic_json(s_manifest, s_data)
+        updated_take = TakeMetadata(**data)
+        if updated_take.is_master:
+            self._set_exclusive_master_flag(user_id, track_id, take_id)
+            if track and track.primary_take_id != take_id:
+                self._record_track_revision(
+                    user_id,
+                    track_id,
+                    ["primary_take_id"],
+                    f"Set master take to {updated_take.label}",
+                    {"primary_take_id": take_id},
+                )
 
-        return TakeMetadata(**data)
+        return updated_take
 
     def update_take_audio(
         self,
@@ -553,6 +695,9 @@ class ProjectStorageManager:
         change_summary: Optional[str] = None,
     ) -> TakeMetadata:
         """Update an existing take's audio file and metadata in place with revision tracking."""
+        track = self.get_track(user_id, track_id)
+        if not track:
+            raise ValueError(f"Track {track_id} not found")
         take = self.get_take(user_id, track_id, take_id)
         if not take:
             raise ValueError(f"Take {take_id} not found in track {track_id}")
@@ -562,9 +707,11 @@ class ProjectStorageManager:
             self.ensure_quota_available(user_id, size_diff)
 
         take_dir = self._get_take_dir(user_id, track_id, take_id)
-        fmt = extension.lstrip(".").lower()
-        if fmt not in AUDIO_FORMATS:
-            fmt = "mp3"
+        ext_norm = extension if extension.startswith(".") else f".{extension}"
+        ext_norm = ext_norm.lower()
+        if ext_norm not in AUDIO_FORMATS:
+            ext_norm = ".mp3"
+        fmt = ext_norm.lstrip(".")
 
         # Remove old audio file(s)
         for ext in AUDIO_FORMATS:
@@ -584,14 +731,8 @@ class ProjectStorageManager:
             pass
 
         # Probe duration if possible, fallback to existing duration
-        duration = take.duration_seconds
-        try:
-            import mutagen
-            audio = mutagen.File(str(audio_dest))
-            if audio is not None and audio.info is not None:
-                duration = round(float(getattr(audio.info, "length", 0.0)), 2)
-        except Exception:
-            pass
+        probed_duration = _probe_audio_duration(audio_dest)
+        duration = probed_duration if probed_duration > 0.0 else take.duration_seconds
 
         data = take.model_dump()
         data["format"] = fmt
@@ -601,8 +742,23 @@ class ProjectStorageManager:
             data["label"] = label
         if notes is not None:
             data["notes"] = notes
-        if is_master is not None:
-            data["is_master"] = is_master
+
+        changed_fields = ["audio"]
+        if notes is not None:
+            changed_fields.append("notes")
+
+        if is_master is True:
+            data["is_master"] = True
+            if not take.is_master:
+                changed_fields.append("is_master")
+        elif is_master is False:
+            # Preserve master flag if this take is already the track's active master take
+            if track.primary_take_id == take_id:
+                data["is_master"] = True
+            else:
+                data["is_master"] = False
+                if take.is_master:
+                    changed_fields.append("is_master")
 
         new_rev = int(data.get("revision", 1)) + 1
         data["revision"] = new_rev
@@ -613,7 +769,7 @@ class ProjectStorageManager:
             "revision": new_rev,
             "timestamp": time.time(),
             "change_summary": summary,
-            "changed_fields": ["audio"] if not notes else ["audio", "notes"],
+            "changed_fields": changed_fields,
         })
         data["updated_at"] = time.time()
 
@@ -621,10 +777,19 @@ class ProjectStorageManager:
         with file_lock(manifest_path):
             atomic_json(manifest_path, data)
 
-        if is_master:
-            self.update_track(user_id, track_id, {"primary_take_id": take_id})
+        updated_take = TakeMetadata(**data)
+        if updated_take.is_master:
+            self._set_exclusive_master_flag(user_id, track_id, take_id)
+            if track.primary_take_id != take_id:
+                self._record_track_revision(
+                    user_id,
+                    track_id,
+                    ["primary_take_id"],
+                    f"Set master take to {updated_take.label}",
+                    {"primary_take_id": take_id},
+                )
 
-        return TakeMetadata(**data)
+        return updated_take
 
     def delete_take(self, user_id: str, track_id: str, take_id: str) -> bool:
         """Delete a take and its stems."""
@@ -636,13 +801,30 @@ class ProjectStorageManager:
         if not manifest_path.is_file():
             return False
         try:
-            shutil.rmtree(take_dir, ignore_errors=True)
-            # If deleted take was the primary_take_id, reset or pick another take
             track = self.get_track(user_id, track_id)
-            if track and track.primary_take_id == take_id:
+            take = self.get_take(user_id, track_id, take_id)
+            shutil.rmtree(take_dir, ignore_errors=True)
+            if track:
                 remaining = self.list_takes(user_id, track_id)
-                new_primary = remaining[-1].id if remaining else None
-                self.update_track(user_id, track_id, {"primary_take_id": new_primary})
+                was_primary = (track.primary_take_id == take_id) or bool(take and take.is_master)
+                take_label = take.label if take else take_id
+                if was_primary:
+                    new_primary = remaining[-1].id if remaining else None
+                    self._set_exclusive_master_flag(user_id, track_id, new_primary)
+                    self._record_track_revision(
+                        user_id,
+                        track_id,
+                        ["takes", "primary_take_id"],
+                        f"Removed master take: {take_label}",
+                        {"primary_take_id": new_primary},
+                    )
+                else:
+                    self._record_track_revision(
+                        user_id,
+                        track_id,
+                        ["takes"],
+                        f"Removed take: {take_label}",
+                    )
             return True
         except Exception as e:
             logger.error(f"Failed to delete take {take_id}: {e}")

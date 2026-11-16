@@ -189,6 +189,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let pendingArrayBuffer = null;
 
+  function clearLoadedProjectTakeState() {
+    sessionStorage.removeItem('mp3metafix_loaded_project_track');
+    if (typeof window.clearLoadedProjectTake === 'function') {
+      window.clearLoadedProjectTake();
+    }
+    window.dispatchEvent(new CustomEvent('mp3metafix:loaded-take-cleared'));
+  }
+
   async function handleFileUpload(file) {
     if (!file) return;
 
@@ -206,6 +214,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (fileInput) fileInput.value = '';
       return;
     }
+
+    clearLoadedProjectTakeState();
 
     try {
       pendingArrayBuffer = await file.arrayBuffer();
@@ -287,6 +297,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- Load Session Into Editor ---
   function loadSession(data, isRestore = false) {
+    if (data && data.loaded_project_take && data.loaded_project_take.track_id && data.loaded_project_take.take_id) {
+      sessionStorage.setItem('mp3metafix_loaded_project_track', JSON.stringify(data.loaded_project_take));
+      if (typeof window.setLoadedProjectTake === 'function') {
+        window.setLoadedProjectTake(data.loaded_project_take);
+      }
+    } else if (!isRestore || !data || !data.loaded_project_take) {
+      clearLoadedProjectTakeState();
+    }
+
     state.hasSession = true;
     state.originalFilename = data.original_filename;
     state.format = data.audio_info?.format || 'mp3';
@@ -1208,6 +1227,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       audioElement.src = '';
       state.hasSession = false;
+      clearLoadedProjectTakeState();
       editorSection.classList.add('hidden');
       uploadSection.classList.remove('hidden');
       fileInput.value = '';
@@ -2030,10 +2050,15 @@ document.addEventListener('DOMContentLoaded', () => {
   async function restoreSessionIfExists() {
     try {
       const res = await fetch('/api/session');
-      if (res.status === 401 || !res.ok) return;
+      if (res.status === 401 || !res.ok) {
+        clearLoadedProjectTakeState();
+        return;
+      }
       const data = await res.json();
       if (data && data.active) {
         loadSession(data, true);
+      } else {
+        clearLoadedProjectTakeState();
       }
     } catch (_) {
       // Ignore network errors on initial handshake

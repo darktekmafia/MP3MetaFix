@@ -18,6 +18,8 @@
     quota: null,
     activeAlbum: null,
     loadedProjectTake: null,
+    expandedTrackIds: new Set(),
+    isUploadingTake: false,
   };
 
   // --- DOM Elements ---
@@ -403,15 +405,24 @@
     btnExpand.addEventListener('click', async () => {
       const isHidden = takesDrawer.classList.contains('hidden');
       if (isHidden) {
+        state.expandedTrackIds.add(track.id);
         takesDrawer.classList.remove('hidden');
         btnExpand.classList.add('expanded');
         takesDrawer.innerHTML = '<div class="takes-loading-spinner">Loading takes & stems...</div>';
         await loadTakesIntoDrawer(track.id, takesDrawer);
       } else {
+        state.expandedTrackIds.delete(track.id);
         takesDrawer.classList.add('hidden');
         btnExpand.classList.remove('expanded');
       }
     });
+
+    if (state.expandedTrackIds.has(track.id)) {
+      takesDrawer.classList.remove('hidden');
+      btnExpand.classList.add('expanded');
+      takesDrawer.innerHTML = '<div class="takes-loading-spinner">Loading takes & stems...</div>';
+      loadTakesIntoDrawer(track.id, takesDrawer);
+    }
 
     return card;
   }
@@ -1078,6 +1089,21 @@
   }
 
   // --- Session Loader & Save to Project ---
+  function clearLoadedProjectTakeRef() {
+    state.loadedProjectTake = null;
+    sessionStorage.removeItem('mp3metafix_loaded_project_track');
+  }
+
+  function setLoadedProjectTakeRef(ref) {
+    state.loadedProjectTake = (ref && ref.track_id && ref.take_id) ? ref : null;
+  }
+
+  window.clearLoadedProjectTake = clearLoadedProjectTakeRef;
+  window.setLoadedProjectTake = setLoadedProjectTakeRef;
+  window.addEventListener('mp3metafix:loaded-take-cleared', () => {
+    state.loadedProjectTake = null;
+  });
+
   async function loadTakeIntoSession(trackId, takeId) {
     showToast('Loading take into Editor...', 'info', 1500);
     try {
@@ -1087,7 +1113,7 @@
       if (res.ok) {
         const data = await res.json();
         const track = state.tracks.find(t => t.id === trackId);
-        state.loadedProjectTake = {
+        state.loadedProjectTake = data.loaded_project_take || {
           track_id: trackId,
           take_id: takeId,
           track_title: track ? track.title : 'Workspace Track',
@@ -1131,13 +1157,23 @@
     if (!dom.modalSaveToProject) return;
     if (dom.formSaveToProject) dom.formSaveToProject.reset();
 
-    // Check if we loaded a project take previously
-    let loadedTake = state.loadedProjectTake;
-    if (!loadedTake) {
-      try {
-        const stored = sessionStorage.getItem('mp3metafix_loaded_project_track');
-        if (stored) loadedTake = JSON.parse(stored);
-      } catch (e) {}
+    // Synchronize loaded project take reference with sessionStorage and active track list
+    let loadedTake = null;
+    try {
+      const stored = sessionStorage.getItem('mp3metafix_loaded_project_track');
+      if (stored) loadedTake = JSON.parse(stored);
+    } catch (e) {}
+
+    if (
+      !loadedTake ||
+      !loadedTake.track_id ||
+      !loadedTake.take_id ||
+      !state.tracks.some(t => t.id === loadedTake.track_id)
+    ) {
+      loadedTake = null;
+      clearLoadedProjectTakeRef();
+    } else {
+      state.loadedProjectTake = loadedTake;
     }
 
     // Populate existing tracks dropdown
@@ -1219,14 +1255,14 @@
     let payload = {};
 
     if (mode === 'update') {
-      let loadedTake = state.loadedProjectTake;
-      if (!loadedTake) {
-        try {
-          const stored = sessionStorage.getItem('mp3metafix_loaded_project_track');
-          if (stored) loadedTake = JSON.parse(stored);
-        } catch (err) {}
-      }
+      let loadedTake = null;
+      try {
+        const stored = sessionStorage.getItem('mp3metafix_loaded_project_track');
+        if (stored) loadedTake = JSON.parse(stored);
+      } catch (err) {}
+      if (!loadedTake) loadedTake = state.loadedProjectTake;
       if (!loadedTake || !loadedTake.track_id || !loadedTake.take_id) {
+        clearLoadedProjectTakeRef();
         showToast('No active loaded workspace take to update', 'error');
         return;
       }
@@ -1307,6 +1343,7 @@
         body: JSON.stringify({ is_master: true }),
       });
       if (res.ok) {
+        state.expandedTrackIds.add(trackId);
         showToast('★ Take designated as Master!', 'success');
         fetchTracks();
       } else {
@@ -1325,6 +1362,7 @@
         method: 'DELETE',
       });
       if (res.ok) {
+        state.expandedTrackIds.add(trackId);
         showToast('Stem deleted', 'info');
         fetchTracks();
         fetchQuota();
@@ -1341,6 +1379,7 @@
         method: 'DELETE',
       });
       if (res.ok) {
+        state.expandedTrackIds.add(trackId);
         showToast('Take deleted', 'info');
         fetchTracks();
         fetchQuota();
@@ -1357,6 +1396,7 @@
         method: 'DELETE',
       });
       if (res.ok) {
+        state.expandedTrackIds.delete(trackId);
         showToast('Track Workspace deleted', 'info');
         fetchTracks();
         fetchQuota();
@@ -1475,6 +1515,8 @@
 
   async function handleUploadTakeSubmit(e) {
     e.preventDefault();
+    if (state.isUploadingTake) return;
+
     const trackId = dom.uploadTakeTrackId.value;
     const fileInput = document.getElementById('uploadTakeFileInput');
     const label = (document.getElementById('uploadTakeLabel').value || '').trim();
@@ -1482,13 +1524,35 @@
     const notes = (document.getElementById('uploadTakeNotes').value || '').trim();
     const isMaster = document.getElementById('uploadTakeIsMaster').checked;
 
-    if (!fileInput.files || fileInput.files.length === 0) {
-      showToast('Please select an audio file', 'error');
+    const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+    if (!file) {
+      showToast('Please select an audio file to upload.', 'error');
+      return;
+    }
+    if (!/\.(mp3|m4a|wav)$/i.test(file.name)) {
+      showToast('Unsupported file format. Only .mp3, .m4a, and .wav are allowed.', 'error');
+      return;
+    }
+    if (file.size < 32) {
+      showToast('The selected audio file is empty or too small.', 'error');
+      return;
+    }
+    const maxUploadMb = Number(window.MP3MetaFixMaxUploadSizeMb) || 150;
+    if (file.size > maxUploadMb * 1024 * 1024) {
+      showToast(`File exceeds the ${maxUploadMb}MB upload limit.`, 'error');
       return;
     }
 
+    const submitBtn = dom.formUploadTake ? dom.formUploadTake.querySelector('button[type="submit"]') : null;
+    const originalBtnText = submitBtn ? submitBtn.textContent : 'Upload Take';
+    state.isUploadingTake = true;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Uploading...';
+    }
+
     const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
+    formData.append('file', file);
     if (label) formData.append('label', label);
     if (prompt) formData.append('prompt', prompt);
     if (notes) formData.append('notes', notes);
@@ -1502,16 +1566,30 @@
       });
 
       if (res.ok) {
+        state.expandedTrackIds.add(trackId);
         showToast('✨ Audio take uploaded successfully!', 'success');
         if (dom.modalUploadTake) dom.modalUploadTake.classList.add('hidden');
-        fetchTracks();
+        if (dom.formUploadTake) dom.formUploadTake.reset();
+        await fetchTracks();
         fetchQuota();
       } else {
-        const err = await res.json();
-        showToast(err.detail || 'Failed to upload take', 'error');
+        let detail = `Failed to upload take (HTTP ${res.status})`;
+        try {
+          const err = await res.json();
+          if (err && err.detail) detail = err.detail;
+        } catch (_) {
+          // Preserve HTTP status detail for non-JSON error responses
+        }
+        showToast(detail, 'error');
       }
-    } catch (e) {
+    } catch (err) {
       showToast('Network error uploading take', 'error');
+    } finally {
+      state.isUploadingTake = false;
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalBtnText;
+      }
     }
   }
 
@@ -1564,6 +1642,7 @@
       });
 
       if (res.ok) {
+        state.expandedTrackIds.add(trackId);
         showToast('✨ Stem uploaded successfully!', 'success');
         if (dom.modalUploadStem) dom.modalUploadStem.classList.add('hidden');
         fetchTracks();
@@ -2315,6 +2394,7 @@
 
     // Forms
     if (dom.formNewTrack) dom.formNewTrack.addEventListener('submit', handleNewTrackSubmit);
+    if (dom.formUploadTake) dom.formUploadTake.addEventListener('submit', handleUploadTakeSubmit);
     if (dom.formNewAlbum) dom.formNewAlbum.addEventListener('submit', handleNewAlbumSubmit);
     if (dom.formUploadStem) dom.formUploadStem.addEventListener('submit', handleUploadStemSubmit);
     if (dom.uploadStemFileInput) {

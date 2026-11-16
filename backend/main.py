@@ -822,6 +822,7 @@ async def upload_audio(
         "metadata": parsed["metadata"],
         "audio_info": parsed["audio_info"],
         "artwork": parsed["artwork"],
+        "loaded_project_take": None,
     }
 
 
@@ -1363,6 +1364,7 @@ async def get_session_state(
         "metadata": parsed.get("metadata", {}),
         "audio_info": parsed.get("audio_info", {}),
         "artwork": artwork_data,
+        "loaded_project_take": session_info.get("loaded_project_take"),
     }
 
 
