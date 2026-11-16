@@ -772,7 +772,7 @@
     try {
       const stored = sessionStorage.getItem('mp3metafix_loaded_project_track');
       if (stored) loadedTake = JSON.parse(stored);
-    } catch (e) {}
+    } catch (e) { }
 
     if (
       !loadedTake ||
@@ -1053,7 +1053,7 @@
       try {
         const stored = sessionStorage.getItem('mp3metafix_loaded_project_track');
         if (stored) loadedTake = JSON.parse(stored);
-      } catch (err) {}
+      } catch (err) { }
       if (!loadedTake) loadedTake = storageState.loadedProjectTake;
       if (!loadedTake || !loadedTake.track_id || !loadedTake.take_id) {
         clearLoadedProjectTakeRef();
@@ -1425,7 +1425,7 @@
       if (dom.btnMasterStemPlay) dom.btnMasterStemPlay.textContent = '❚❚';
       applyStemAudibility();
       for (const [, audio] of stemsState.audioElements) {
-        audio.play().catch(() => {});
+        audio.play().catch(() => { });
       }
       syncStemPlaybackLoop();
     }
