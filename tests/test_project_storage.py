@@ -3407,6 +3407,705 @@ def test_phase1b_stage1_2_refresh_confirm_lock_revision_and_safety(custom_storag
         )
 
 
+def test_phase1b_stage1_3a_v2_schema_and_validation(tmp_path):
+    """Phase 1B Stage 1.3A: strict v1/v2 journal schemas, key ownership, entry-ID & v1 timestamp compatibility."""
+    import json
+    from pydantic import ValidationError
+    from backend.project_models import (
+        ActiveTxRecord,
+        AlbumJournal,
+        ArtifactRefRecord,
+        ArtifactRole,
+        IdempotencyRecord,
+        JournalProtocol,
+        JournalTxState,
+        StagedArtifactRef,
+        TerminalTxReceipt,
+    )
+    from backend.security import get_album_entry_dir_name
+
+    album_id = "alb_13a0000000000001"
+    entry_id = "ale_13a0000000000001"
+    ehash = get_album_entry_dir_name(entry_id)
+    other_entry_id = "ale_13a0000000000002"
+    other_ehash = get_album_entry_dir_name(other_entry_id)
+    sha_a = "a" * 64
+    sha_b = "b" * 64
+    sha_c = "c" * 64
+    sha_m = "d" * 64
+
+    # 1. Existing v1 defaults + serialized v1 journal with created_at=0 remain valid
+    v1_raw_json = json.dumps({
+        "album_id": album_id,
+        "active_tx": {
+            "tx_id": "tx_v1_01",
+            "op": "replace_entry_audio",
+            "state": "prepared",
+            "expected_revision": 1,
+            "target_revision": 2,
+            "payload_sha256": sha_a,
+            "new_refs": [f"entries/{ehash}/audio.wav"],
+            "created_at": 0,
+        },
+    })
+    v1_journal = AlbumJournal.model_validate_json(v1_raw_json)
+    assert v1_journal.schema_version == 1
+    assert v1_journal.protocol == JournalProtocol.LEGACY_PROVISIONAL
+    assert v1_journal.tx_receipts == []
+    assert v1_journal.active_tx is not None and v1_journal.active_tx.created_at == 0.0
+
+    # 2. Explicit v2 construction with structured refs, staged refs, keyed + unkeyed terminal receipts
+    new_audio_ref = ArtifactRefRecord(
+        rel_path=f"entries/{ehash}/audio.wav",
+        role=ArtifactRole.ENTRY_AUDIO,
+        sha256=sha_b,
+        size_bytes=2048,
+        entry_id=entry_id,
+        generation=2,
+    )
+    sup_audio_ref = ArtifactRefRecord(
+        rel_path=f"entries/{ehash}/retained/gen1_audio.wav",
+        role=ArtifactRole.RETAINED_BACKUP,
+        sha256=sha_c,
+        size_bytes=1024,
+        entry_id=entry_id,
+        generation=1,
+    )
+    staged_ref = StagedArtifactRef(
+        rel_path=f"entries/{ehash}/.staging_tx_v2_03_audio.wav",
+        st_dev=1,
+        st_ino=42,
+        sha256=sha_b,
+        size_bytes=2048,
+        role=ArtifactRole.ENTRY_AUDIO,
+    )
+    unkeyed_receipt = TerminalTxReceipt(
+        tx_id="tx_v2_01",
+        op="add_entry",
+        outcome=JournalTxState.COMMITTED,
+        expected_revision=1,
+        result_revision=2,
+        payload_sha256=sha_a,
+        intended_manifest_sha256=sha_m,
+        new_refs=[new_audio_ref],
+        idempotency_key=None,
+    )
+    keyed_abort_receipt = TerminalTxReceipt(
+        tx_id="tx_v2_02",
+        op="replace_entry_audio",
+        outcome=JournalTxState.ABORTED,
+        expected_revision=2,
+        result_revision=2,
+        payload_sha256=sha_a,
+        intended_manifest_sha256=sha_m,
+        idempotency_key="idem_v2_02",
+    )
+    keyed_abort_idem = IdempotencyRecord(
+        key="idem_v2_02",
+        op="replace_entry_audio",
+        expected_revision=2,
+        payload_sha256=sha_a,
+        result_revision=None,
+        tx_id="tx_v2_02",
+        outcome=JournalTxState.ABORTED,
+    )
+    v2_active_tx = ActiveTxRecord(
+        tx_id="tx_v2_03",
+        op="replace_entry_audio",
+        state=JournalTxState.PREPARED,
+        expected_revision=2,
+        target_revision=3,
+        payload_sha256=sha_a,
+        intended_manifest_sha256=sha_m,
+        idempotency_key="idem_v2_03",
+        staging_refs=[staged_ref],
+        new_refs=[new_audio_ref],
+        superseded_refs=[sup_audio_ref],
+    )
+    v2_active_idem = IdempotencyRecord(
+        key="idem_v2_03",
+        op="replace_entry_audio",
+        expected_revision=2,
+        payload_sha256=sha_a,
+        result_revision=None,
+        tx_id="tx_v2_03",
+        outcome=JournalTxState.PREPARED,
+    )
+    v2_journal = AlbumJournal.model_validate({
+        "schema_version": 2,
+        "protocol": "enforced_v2",
+        "album_id": album_id,
+        "active_tx": v2_active_tx.model_dump(mode="json"),
+        "tx_receipts": [unkeyed_receipt.model_dump(mode="json"), keyed_abort_receipt.model_dump(mode="json")],
+        "idempotency_records": [keyed_abort_idem.model_dump(mode="json"), v2_active_idem.model_dump(mode="json")],
+    })
+    assert v2_journal.schema_version == 2
+    assert v2_journal.protocol == JournalProtocol.ENFORCED_V2
+    assert v2_journal.tx_receipts[0].idempotency_key is None
+
+    # 3. Negative via real raw nested-dict / serialized JSON parsing: protocol / version mismatches
+    with pytest.raises(ValidationError, match="protocol='enforced_v2'"):
+        AlbumJournal.model_validate({"schema_version": 2, "album_id": album_id})
+    with pytest.raises(ValidationError, match="protocol='legacy_provisional'"):
+        AlbumJournal.model_validate({"schema_version": 1, "protocol": "enforced_v2", "album_id": album_id})
+    with pytest.raises(ValidationError, match="tx_receipts"):
+        AlbumJournal.model_validate({
+            "schema_version": 1,
+            "album_id": album_id,
+            "tx_receipts": [unkeyed_receipt.model_dump(mode="json")],
+        })
+
+    # 4. Negative: mixed v1/v2 artifact refs & missing v2 manifest digest
+    with pytest.raises(ValidationError, match="mix"):
+        ActiveTxRecord(
+            tx_id="tx_mix_01",
+            op="op",
+            state=JournalTxState.PREPARED,
+            expected_revision=1,
+            target_revision=2,
+            payload_sha256=sha_a,
+            intended_manifest_sha256=sha_m,
+            new_refs=[new_audio_ref.model_dump(mode="json"), f"entries/{other_ehash}/audio.wav"],
+        )
+    with pytest.raises(ValidationError, match="intended_manifest_sha256"):
+        AlbumJournal.model_validate({
+            "schema_version": 2,
+            "protocol": "enforced_v2",
+            "album_id": album_id,
+            "active_tx": {**v1_journal.active_tx.model_dump(mode="json"), "created_at": 1700000000.0},
+        })
+    with pytest.raises(ValidationError, match="size_bytes and role"):
+        AlbumJournal.model_validate({
+            "schema_version": 2,
+            "protocol": "enforced_v2",
+            "album_id": album_id,
+            "active_tx": {
+                **v2_active_tx.model_dump(mode="json"),
+                "staging_refs": [{"rel_path": f"entries/{ehash}/.staging_x", "st_dev": 1, "st_ino": 2, "sha256": sha_b}],
+            },
+        })
+
+    # 5. Negative: idempotency-key ownership across active_tx, tx_receipts, and idempotency_records
+    # Receipt-only duplicate key (no IdempotencyRecord exists)
+    with pytest.raises(ValidationError, match="claimed by multiple transactions"):
+        AlbumJournal.model_validate({
+            "schema_version": 2,
+            "protocol": "enforced_v2",
+            "album_id": album_id,
+            "tx_receipts": [
+                keyed_abort_receipt.model_dump(mode="json"),
+                {**unkeyed_receipt.model_dump(mode="json"), "idempotency_key": "idem_v2_02"},
+            ],
+        })
+    # Active-vs-receipt key conflict (no IdempotencyRecord exists)
+    with pytest.raises(ValidationError, match="conflicts on idempotency key"):
+        AlbumJournal.model_validate({
+            "schema_version": 2,
+            "protocol": "enforced_v2",
+            "album_id": album_id,
+            "active_tx": {**v2_active_tx.model_dump(mode="json"), "idempotency_key": "idem_v2_02"},
+            "tx_receipts": [keyed_abort_receipt.model_dump(mode="json")],
+        })
+
+    # 6. Negative: duplicate/conflicting tx_id, invalid receipt revisions, contradictory idempotency
+    with pytest.raises(ValidationError, match="must not also appear in tx_receipts"):
+        AlbumJournal.model_validate({
+            "schema_version": 2,
+            "protocol": "enforced_v2",
+            "album_id": album_id,
+            "active_tx": {**v2_active_tx.model_dump(mode="json"), "tx_id": "tx_v2_01", "idempotency_key": None},
+            "tx_receipts": [unkeyed_receipt.model_dump(mode="json")],
+        })
+    with pytest.raises(ValidationError, match="Duplicate terminal receipt"):
+        AlbumJournal.model_validate({
+            "schema_version": 2,
+            "protocol": "enforced_v2",
+            "album_id": album_id,
+            "tx_receipts": [unkeyed_receipt.model_dump(mode="json"), unkeyed_receipt.model_dump(mode="json")],
+        })
+    with pytest.raises(ValidationError, match="result_revision > expected_revision"):
+        TerminalTxReceipt(
+            tx_id="tx_bad_rev",
+            op="op",
+            outcome=JournalTxState.COMMITTED,
+            expected_revision=2,
+            result_revision=2,
+            payload_sha256=sha_a,
+            intended_manifest_sha256=sha_m,
+        )
+    with pytest.raises(ValidationError, match="result_revision == expected_revision"):
+        TerminalTxReceipt(
+            tx_id="tx_bad_ab_rev",
+            op="op",
+            outcome=JournalTxState.ABORTED,
+            expected_revision=2,
+            result_revision=3,
+            payload_sha256=sha_a,
+            intended_manifest_sha256=sha_m,
+        )
+    with pytest.raises(ValidationError):
+        TerminalTxReceipt.model_validate({
+            "tx_id": "tx_non_term",
+            "op": "op",
+            "outcome": "prepared",
+            "expected_revision": 1,
+            "result_revision": 2,
+            "payload_sha256": sha_a,
+            "intended_manifest_sha256": sha_m,
+        })
+    with pytest.raises(ValidationError, match="requires a matching TerminalTxReceipt"):
+        AlbumJournal.model_validate({
+            "schema_version": 2,
+            "protocol": "enforced_v2",
+            "album_id": album_id,
+            "idempotency_records": [keyed_abort_idem.model_dump(mode="json")],
+        })
+    with pytest.raises(ValidationError, match="contradicts its TerminalTxReceipt"):
+        AlbumJournal.model_validate({
+            "schema_version": 2,
+            "protocol": "enforced_v2",
+            "album_id": album_id,
+            "tx_receipts": [keyed_abort_receipt.model_dump(mode="json")],
+            "idempotency_records": [{**keyed_abort_idem.model_dump(mode="json"), "payload_sha256": sha_b}],
+        })
+
+    # 7. Negative: established entry_id validator, role/path ownership, and overlap rejections
+    for weak_ale_id in ("ale_short", "ale_bad.dot"):
+        with pytest.raises(ValidationError, match="valid 'ale_' entry identifier"):
+            ArtifactRefRecord(
+                rel_path=f"entries/{ehash}/audio.wav",
+                role=ArtifactRole.ENTRY_AUDIO,
+                sha256=sha_a,
+                size_bytes=10,
+                entry_id=weak_ale_id,
+            )
+    with pytest.raises(ValidationError, match="must reside directly under"):
+        ArtifactRefRecord(
+            rel_path=f"entries/{other_ehash}/audio.wav",
+            role=ArtifactRole.ENTRY_AUDIO,
+            sha256=sha_a,
+            size_bytes=10,
+            entry_id=entry_id,
+        )
+    with pytest.raises(ValidationError, match="supported audio extension"):
+        ArtifactRefRecord(
+            rel_path=f"entries/{ehash}/snapshot.json",
+            role=ArtifactRole.ENTRY_AUDIO,
+            sha256=sha_a,
+            size_bytes=10,
+            entry_id=entry_id,
+        )
+    with pytest.raises(ValidationError, match="'.json' snapshot"):
+        ArtifactRefRecord(
+            rel_path=f"entries/{ehash}/audio.wav",
+            role=ArtifactRole.ENTRY_SNAPSHOT,
+            sha256=sha_a,
+            size_bytes=10,
+            entry_id=entry_id,
+        )
+    with pytest.raises(ValidationError, match="requires entry_id"):
+        ArtifactRefRecord(rel_path=f"entries/{ehash}/audio.wav", role=ArtifactRole.ENTRY_AUDIO, sha256=sha_a, size_bytes=10)
+    with pytest.raises(ValidationError, match="must not specify entry_id"):
+        ArtifactRefRecord(rel_path="cover.jpg", role=ArtifactRole.COVER_ART, sha256=sha_a, size_bytes=10, entry_id=entry_id)
+    with pytest.raises(ValidationError, match="requires generation"):
+        ArtifactRefRecord(rel_path="retained/bak.wav", role=ArtifactRole.RETAINED_BACKUP, sha256=sha_a, size_bytes=10)
+    with pytest.raises(ValidationError, match="Path traversal"):
+        ArtifactRefRecord(rel_path="../secret.wav", role=ArtifactRole.COVER_ART, sha256=sha_a, size_bytes=10)
+    with pytest.raises(ValidationError):
+        ArtifactRefRecord(rel_path="cover.jpg", role=ArtifactRole.COVER_ART, sha256="not_hex", size_bytes=10)
+    with pytest.raises(ValidationError, match="64-character hexadecimal"):
+        ArtifactRefRecord(rel_path="cover.jpg", role=ArtifactRole.COVER_ART, sha256="z" * 64, size_bytes=10)
+    with pytest.raises(ValidationError, match="must not overlap"):
+        TerminalTxReceipt(
+            tx_id="tx_ovl",
+            op="op",
+            outcome=JournalTxState.COMMITTED,
+            expected_revision=1,
+            result_revision=2,
+            payload_sha256=sha_a,
+            intended_manifest_sha256=sha_m,
+            new_refs=[new_audio_ref],
+            superseded_refs=[new_audio_ref],
+        )
+
+
+def test_phase1b_stage1_3a_canonical_digest_and_provisional_v2_classification(custom_storage: ProjectStorageManager):
+    """Phase 1B Stage 1.3A: canonical digest determinism, historical receipts, artifact-to-manifest binding, and zero migration."""
+    import io
+    import json
+    import wave
+    from backend.project_models import (
+        ActiveTxRecord,
+        AlbumJournal,
+        ArtifactRefRecord,
+        ArtifactRole,
+        JournalProtocol,
+        JournalTxState,
+        RecoveryConsistency,
+        TerminalTxReceipt,
+    )
+    from backend.security import get_album_entry_dir_name
+
+    user_id = "u_1b_s1_3a_cls"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 400)
+    wav_ok = buf.getvalue()
+
+    trk = custom_storage.create_track(user_id=user_id, title="Stage 1.3A Track")
+    take = custom_storage.create_take(
+        user_id=user_id, track_id=trk.id, audio_bytes=wav_ok, original_filename="s13a.wav", extension=".wav"
+    )
+    alb = custom_storage.create_album(user_id=user_id, title="Stage 1.3A Album")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=take.id)
+    entry = alb.tracks[0]
+    assert entry.id is not None and entry.snapshot is not None
+    ehash = get_album_entry_dir_name(entry.id)
+
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    base_data = json.loads((alb_dir / "album.json").read_text(encoding="utf-8"))
+
+    # 1. Canonical digest determinism across key reordering
+    reordered_data = {k: base_data[k] for k in reversed(list(base_data.keys()))}
+    d1 = ProjectStorageManager._compute_canonical_manifest_sha256(base_data)
+    d2 = ProjectStorageManager._compute_canonical_manifest_sha256(reordered_data)
+    assert d1 == d2
+
+    # Build target_data (rev=3) with explicit active_audio_filename & active_generation for artifact binding
+    target_data = json.loads(json.dumps(base_data))
+    target_data["revision"] = 3
+    target_data["last_tx_id"] = "tx_v2_02"
+    target_data["tx_history"] = ["tx_v2_01", "tx_v2_02"]
+    target_data["title"] = "Updated V2 Title"
+    target_data["tracks"][0]["active_generation"] = 1
+    target_data["tracks"][0]["active_audio_filename"] = "audio.wav"
+    target_data["tracks"][0]["active_snapshot_filename"] = "snapshot.json"
+    target_sha = ProjectStorageManager._compute_canonical_manifest_sha256(target_data)
+
+    audio_ref = ArtifactRefRecord(
+        rel_path=f"entries/{ehash}/audio.wav",
+        role=ArtifactRole.ENTRY_AUDIO,
+        sha256=entry.snapshot.audio_sha256,
+        size_bytes=entry.snapshot.size_bytes,
+        entry_id=entry.id,
+        generation=1,
+    )
+    snap_ref = ArtifactRefRecord(
+        rel_path=f"entries/{ehash}/snapshot.json",
+        role=ArtifactRole.ENTRY_SNAPSHOT,
+        sha256="e" * 64,
+        size_bytes=256,
+        entry_id=entry.id,
+        generation=1,
+    )
+
+    # 2. Historical COMMITTED receipt (rev=2, tx_v2_01) with different digest + later rev=3 manifest -> CONSISTENT_IDLE
+    hist_rcp = TerminalTxReceipt(
+        tx_id="tx_v2_01",
+        op="add_entry",
+        outcome=JournalTxState.COMMITTED,
+        expected_revision=1,
+        result_revision=2,
+        payload_sha256="a" * 64,
+        intended_manifest_sha256=d1,
+    )
+    curr_rcp = TerminalTxReceipt(
+        tx_id="tx_v2_02",
+        op="update_album",
+        outcome=JournalTxState.COMMITTED,
+        expected_revision=2,
+        result_revision=3,
+        payload_sha256="a" * 64,
+        intended_manifest_sha256=target_sha,
+        new_refs=[audio_ref, snap_ref],
+    )
+    idle_v2_j = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb.id,
+        tx_receipts=[hist_rcp, curr_rcp],
+    )
+    assert ProjectStorageManager._classify_album_consistency(target_data, idle_v2_j) == RecoveryConsistency.CONSISTENT_IDLE
+
+    # Incomplete lineage (hist_rcp not in tx_history) -> UNCERTAIN (not CORRUPT, not IDLE)
+    no_hist_data = dict(target_data, tx_history=["tx_v2_02"])
+    no_hist_rcp = curr_rcp.model_copy(
+        update={"intended_manifest_sha256": ProjectStorageManager._compute_canonical_manifest_sha256(no_hist_data)}
+    )
+    assert ProjectStorageManager._classify_album_consistency(
+        no_hist_data,
+        AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id, tx_receipts=[hist_rcp, no_hist_rcp]),
+    ) == RecoveryConsistency.UNCERTAIN
+
+    # Contradictions: ABORTED receipt represented as published, or COMMITTED receipt beyond manifest_rev -> CORRUPT
+    aborted_published_rcp = TerminalTxReceipt(
+        tx_id="tx_v2_01",
+        op="add_entry",
+        outcome=JournalTxState.ABORTED,
+        expected_revision=1,
+        result_revision=1,
+        payload_sha256="a" * 64,
+        intended_manifest_sha256=d1,
+    )
+    assert ProjectStorageManager._classify_album_consistency(
+        target_data,
+        AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id, tx_receipts=[aborted_published_rcp, curr_rcp]),
+    ) == RecoveryConsistency.CORRUPT
+
+    future_rcp = TerminalTxReceipt(
+        tx_id="tx_v2_99",
+        op="update_album",
+        outcome=JournalTxState.COMMITTED,
+        expected_revision=3,
+        result_revision=4,
+        payload_sha256="a" * 64,
+        intended_manifest_sha256="f" * 64,
+    )
+    assert ProjectStorageManager._classify_album_consistency(
+        target_data,
+        AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id, tx_receipts=[hist_rcp, curr_rcp, future_rcp]),
+    ) == RecoveryConsistency.CORRUPT
+
+    # 3. v2 active_tx classifications & artifact-to-manifest binding
+    v2_intent_tx = ActiveTxRecord(
+        tx_id="tx_v2_02",
+        op="update_album",
+        state=JournalTxState.PUBLISH_INTENT,
+        expected_revision=2,
+        target_revision=3,
+        payload_sha256="a" * 64,
+        intended_manifest_sha256=target_sha,
+        new_refs=[audio_ref, snap_ref],
+    )
+    v2_intent_j = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb.id,
+        active_tx=v2_intent_tx,
+        tx_receipts=[hist_rcp],
+    )
+    assert ProjectStorageManager._classify_album_consistency(target_data, v2_intent_j) == RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+
+    # Insufficient layout metadata (active_audio_filename omitted in manifest) -> UNCERTAIN
+    no_fname_data = json.loads(json.dumps(target_data))
+    del no_fname_data["tracks"][0]["active_audio_filename"]
+    no_fname_sha = ProjectStorageManager._compute_canonical_manifest_sha256(no_fname_data)
+    no_fname_j = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb.id,
+        active_tx=v2_intent_tx.model_copy(update={"intended_manifest_sha256": no_fname_sha}),
+        tx_receipts=[hist_rcp],
+    )
+    assert ProjectStorageManager._classify_album_consistency(no_fname_data, no_fname_j) == RecoveryConsistency.UNCERTAIN
+
+    # Contradictory active_audio_filename -> CORRUPT
+    wrong_fname_data = json.loads(json.dumps(target_data))
+    wrong_fname_data["tracks"][0]["active_audio_filename"] = "other.wav"
+    wrong_fname_sha = ProjectStorageManager._compute_canonical_manifest_sha256(wrong_fname_data)
+    wrong_fname_j = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb.id,
+        active_tx=v2_intent_tx.model_copy(update={"intended_manifest_sha256": wrong_fname_sha}),
+        tx_receipts=[hist_rcp],
+    )
+    assert ProjectStorageManager._classify_album_consistency(wrong_fname_data, wrong_fname_j) == RecoveryConsistency.CORRUPT
+
+    # Tampered manifest with wrong digest -> CORRUPT
+    tampered_data = dict(target_data, title="Tampered Title")
+    assert ProjectStorageManager._classify_album_consistency(tampered_data, v2_intent_j) == RecoveryConsistency.CORRUPT
+
+    # 4. Ordinary reads remain side-effect-free (no journal.json created or migrated)
+    assert not (alb_dir / "journal.json").exists()
+    assert custom_storage.get_album(user_id, alb.id) is not None
+    assert not (alb_dir / "journal.json").exists()
+
+    # Existing v1 journal with created_at=0 on disk parses cleanly and is not auto-migrated during get_album
+    (alb_dir / "journal.json").write_text(
+        json.dumps({"schema_version": 1, "album_id": alb.id, "active_tx": {"tx_id": "tx_v1_0", "op": "op", "state": "prepared", "expected_revision": 1, "target_revision": 2, "payload_sha256": "a" * 64, "created_at": 0}}),
+        encoding="utf-8",
+    )
+    v1_raw_before = (alb_dir / "journal.json").read_bytes()
+    assert custom_storage.get_album(user_id, alb.id) is not None
+    assert (alb_dir / "journal.json").read_bytes() == v1_raw_before
+
+
+def test_phase1b_stage1_3a_advanced_revision_snapshot_identity_and_omissions(custom_storage: ProjectStorageManager):
+    """Phase 1B Stage 1.3A: advanced-revision markers, snapshot identity checks, omitted metadata, and CORRUPT > UNCERTAIN precedence."""
+    import io
+    import json
+    import wave
+    from backend.project_models import (
+        ActiveTxRecord,
+        AlbumJournal,
+        ArtifactRefRecord,
+        ArtifactRole,
+        JournalProtocol,
+        JournalTxState,
+        RecoveryConsistency,
+        TerminalTxReceipt,
+    )
+    from backend.security import get_album_entry_dir_name
+
+    user_id = "u_1b_s1_3a_adv"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 400)
+    wav_ok = buf.getvalue()
+
+    trk = custom_storage.create_track(user_id=user_id, title="Adv Rev Track")
+    take = custom_storage.create_take(
+        user_id=user_id, track_id=trk.id, audio_bytes=wav_ok, original_filename="adv.wav", extension=".wav"
+    )
+    alb = custom_storage.create_album(user_id=user_id, title="Adv Rev Album")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=take.id)
+    entry = alb.tracks[0]
+    assert entry.id is not None and entry.snapshot is not None
+    ehash = get_album_entry_dir_name(entry.id)
+
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    base_data = json.loads((alb_dir / "album.json").read_text(encoding="utf-8"))
+
+    # Exact rev=2 manifest committed by tx_T
+    rev2_data = json.loads(json.dumps(base_data))
+    rev2_data["revision"] = 2
+    rev2_data["last_tx_id"] = "tx_T"
+    rev2_data["tx_history"] = ["tx_T"]
+    rev2_data["tracks"][0]["active_generation"] = 1
+    rev2_data["tracks"][0]["active_audio_filename"] = "audio.wav"
+    rev2_data["tracks"][0]["active_snapshot_filename"] = "snapshot.json"
+    rev2_sha = ProjectStorageManager._compute_canonical_manifest_sha256(rev2_data)
+
+    audio_ref = ArtifactRefRecord(
+        rel_path=f"entries/{ehash}/audio.wav",
+        role=ArtifactRole.ENTRY_AUDIO,
+        sha256=entry.snapshot.audio_sha256,
+        size_bytes=entry.snapshot.size_bytes,
+        entry_id=entry.id,
+        generation=1,
+    )
+    snap_ref = ArtifactRefRecord(
+        rel_path=f"entries/{ehash}/snapshot.json",
+        role=ArtifactRole.ENTRY_SNAPSHOT,
+        sha256="e" * 64,
+        size_bytes=256,
+        entry_id=entry.id,
+        generation=1,
+    )
+
+    # 1. Later revision (rev=3) retaining last_tx_id="tx_T" after Phase 1A metadata update -> UNCERTAIN (not CORRUPT)
+    rev3_data = json.loads(json.dumps(rev2_data))
+    rev3_data["revision"] = 3
+    rev3_data["title"] = "Phase 1A Metadata Update"
+    rcp_T = TerminalTxReceipt(
+        tx_id="tx_T",
+        op="replace_entry_audio",
+        outcome=JournalTxState.COMMITTED,
+        expected_revision=1,
+        result_revision=2,
+        payload_sha256="a" * 64,
+        intended_manifest_sha256=rev2_sha,
+        new_refs=[audio_ref, snap_ref],
+    )
+    j_rcp_T = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb.id,
+        tx_receipts=[rcp_T],
+    )
+    assert ProjectStorageManager._classify_album_consistency(rev2_data, j_rcp_T) == RecoveryConsistency.CONSISTENT_IDLE
+    assert ProjectStorageManager._classify_album_consistency(rev3_data, j_rcp_T) == RecoveryConsistency.UNCERTAIN
+
+    # Same advanced-revision condition with unresolved active_tx (PUBLISH_INTENT) -> UNCERTAIN (not CORRUPT)
+    tx_T_active = ActiveTxRecord(
+        tx_id="tx_T",
+        op="replace_entry_audio",
+        state=JournalTxState.PUBLISH_INTENT,
+        expected_revision=1,
+        target_revision=2,
+        payload_sha256="a" * 64,
+        intended_manifest_sha256=rev2_sha,
+        new_refs=[audio_ref, snap_ref],
+    )
+    j_active_T = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb.id,
+        active_tx=tx_T_active,
+    )
+    assert ProjectStorageManager._classify_album_consistency(rev2_data, j_active_T) == RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+    assert ProjectStorageManager._classify_album_consistency(rev3_data, j_active_T) == RecoveryConsistency.UNCERTAIN
+
+    # Genuine contradictory marker/revision evidence -> CORRUPT
+    rev1_bad = json.loads(json.dumps(rev2_data))
+    rev1_bad["revision"] = 1
+    assert ProjectStorageManager._classify_album_consistency(rev1_bad, j_rcp_T) == RecoveryConsistency.CORRUPT
+    assert ProjectStorageManager._classify_album_consistency(rev1_bad, j_active_T) == RecoveryConsistency.CORRUPT
+    j_prep_T = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb.id,
+        active_tx=ActiveTxRecord(
+            tx_id="tx_T",
+            op="replace_entry_audio",
+            state=JournalTxState.PREPARED,
+            expected_revision=1,
+            target_revision=2,
+            payload_sha256="a" * 64,
+            intended_manifest_sha256=rev2_sha,
+            new_refs=[audio_ref, snap_ref],
+        ),
+    )
+    assert ProjectStorageManager._classify_album_consistency(rev3_data, j_prep_T) == RecoveryConsistency.CORRUPT
+
+    # 2. Snapshot identity mismatches (with recomputed matching intended_manifest_sha256) -> CORRUPT
+    def _classify_mutated(mutator, refs):
+        m = json.loads(json.dumps(rev2_data))
+        mutator(m)
+        m_sha = ProjectStorageManager._compute_canonical_manifest_sha256(m)
+        j = AlbumJournal(
+            schema_version=2,
+            protocol=JournalProtocol.ENFORCED_V2,
+            album_id=alb.id,
+            active_tx=ActiveTxRecord(
+                tx_id="tx_T",
+                op="replace_entry_audio",
+                state=JournalTxState.PUBLISH_INTENT,
+                expected_revision=1,
+                target_revision=2,
+                payload_sha256="a" * 64,
+                intended_manifest_sha256=m_sha,
+                new_refs=refs,
+            ),
+        )
+        return ProjectStorageManager._classify_album_consistency(m, j)
+
+    for ref_set in ([audio_ref], [snap_ref]):
+        assert _classify_mutated(lambda m: m["tracks"][0]["snapshot"].update({"entry_id": "ale_0000000000000000"}), ref_set) == RecoveryConsistency.CORRUPT
+        assert _classify_mutated(lambda m: m["tracks"][0]["snapshot"].update({"source_track_id": "trk_0000000000000000"}), ref_set) == RecoveryConsistency.CORRUPT
+        assert _classify_mutated(lambda m: m["tracks"][0]["snapshot"].update({"source_take_id": "tak_0000000000000000"}), ref_set) == RecoveryConsistency.CORRUPT
+
+    # 3. Missing optional metadata vs explicit conflicting values (with recomputed matching intended_manifest_sha256)
+    assert _classify_mutated(lambda m: m["tracks"][0].pop("has_owned_audio", None), [audio_ref]) == RecoveryConsistency.UNCERTAIN
+    assert _classify_mutated(lambda m: m["tracks"][0].update({"has_owned_audio": False}), [audio_ref]) == RecoveryConsistency.CORRUPT
+    assert _classify_mutated(lambda m: m["tracks"][0]["snapshot"].pop("size_bytes", None), [audio_ref]) == RecoveryConsistency.UNCERTAIN
+    assert _classify_mutated(lambda m: m["tracks"][0]["snapshot"].update({"size_bytes": entry.snapshot.size_bytes + 1}), [audio_ref]) == RecoveryConsistency.CORRUPT
+
+    # 4. Precedence: earlier missing field (UNCERTAIN) + later explicit contradiction (CORRUPT) -> CORRUPT
+    def _omit_owned_and_mismatch_take(m):
+        m["tracks"][0].pop("has_owned_audio", None)
+        m["tracks"][0]["snapshot"]["source_take_id"] = "tak_0000000000000000"
+
+    assert _classify_mutated(_omit_owned_and_mismatch_take, [audio_ref]) == RecoveryConsistency.CORRUPT
+
+
 
 
 

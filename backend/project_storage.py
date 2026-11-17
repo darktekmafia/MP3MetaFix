@@ -59,7 +59,10 @@ from backend.project_models import (
     AlbumEntryRefreshPreviewResponse,
     StorageQuotaStats,
     JournalTxState,
+    JournalProtocol,
     RecoveryConsistency,
+    ArtifactRole,
+    ArtifactRefRecord,
     StagedArtifactRef,
     ActiveTxRecord,
     RetainedArtifactRecord,
@@ -3720,9 +3723,340 @@ class ProjectStorageManager:
                     pass
 
     @staticmethod
+    def _compute_canonical_manifest_sha256(manifest_data: Dict[str, Any]) -> str:
+        """Compute deterministic SHA-256 hex digest over canonical serialized Album manifest JSON."""
+        if not isinstance(manifest_data, dict):
+            raise ValueError("Album manifest payload must be a JSON object.")
+        canonical_bytes = json.dumps(
+            manifest_data,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(canonical_bytes).hexdigest()
+
+    @staticmethod
     def _write_album_journal_atomic_in_dir(album_dir_fd: int, journal: AlbumJournal) -> None:
         """Atomically publish and directory-sync journal.json inside a validated album_dir_fd."""
         _publish_manifest_atomic_in_dir(album_dir_fd, "journal.json", journal.model_dump(mode="json"))
+
+    @staticmethod
+    @staticmethod
+    def _verify_v2_refs_against_manifest(
+        album_data: Dict[str, Any],
+        refs: List[ArtifactRefRecord],
+    ) -> Optional[RecoveryConsistency]:
+        """Verify structured ArtifactRefRecord descriptors against raw manifest fields (read-only).
+
+        Returns CORRUPT on direct contradiction, UNCERTAIN when manifest layout/metadata
+        is insufficient to verify a relationship, or None when all descriptors match.
+        Evaluates all applicable relationships so CORRUPT always takes precedence over UNCERTAIN.
+        """
+        if not refs:
+            return None
+
+        raw_tracks = album_data.get("tracks")
+        entries_by_id: Dict[str, Dict[str, Any]] = {}
+        if isinstance(raw_tracks, list):
+            for item in raw_tracks:
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    entries_by_id[item["id"]] = item
+
+        uncertain = False
+        for ref in refs:
+            if not isinstance(ref, ArtifactRefRecord):
+                return RecoveryConsistency.CORRUPT
+
+            if ref.role in (ArtifactRole.ENTRY_AUDIO, ArtifactRole.ENTRY_SNAPSHOT):
+                if ref.entry_id is None:
+                    return RecoveryConsistency.CORRUPT
+                entry = entries_by_id.get(ref.entry_id)
+                if entry is None:
+                    return RecoveryConsistency.CORRUPT
+                if entry.get("is_placeholder") is True:
+                    return RecoveryConsistency.CORRUPT
+
+                has_owned = entry.get("has_owned_audio")
+                if has_owned is False:
+                    return RecoveryConsistency.CORRUPT
+                if has_owned is None:
+                    uncertain = True
+                elif has_owned is not True:
+                    return RecoveryConsistency.CORRUPT
+
+                expected_ehash = get_album_entry_dir_name(ref.entry_id)
+                parts = ref.rel_path.split("/")
+                if len(parts) != 3 or parts[0] != "entries" or parts[1] != expected_ehash:
+                    return RecoveryConsistency.CORRUPT
+                filename = parts[2]
+
+                entry_gen = entry.get("active_generation")
+                if ref.generation is not None:
+                    if entry_gen is None:
+                        uncertain = True
+                    elif entry_gen != ref.generation:
+                        return RecoveryConsistency.CORRUPT
+                elif entry_gen is not None:
+                    uncertain = True
+
+                if ref.role == ArtifactRole.ENTRY_AUDIO:
+                    active_audio = entry.get("active_audio_filename")
+                    if active_audio is None:
+                        uncertain = True
+                    elif active_audio != filename:
+                        return RecoveryConsistency.CORRUPT
+                else:
+                    active_snap = entry.get("active_snapshot_filename")
+                    if active_snap is None:
+                        uncertain = True
+                    elif active_snap != filename:
+                        return RecoveryConsistency.CORRUPT
+
+                snap = entry.get("snapshot")
+                if snap is None:
+                    uncertain = True
+                elif not isinstance(snap, dict):
+                    return RecoveryConsistency.CORRUPT
+                else:
+                    snap_entry_id = snap.get("entry_id")
+                    if snap_entry_id is None:
+                        uncertain = True
+                    elif snap_entry_id != ref.entry_id:
+                        return RecoveryConsistency.CORRUPT
+
+                    snap_track_id = snap.get("source_track_id")
+                    entry_track_id = entry.get("track_id")
+                    if snap_track_id is None or entry_track_id is None:
+                        uncertain = True
+                    elif snap_track_id != entry_track_id:
+                        return RecoveryConsistency.CORRUPT
+
+                    snap_take_id = snap.get("source_take_id")
+                    entry_take_id = entry.get("take_id")
+                    if snap_take_id is None or entry_take_id is None:
+                        uncertain = True
+                    elif snap_take_id != entry_take_id:
+                        return RecoveryConsistency.CORRUPT
+
+                    if ref.role == ArtifactRole.ENTRY_AUDIO:
+                        snap_sha = snap.get("audio_sha256")
+                        if snap_sha is None:
+                            uncertain = True
+                        elif snap_sha != ref.sha256:
+                            return RecoveryConsistency.CORRUPT
+
+                        snap_size = snap.get("size_bytes")
+                        if snap_size is None:
+                            uncertain = True
+                        elif snap_size != ref.size_bytes:
+                            return RecoveryConsistency.CORRUPT
+
+                        snap_fmt = snap.get("format")
+                        if snap_fmt is None:
+                            uncertain = True
+                        elif isinstance(snap_fmt, str) and snap_fmt:
+                            expected_ext = f".{snap_fmt.lower().lstrip('.')}"
+                            if os.path.splitext(filename)[1].lower() != expected_ext:
+                                return RecoveryConsistency.CORRUPT
+                        else:
+                            return RecoveryConsistency.CORRUPT
+
+            elif ref.role == ArtifactRole.COVER_ART:
+                has_cover = album_data.get("has_cover")
+                if has_cover is False:
+                    return RecoveryConsistency.CORRUPT
+                if has_cover is None:
+                    uncertain = True
+                elif has_cover is not True:
+                    return RecoveryConsistency.CORRUPT
+
+                active_cover = album_data.get("active_cover_filename")
+                if active_cover is None:
+                    uncertain = True
+                elif active_cover != ref.rel_path:
+                    return RecoveryConsistency.CORRUPT
+
+                cover_gen = album_data.get("cover_generation")
+                if ref.generation is not None:
+                    if cover_gen is None:
+                        uncertain = True
+                    elif cover_gen != ref.generation:
+                        return RecoveryConsistency.CORRUPT
+                elif cover_gen is not None:
+                    uncertain = True
+
+            elif ref.role == ArtifactRole.RETAINED_BACKUP:
+                if ref.entry_id is not None:
+                    entry = entries_by_id.get(ref.entry_id)
+                    if entry is not None:
+                        active_audio = entry.get("active_audio_filename")
+                        active_snap = entry.get("active_snapshot_filename")
+                        basename = ref.rel_path.split("/")[-1]
+                        if basename in (active_audio, active_snap) and len(ref.rel_path.split("/")) == 3:
+                            return RecoveryConsistency.CORRUPT
+                elif ref.rel_path == album_data.get("active_cover_filename"):
+                    return RecoveryConsistency.CORRUPT
+
+        return RecoveryConsistency.UNCERTAIN if uncertain else None
+
+    @classmethod
+    def _classify_v2_album_consistency(
+        cls,
+        *,
+        album_data: Dict[str, Any],
+        journal: AlbumJournal,
+        manifest_rev: int,
+        last_tx_id: Optional[str],
+        tx_history: Optional[List[str]],
+        is_deleted: Optional[bool],
+        delete_tx_id: Optional[str],
+    ) -> RecoveryConsistency:
+        """Pure provisional classifier for enforced_v2 journals (verifies canonical manifest SHA-256, receipts, & artifact bindings)."""
+        if journal.schema_version != 2 or journal.protocol != JournalProtocol.ENFORCED_V2:
+            return RecoveryConsistency.CORRUPT
+        try:
+            manifest_sha256 = cls._compute_canonical_manifest_sha256(album_data)
+        except Exception:
+            return RecoveryConsistency.CORRUPT
+
+        hist_list = tx_history if isinstance(tx_history, list) else []
+        lineage_uncertain = False
+
+        for rcp in journal.tx_receipts:
+            in_current_marker = (rcp.tx_id == last_tx_id) or (is_deleted is True and rcp.tx_id == delete_tx_id)
+            in_hist_marker = rcp.tx_id in hist_list
+
+            if rcp.outcome == JournalTxState.ABORTED:
+                if in_current_marker or in_hist_marker:
+                    return RecoveryConsistency.CORRUPT
+                if rcp.result_revision > manifest_rev:
+                    return RecoveryConsistency.CORRUPT
+                continue
+
+            if rcp.outcome == JournalTxState.COMMITTED:
+                if rcp.result_revision > manifest_rev:
+                    return RecoveryConsistency.CORRUPT
+                if in_current_marker:
+                    if manifest_rev == rcp.result_revision:
+                        # Exact-current candidate
+                        if rcp.intended_manifest_sha256 != manifest_sha256:
+                            return RecoveryConsistency.CORRUPT
+                        ref_issue = cls._verify_v2_refs_against_manifest(album_data, rcp.new_refs)
+                        if ref_issue == RecoveryConsistency.CORRUPT:
+                            return RecoveryConsistency.CORRUPT
+                        if ref_issue == RecoveryConsistency.UNCERTAIN:
+                            lineage_uncertain = True
+                    else:
+                        # Advanced-revision candidate (manifest_rev > rcp.result_revision retaining marker)
+                        lineage_uncertain = True
+                elif in_hist_marker:
+                    if rcp.result_revision >= manifest_rev:
+                        return RecoveryConsistency.CORRUPT
+                    if rcp.intended_manifest_sha256 == manifest_sha256:
+                        return RecoveryConsistency.CORRUPT
+                else:
+                    # Committed receipt not present in current or historical manifest markers
+                    if rcp.result_revision == manifest_rev:
+                        if last_tx_id is not None and last_tx_id != rcp.tx_id:
+                            return RecoveryConsistency.CORRUPT
+                        if rcp.intended_manifest_sha256 != manifest_sha256:
+                            return RecoveryConsistency.CORRUPT
+                        lineage_uncertain = True
+                    else:
+                        if rcp.intended_manifest_sha256 == manifest_sha256:
+                            return RecoveryConsistency.CORRUPT
+                        lineage_uncertain = True
+
+        if journal.active_tx is None:
+            return RecoveryConsistency.UNCERTAIN if lineage_uncertain else RecoveryConsistency.CONSISTENT_IDLE
+
+        tx = journal.active_tx
+        if type(tx.expected_revision) is not int or type(tx.target_revision) is not int:
+            return RecoveryConsistency.CORRUPT
+        if tx.expected_revision < 1 or tx.target_revision <= tx.expected_revision:
+            return RecoveryConsistency.CORRUPT
+        if not tx.intended_manifest_sha256:
+            return RecoveryConsistency.CORRUPT
+
+        manifest_matches_intended = manifest_sha256 == tx.intended_manifest_sha256
+
+        if tx.op == "delete_album":
+            in_delete_marker = is_deleted is True and delete_tx_id == tx.tx_id
+            in_other_markers = (last_tx_id == tx.tx_id) or (tx.tx_id in hist_list)
+            if in_delete_marker:
+                if tx.state in (JournalTxState.PREPARED, JournalTxState.ABORTED):
+                    return RecoveryConsistency.CORRUPT
+                if manifest_rev < tx.target_revision:
+                    return RecoveryConsistency.CORRUPT
+                if manifest_rev > tx.target_revision:
+                    return RecoveryConsistency.UNCERTAIN
+                if not manifest_matches_intended:
+                    return RecoveryConsistency.CORRUPT
+                ref_issue = cls._verify_v2_refs_against_manifest(album_data, tx.new_refs)
+                if ref_issue == RecoveryConsistency.CORRUPT:
+                    return RecoveryConsistency.CORRUPT
+                if ref_issue == RecoveryConsistency.UNCERTAIN or lineage_uncertain:
+                    return RecoveryConsistency.UNCERTAIN
+                return RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+            if in_other_markers:
+                return RecoveryConsistency.CORRUPT
+            if tx.state in (JournalTxState.PREPARED, JournalTxState.ABORTED):
+                if manifest_rev == tx.expected_revision and not manifest_matches_intended:
+                    return RecoveryConsistency.UNCERTAIN if lineage_uncertain else RecoveryConsistency.PROVISIONAL_ABORT_CANDIDATE
+                return RecoveryConsistency.CORRUPT
+            if tx.state in (JournalTxState.PUBLISH_INTENT, JournalTxState.UNCERTAIN):
+                return (
+                    RecoveryConsistency.UNCERTAIN
+                    if manifest_rev == tx.expected_revision and not manifest_matches_intended
+                    else RecoveryConsistency.CORRUPT
+                )
+            return RecoveryConsistency.CORRUPT
+
+        if delete_tx_id == tx.tx_id:
+            return RecoveryConsistency.CORRUPT
+
+        if last_tx_id == tx.tx_id:
+            if tx.state in (JournalTxState.PREPARED, JournalTxState.ABORTED):
+                return RecoveryConsistency.CORRUPT
+            if manifest_rev < tx.target_revision:
+                return RecoveryConsistency.CORRUPT
+            if manifest_rev > tx.target_revision:
+                # Advanced-revision candidate retaining active_tx marker
+                return RecoveryConsistency.UNCERTAIN
+            if not manifest_matches_intended:
+                return RecoveryConsistency.CORRUPT
+            ref_issue = cls._verify_v2_refs_against_manifest(album_data, tx.new_refs)
+            if ref_issue == RecoveryConsistency.CORRUPT:
+                return RecoveryConsistency.CORRUPT
+            if ref_issue == RecoveryConsistency.UNCERTAIN or lineage_uncertain:
+                return RecoveryConsistency.UNCERTAIN
+            return RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+
+        if tx.tx_id in hist_list:
+            if tx.state in (JournalTxState.PREPARED, JournalTxState.ABORTED):
+                return RecoveryConsistency.CORRUPT
+            idx = hist_list.index(tx.tx_id)
+            trailing_journal_ops = len(hist_list) - 1 - idx
+            if trailing_journal_ops < 1:
+                return RecoveryConsistency.CORRUPT
+            if manifest_rev >= tx.target_revision + trailing_journal_ops:
+                return RecoveryConsistency.UNCERTAIN if lineage_uncertain else RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+            return RecoveryConsistency.CORRUPT
+
+        if manifest_matches_intended:
+            return RecoveryConsistency.CORRUPT
+        if tx.state in (JournalTxState.PREPARED, JournalTxState.ABORTED):
+            if manifest_rev == tx.expected_revision:
+                return RecoveryConsistency.UNCERTAIN if lineage_uncertain else RecoveryConsistency.PROVISIONAL_ABORT_CANDIDATE
+            return RecoveryConsistency.CORRUPT
+        if tx.state in (JournalTxState.PUBLISH_INTENT, JournalTxState.UNCERTAIN):
+            return (
+                RecoveryConsistency.UNCERTAIN
+                if manifest_rev == tx.expected_revision
+                else RecoveryConsistency.CORRUPT
+            )
+        return RecoveryConsistency.CORRUPT
 
     @classmethod
     def _classify_album_consistency(
@@ -3802,6 +4136,17 @@ class ProjectStorageManager:
 
         if journal.album_id != album_id:
             return RecoveryConsistency.CORRUPT
+
+        if journal.protocol == JournalProtocol.ENFORCED_V2:
+            return cls._classify_v2_album_consistency(
+                album_data=album_data,
+                journal=journal,
+                manifest_rev=manifest_rev,
+                last_tx_id=last_tx_id,
+                tx_history=tx_history,
+                is_deleted=is_deleted,
+                delete_tx_id=delete_tx_id,
+            )
 
         if journal.active_tx is None:
             return RecoveryConsistency.CONSISTENT_IDLE
