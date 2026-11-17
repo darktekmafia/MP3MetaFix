@@ -154,6 +154,9 @@
     dom.btnConfirmAddTrackToAlbum = document.getElementById('btnConfirmAddTrackToAlbum');
 
     dom.modalRefreshAlbumEntry = document.getElementById('modalRefreshAlbumEntry');
+    dom.audioElement = document.getElementById('audioElement');
+    dom.playIcon = document.getElementById('playIcon');
+    dom.pauseIcon = document.getElementById('pauseIcon');
     dom.refreshEntrySubtitle = document.getElementById('refreshEntrySubtitle');
     dom.refreshStatusNotice = document.getElementById('refreshStatusNotice');
     dom.refreshAlbumCopySummary = document.getElementById('refreshAlbumCopySummary');
@@ -862,8 +865,221 @@
     }
   }
 
+  // --- Album Entry Preview (reuses shared #audioElement) ---
+  const albumPreviewState = {
+    albumId: null,
+    entryId: null,
+    streamUrl: null,
+    status: 'idle', // 'idle' | 'loading' | 'playing' | 'paused'
+    token: 0,
+  };
+
+  function getAlbumEntryStreamUrl(album, entry) {
+    if (!album || !album.id || !entry || !entry.id) return '';
+    const base = `/api/projects/albums/${encodeURIComponent(album.id)}/entries/${encodeURIComponent(entry.id)}/stream`;
+    if (entry.active_generation !== undefined && entry.active_generation !== null) {
+      return `${base}?g=${encodeURIComponent(entry.active_generation)}`;
+    }
+    return base;
+  }
+
+  function syncSharedPlayerIcons(isPlaying) {
+    if (dom.playIcon) dom.playIcon.classList.toggle('hidden', !!isPlaying);
+    if (dom.pauseIcon) dom.pauseIcon.classList.toggle('hidden', !isPlaying);
+  }
+
+  function updateAlbumPreviewButtons() {
+    if (!dom.albumSequencerTbody) return;
+    const buttons = dom.albumSequencerTbody.querySelectorAll('button[data-preview-entry-id]');
+    buttons.forEach(btn => {
+      const eid = btn.dataset && btn.dataset.previewEntryId;
+      const isCurrent = !!(
+        albumPreviewState.entryId
+        && eid === albumPreviewState.entryId
+        && state.activeAlbum
+        && state.activeAlbum.id === albumPreviewState.albumId
+      );
+      const isPlaying = isCurrent && albumPreviewState.status === 'playing';
+      const isLoading = isCurrent && albumPreviewState.status === 'loading';
+      const isPaused = isCurrent && albumPreviewState.status === 'paused';
+
+      btn.textContent = isPlaying ? '⏸' : (isLoading ? '…' : '▶');
+      btn.title = isPlaying
+        ? 'Pause Album Copy'
+        : (isLoading ? 'Loading Album Copy…' : (isPaused ? 'Resume Album Copy' : 'Preview Album Copy'));
+      btn.setAttribute('aria-pressed', isPlaying ? 'true' : 'false');
+      btn.classList.toggle('is-playing', isPlaying);
+      if (btn._rowEl) {
+        btn._rowEl.classList.toggle('is-previewing', isPlaying || isPaused || isLoading);
+      }
+    });
+  }
+
+  function isAlbumPreviewActiveOwner() {
+    if (!albumPreviewState.entryId || !albumPreviewState.streamUrl || !dom.audioElement) return false;
+    const owner = dom.audioElement.dataset && dom.audioElement.dataset.previewOwner;
+    if (owner !== 'album_preview') return false;
+    const curSrc = String(dom.audioElement.src || '');
+    return curSrc === albumPreviewState.streamUrl || curSrc.endsWith(albumPreviewState.streamUrl);
+  }
+
+  function releaseAlbumPreviewOwnership() {
+    albumPreviewState.token += 1;
+    albumPreviewState.albumId = null;
+    albumPreviewState.entryId = null;
+    albumPreviewState.streamUrl = null;
+    albumPreviewState.status = 'idle';
+    updateAlbumPreviewButtons();
+  }
+
+  function stopAlbumEntryPreview() {
+    albumPreviewState.token += 1;
+    const ownsAudio = isAlbumPreviewActiveOwner();
+    if (dom.audioElement && ownsAudio) {
+      dom.audioElement.pause();
+      try { dom.audioElement.currentTime = 0; } catch (_) {}
+      if (typeof dom.audioElement.removeAttribute === 'function') {
+        dom.audioElement.removeAttribute('src');
+      } else {
+        dom.audioElement.src = '';
+      }
+      if (typeof dom.audioElement.load === 'function') {
+        dom.audioElement.load();
+      }
+      if (dom.audioElement.dataset) {
+        delete dom.audioElement.dataset.previewOwner;
+      }
+      if (window.MP3MetaFixApp && typeof window.MP3MetaFixApp.resetSharedWaveform === 'function') {
+        window.MP3MetaFixApp.resetSharedWaveform();
+      }
+      syncSharedPlayerIcons(false);
+    }
+    albumPreviewState.albumId = null;
+    albumPreviewState.entryId = null;
+    albumPreviewState.streamUrl = null;
+    albumPreviewState.status = 'idle';
+    updateAlbumPreviewButtons();
+  }
+
+  function toggleAlbumEntryPreview(album, entry) {
+    if (!album || !entry || entry.is_placeholder || !entry.has_owned_audio || !entry.id) return;
+    const audio = dom.audioElement;
+    if (!audio) {
+      showToast('Audio player is unavailable.', 'error');
+      return;
+    }
+    const url = getAlbumEntryStreamUrl(album, entry);
+    const sameEntry = (
+      isAlbumPreviewActiveOwner()
+      && albumPreviewState.albumId === album.id
+      && albumPreviewState.entryId === entry.id
+      && albumPreviewState.streamUrl === url
+    );
+
+    if (sameEntry) {
+      if (albumPreviewState.status === 'playing') {
+        audio.pause();
+        albumPreviewState.status = 'paused';
+        syncSharedPlayerIcons(false);
+        updateAlbumPreviewButtons();
+        return;
+      }
+      if (albumPreviewState.status === 'paused') {
+        const myToken = ++albumPreviewState.token;
+        albumPreviewState.status = 'loading';
+        updateAlbumPreviewButtons();
+        try {
+          const playRes = audio.play();
+          if (playRes && typeof playRes.then === 'function') {
+            playRes.then(() => {
+              if (albumPreviewState.token !== myToken) {
+                if (albumPreviewState.entryId === null && (!audio.dataset || audio.dataset.previewOwner !== 'editor')) {
+                  audio.pause();
+                }
+                return;
+              }
+              albumPreviewState.status = 'playing';
+              syncSharedPlayerIcons(true);
+              updateAlbumPreviewButtons();
+            }).catch(err => {
+              if (albumPreviewState.token !== myToken) return;
+              stopAlbumEntryPreview();
+              showToast('Unable to preview album audio: ' + (err && err.message ? err.message : 'Playback failed'), 'error');
+            });
+          } else {
+            albumPreviewState.status = 'playing';
+            syncSharedPlayerIcons(true);
+            updateAlbumPreviewButtons();
+          }
+        } catch (err) {
+          if (albumPreviewState.token === myToken) {
+            stopAlbumEntryPreview();
+            showToast('Unable to preview album audio: ' + (err && err.message ? err.message : 'Playback failed'), 'error');
+          }
+        }
+        return;
+      }
+      if (albumPreviewState.status === 'loading') {
+        stopAlbumEntryPreview();
+        return;
+      }
+    }
+
+    // Switching to a new entry or starting fresh: synchronously stop prior playback and discard prior position
+    const myToken = ++albumPreviewState.token;
+    audio.pause();
+    try { audio.currentTime = 0; } catch (_) {}
+    if (window.MP3MetaFixApp && typeof window.MP3MetaFixApp.resetSharedWaveform === 'function') {
+      window.MP3MetaFixApp.resetSharedWaveform();
+    }
+    if (audio.dataset) {
+      audio.dataset.previewOwner = 'album_preview';
+    }
+    albumPreviewState.albumId = album.id;
+    albumPreviewState.entryId = entry.id;
+    albumPreviewState.streamUrl = url;
+    albumPreviewState.status = 'loading';
+    syncSharedPlayerIcons(false);
+    updateAlbumPreviewButtons();
+
+    audio.src = url;
+    if (typeof audio.load === 'function') {
+      audio.load();
+    }
+    try {
+      const playRes = audio.play();
+      if (playRes && typeof playRes.then === 'function') {
+        playRes.then(() => {
+          if (albumPreviewState.token !== myToken) {
+            if (albumPreviewState.entryId === null && (!audio.dataset || audio.dataset.previewOwner !== 'editor')) {
+              audio.pause();
+            }
+            return;
+          }
+          albumPreviewState.status = 'playing';
+          syncSharedPlayerIcons(true);
+          updateAlbumPreviewButtons();
+        }).catch(err => {
+          if (albumPreviewState.token !== myToken) return;
+          stopAlbumEntryPreview();
+          showToast('Unable to preview album audio: ' + (err && err.message ? err.message : 'Playback failed'), 'error');
+        });
+      } else {
+        albumPreviewState.status = 'playing';
+        syncSharedPlayerIcons(true);
+        updateAlbumPreviewButtons();
+      }
+    } catch (err) {
+      if (albumPreviewState.token === myToken) {
+        stopAlbumEntryPreview();
+        showToast('Unable to preview album audio: ' + (err && err.message ? err.message : 'Playback failed'), 'error');
+      }
+    }
+  }
+
   // --- Album Detail / Sequencer Modal ---
   async function openAlbumDetailModal(albumId) {
+    stopAlbumEntryPreview();
     closeRefreshModal();
     try {
       const res = await fetch(`/api/projects/albums/${albumId}`);
@@ -926,6 +1142,13 @@
     const isFinalized = !!(album && (album.is_finalized || album.status === 'completed'));
     const tracks = album.tracks || [];
     if (dom.albumTrackCountDisplay) dom.albumTrackCountDisplay.textContent = tracks.length;
+
+    if (albumPreviewState.entryId && album && albumPreviewState.albumId === album.id) {
+      const activeEntry = tracks.find(t => t && t.id === albumPreviewState.entryId);
+      if (!activeEntry || activeEntry.is_placeholder || !activeEntry.has_owned_audio || getAlbumEntryStreamUrl(album, activeEntry) !== albumPreviewState.streamUrl) {
+        stopAlbumEntryPreview();
+      }
+    }
 
     if (tracks.length === 0) {
       const emptyTr = document.createElement('tr');
@@ -1042,6 +1265,18 @@
         actionGroup.appendChild(btnRemove);
       }
 
+      if (!entry.is_placeholder && entry.has_owned_audio && entry.id) {
+        const btnPreview = document.createElement('button');
+        btnPreview.type = 'button';
+        btnPreview.className = 'btn btn-secondary btn-xs';
+        btnPreview.dataset.previewEntryId = entry.id;
+        btnPreview._rowEl = tr;
+        btnPreview.title = 'Preview Album Copy';
+        btnPreview.textContent = '▶';
+        btnPreview.addEventListener('click', () => toggleAlbumEntryPreview(album, entry));
+        actionGroup.appendChild(btnPreview);
+      }
+
       if (entry.has_owned_audio && entry.id) {
         const dlBtn = document.createElement('a');
         dlBtn.className = 'btn btn-ghost btn-xs';
@@ -1056,6 +1291,7 @@
 
       dom.albumSequencerTbody.appendChild(tr);
     });
+    updateAlbumPreviewButtons();
   }
 
   function moveAlbumTrack(currentIndex, offset) {
@@ -2117,6 +2353,9 @@
         method: 'DELETE',
       });
       if (res.ok) {
+        if (albumPreviewState.albumId === albumId) {
+          stopAlbumEntryPreview();
+        }
         if (state.activeAlbum && state.activeAlbum.id === albumId) {
           state.activeAlbum = null;
           if (dom.modalAlbumDetail) dom.modalAlbumDetail.classList.add('hidden');
@@ -3139,6 +3378,57 @@
       });
     }
 
+    if (dom.audioElement) {
+      dom.audioElement.addEventListener('mp3metafix:sourcechange', (e) => {
+        if (e && e.detail && e.detail.owner !== 'album_preview' && albumPreviewState.entryId !== null) {
+          releaseAlbumPreviewOwnership();
+        }
+      });
+      dom.audioElement.addEventListener('ended', () => {
+        if (!isAlbumPreviewActiveOwner()) {
+          if (albumPreviewState.entryId !== null) releaseAlbumPreviewOwnership();
+          return;
+        }
+        albumPreviewState.albumId = null;
+        albumPreviewState.entryId = null;
+        albumPreviewState.streamUrl = null;
+        albumPreviewState.status = 'idle';
+        if (dom.audioElement.dataset) delete dom.audioElement.dataset.previewOwner;
+        syncSharedPlayerIcons(false);
+        updateAlbumPreviewButtons();
+      });
+      dom.audioElement.addEventListener('pause', () => {
+        if (!isAlbumPreviewActiveOwner()) {
+          if (albumPreviewState.entryId !== null) releaseAlbumPreviewOwnership();
+          return;
+        }
+        if (albumPreviewState.status === 'playing') {
+          albumPreviewState.status = 'paused';
+          syncSharedPlayerIcons(false);
+          updateAlbumPreviewButtons();
+        }
+      });
+      dom.audioElement.addEventListener('play', () => {
+        if (!isAlbumPreviewActiveOwner()) {
+          if (albumPreviewState.entryId !== null) releaseAlbumPreviewOwnership();
+          return;
+        }
+        if (albumPreviewState.status === 'paused') {
+          albumPreviewState.status = 'playing';
+          syncSharedPlayerIcons(true);
+          updateAlbumPreviewButtons();
+        }
+      });
+      dom.audioElement.addEventListener('error', () => {
+        if (!isAlbumPreviewActiveOwner()) {
+          if (albumPreviewState.entryId !== null) releaseAlbumPreviewOwnership();
+          return;
+        }
+        stopAlbumEntryPreview();
+        showToast('Failed to load album entry audio.', 'error');
+      });
+    }
+
     // Close Modals
     document.querySelectorAll('[data-close-modal]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -3152,6 +3442,7 @@
           return;
         }
         if (modalId === 'modalAlbumDetail') {
+          stopAlbumEntryPreview();
           closeRefreshModal();
         }
         const modal = document.getElementById(modalId);
@@ -3168,6 +3459,7 @@
           closeRefreshModal();
         }
         if (dom.modalAlbumDetail && !dom.modalAlbumDetail.classList.contains('hidden')) {
+          stopAlbumEntryPreview();
           closeRefreshModal();
         }
         [

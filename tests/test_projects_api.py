@@ -2219,7 +2219,7 @@ vm.runInNewContext(code, context);
   if (getEl('albumDetailFinalizedBadge').classList.contains('hidden')) {
     throw new Error('Expected albumDetailFinalizedBadge visible once finalized');
   }
-  const finalizedRowBtns = getEl('albumSequencerTbody').children[0].querySelectorAll('button');
+  const finalizedRowBtns = getEl('albumSequencerTbody').children[0].querySelectorAll('button').filter(b => !(b.dataset && b.dataset.previewEntryId));
   if (finalizedRowBtns.length > 0) {
     throw new Error('Finalized album sequencer must not render mutating buttons');
   }
@@ -5105,6 +5105,8 @@ const context = {
   window: { location: { pathname: '/projects', search: '' }, addEventListener: () => {} },
   confirm: () => true,
   alert: () => {},
+  sessionStorage: { _s: {}, getItem(k) { return this._s[k] || null; }, setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } },
+  localStorage: { _s: {}, getItem(k) { return this._s[k] || null; }, setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } },
   fetch: async (url, opts) => {
     if (url === '/api/projects/tracks') return { ok: true, status: 200, json: async () => [] };
     if (url === '/api/projects/albums') return { ok: true, status: 200, json: async () => [draftAlbum, finalizedAlbum] };
@@ -5370,3 +5372,631 @@ vm.runInNewContext(code, context);
     proc = subprocess.run([node_bin, "-e", js_script], capture_output=True, text=True, env=env)
     assert proc.returncode == 0, f"node failed: {proc.stderr}\n{proc.stdout}"
     assert "F6_UI_CHECK_OK" in proc.stdout
+
+
+def test_feature7_album_entry_preview_playback_and_isolation(client, auth_cookies):
+    """Feature 7: Album entry preview UI (play/pause/resume/switch/close/error/finalized/placeholder) and Album-owned stream isolation."""
+    import io
+    import os
+    from pathlib import Path
+    import shutil
+    import subprocess
+    import wave
+
+    def _make_wav(marker: bytes) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(marker * 300)
+        return buf.getvalue()
+
+    wav_a = _make_wav(b"\x11\x12")
+    wav_b = _make_wav(b"\x21\x22")
+    wav_c = _make_wav(b"\x31\x32")
+
+    # API verification: Album-owned stream stays isolated from source Take edits, updates on replace/refresh, works on finalized, and is read-only
+    trk = client.post("/api/projects/tracks", json={"title": "F7 Track"}, cookies=auth_cookies).json()
+    tk1 = client.post(f"/api/projects/tracks/{trk['id']}/takes", files={"file": ("1.wav", wav_a, "audio/wav")}, cookies=auth_cookies).json()
+    tk2 = client.post(f"/api/projects/tracks/{trk['id']}/takes", files={"file": ("2.wav", wav_b, "audio/wav")}, cookies=auth_cookies).json()
+
+    alb = client.post("/api/projects/albums", json={"title": "F7 Preview LP"}, cookies=auth_cookies).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk1["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    eid = alb["tracks"][0]["id"]
+
+    # Modify source Take tk1 -> Album stream still serves wav_a and revision is unchanged
+    import backend.projects_api as papi_mod
+    user_id = client.get("/api/auth/status", cookies=auth_cookies).json()["user"]["id"]
+    papi_mod.project_storage_manager.update_take_audio(user_id, trk["id"], tk1["id"], audio_bytes=wav_c, extension=".wav")
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies).content == wav_a
+    assert client.get(f"/api/projects/albums/{alb['id']}", cookies=auth_cookies).json()["revision"] == alb["revision"]
+
+    # Replace entry with tk2 -> Album stream now serves wav_b (generation 1)
+    alb = client.patch(
+        f"/api/projects/albums/{alb['id']}/entries/{eid}",
+        json={"take_id": tk2["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream?g={alb['tracks'][0]['active_generation']}", cookies=auth_cookies).content == wav_b
+
+    # Update tk2 and refresh entry -> Album stream now serves wav_c (generation 2)
+    papi_mod.project_storage_manager.update_take_audio(user_id, trk["id"], tk2["id"], audio_bytes=wav_c, extension=".wav")
+    prev = client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/refresh-preview", cookies=auth_cookies).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries/{eid}/refresh",
+        json={
+            "expected_revision": alb["revision"],
+            "expected_source_revision": prev["expected_source_revision"],
+            "expected_source_audio_sha256": prev["expected_source_audio_sha256"],
+            "expected_source_updated_at": prev["expected_source_updated_at"],
+            "expected_source_metadata_fingerprint": prev["expected_source_metadata_fingerprint"],
+        },
+        cookies=auth_cookies,
+    ).json()
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream?g={alb['tracks'][0]['active_generation']}", cookies=auth_cookies).content == wav_c
+
+    # Finalize Album -> stream continues to serve wav_c without mutating revision
+    fin = client.post(f"/api/projects/albums/{alb['id']}/finalize?expected_revision={alb['revision']}", cookies=auth_cookies).json()
+    assert fin["is_finalized"] is True
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies).content == wav_c
+    assert client.get(f"/api/projects/albums/{alb['id']}", cookies=auth_cookies).json()["revision"] == fin["revision"]
+
+    # Frontend Node VM tests covering all 12 preview behaviors
+    node_bin = shutil.which("node")
+    assert node_bin is not None
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+    js_script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
+
+const elements = {};
+function findAll(root, pred, out = []) {
+  for (const c of (root.children || [])) {
+    if (pred(c)) out.push(c);
+    findAll(c, pred, out);
+  }
+  return out;
+}
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set();
+  const attrs = {};
+  const el = {
+    id, tagName: tag.toUpperCase(), value: '', name: '', type: '', textContent: '', className: '',
+    title: '', checked: false, disabled: false, files: [], listeners, dataset: {}, style: {}, children: [], _innerHTML: '',
+    classList: {
+      add: (c) => classSet.add(c),
+      remove: (c) => classSet.delete(c),
+      contains: (c) => classSet.has(c),
+      toggle: (c, force) => { if (force === true) classSet.add(c); else if (force === false) classSet.delete(c); else if (classSet.has(c)) classSet.delete(c); else classSet.add(c); },
+    },
+    set innerHTML(val) { this._innerHTML = val; if (val === '' || (typeof val === 'string' && val.startsWith('<option'))) this.children = []; },
+    get innerHTML() { return this._innerHTML; },
+    addEventListener: (ev, fn) => { if (!listeners[ev]) listeners[ev] = []; listeners[ev].push(fn); },
+    dispatchEvent: async (ev) => { if (!ev.target) ev.target = el; for (const fn of (listeners[ev.type] || [])) await fn(ev); },
+    setAttribute: (k, v) => { attrs[k] = String(v); },
+    getAttribute: (k) => attrs[k],
+    removeAttribute: (k) => { if (k === 'src') el.src = ''; delete attrs[k]; },
+    appendChild: (child) => { el.children.push(child); return child; },
+    querySelector: () => null,
+    querySelectorAll: (sel) => findAll(el, c => {
+      if (sel === 'button') return c.tagName === 'BUTTON';
+      if (sel === 'button[data-preview-entry-id]') return c.tagName === 'BUTTON' && c.dataset && !!c.dataset.previewEntryId;
+      return false;
+    }),
+    reset: () => {},
+    remove: () => {},
+  };
+  return el;
+}
+function getEl(id) {
+  if (!elements[id]) elements[id] = makeEl(id);
+  return elements[id];
+}
+
+// Shared #audioElement mock
+const audioEl = getEl('audioElement');
+audioEl.src = '';
+audioEl.paused = true;
+audioEl.currentTime = 0;
+let playMode = 'resolve'; // 'resolve' | 'reject' | 'deferred'
+let deferredPlayResolve = null;
+const playCalls = [];
+const pauseCalls = [];
+audioEl.load = () => {};
+audioEl.play = () => {
+  playCalls.push({ src: audioEl.src, currentTime: audioEl.currentTime });
+  if (playMode === 'reject') {
+    audioEl.paused = true;
+    return Promise.reject(new Error('Audio load error'));
+  }
+  if (playMode === 'deferred') {
+    return new Promise((resolve) => { deferredPlayResolve = () => { audioEl.paused = false; resolve(); }; });
+  }
+  audioEl.paused = false;
+  return Promise.resolve();
+};
+audioEl.pause = () => {
+  pauseCalls.push({ src: audioEl.src, currentTime: audioEl.currentTime });
+  audioEl.paused = true;
+};
+
+const closeBtn = makeEl('btnCloseAlbumModal', 'button');
+closeBtn.dataset.closeModal = 'modalAlbumDetail';
+
+const docListeners = {};
+const toasts = [];
+const draftAlbum = {
+  id: 'alb_draft', title: 'Draft LP', status: 'draft', is_finalized: false, revision: 3,
+  tracks: [
+    { id: 'ale_a', track_id: 'trk_1', take_id: 'tak_1', is_placeholder: false, has_owned_audio: true, active_generation: 1, track_number: 1, snapshot: { source_track_title: 'Song A' } },
+    { id: 'ale_b', track_id: 'trk_1', take_id: 'tak_2', is_placeholder: false, has_owned_audio: true, active_generation: 2, track_number: 2, snapshot: { source_track_title: 'Song B' } },
+    { id: 'ale_ph', track_id: 'trk_2', take_id: null, is_placeholder: true, has_owned_audio: false, track_number: 3 },
+  ],
+};
+const finalizedAlbum = {
+  id: 'alb_fin', title: 'Finalized LP', status: 'completed', is_finalized: true, revision: 5,
+  tracks: [
+    { id: 'ale_fin', track_id: 'trk_1', take_id: 'tak_1', is_placeholder: false, has_owned_audio: true, active_generation: 3, track_number: 1, snapshot: { source_track_title: 'Final Song' } },
+  ],
+};
+
+const context = {
+  console, Date, Math, JSON, Set, Map, Promise, URLSearchParams, encodeURIComponent, decodeURIComponent, setTimeout, clearTimeout,
+  document: {
+    getElementById: getEl,
+    createElement: (tag) => makeEl('', tag),
+    querySelector: () => null,
+    querySelectorAll: (sel) => sel === '[data-close-modal]' ? [closeBtn] : [],
+    addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
+    body: makeEl('body', 'body'),
+  },
+  window: { location: { pathname: '/projects', search: '' }, addEventListener: () => {}, showToast: (msg, type) => toasts.push({ msg, type }) },
+  confirm: () => true,
+  alert: () => {},
+  sessionStorage: { _s: {}, getItem(k) { return this._s[k] || null; }, setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } },
+  localStorage: { _s: {}, getItem(k) { return this._s[k] || null; }, setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } },
+  fetch: async (url) => {
+    if (url === '/api/projects/tracks') return { ok: true, status: 200, json: async () => [] };
+    if (url === '/api/projects/albums') return { ok: true, status: 200, json: async () => [draftAlbum, finalizedAlbum] };
+    if (url === '/api/projects/albums/alb_draft') return { ok: true, status: 200, json: async () => draftAlbum };
+    if (url === '/api/projects/albums/alb_fin') return { ok: true, status: 200, json: async () => finalizedAlbum };
+    if (url === '/api/storage/quota') return { ok: true, status: 200, json: async () => ({ used_bytes: 0, limit_bytes: 1000, usage_percent: 0 }) };
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+};
+context.window.window = context.window;
+
+vm.runInNewContext(code, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  await new Promise(r => setTimeout(r, 20));
+  const cards = getEl('albumsGridContainer').children;
+  // Open draft album
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+
+  const rows = getEl('albumSequencerTbody').children;
+  const btnA = rows[0].querySelectorAll('button[data-preview-entry-id]')[0];
+  const btnB = rows[1].querySelectorAll('button[data-preview-entry-id]')[0];
+  const phBtns = rows[2].querySelectorAll('button[data-preview-entry-id]');
+  if (!btnA || !btnB) throw new Error('Expected Play/Pause buttons for entries with audio');
+  if (phBtns.length !== 0) throw new Error('Placeholder entry must NOT expose Play button');
+
+  // 1. Play A -> Album-owned stream URL with generation
+  await btnA.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 10));
+  if (audioEl.src !== '/api/projects/albums/alb_draft/entries/ale_a/stream?g=1') {
+    throw new Error('Expected Album-owned stream URL for A, got ' + audioEl.src);
+  }
+  if (btnA.textContent !== '⏸' || btnB.textContent !== '▶') throw new Error('Expected A playing and B idle');
+
+  // 2. Pause A at 12.5s and resume A from 12.5s
+  audioEl.currentTime = 12.5;
+  await btnA.listeners['click'][0]();
+  if (!audioEl.paused || audioEl.currentTime !== 12.5 || btnA.textContent !== '▶') {
+    throw new Error('Expected A paused at 12.5s');
+  }
+  await btnA.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 10));
+  if (audioEl.paused || audioEl.currentTime !== 12.5 || btnA.textContent !== '⏸') {
+    throw new Error('Expected A resumed from 12.5s');
+  }
+
+  // 3. Switch A -> B while A is playing: stops A, starts B from 0
+  await btnB.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 10));
+  if (audioEl.src !== '/api/projects/albums/alb_draft/entries/ale_b/stream?g=2') {
+    throw new Error('Expected B stream URL, got ' + audioEl.src);
+  }
+  if (audioEl.currentTime !== 0 || btnA.textContent !== '▶' || btnB.textContent !== '⏸') {
+    throw new Error('Expected B playing from 0 and A stopped');
+  }
+
+  // 4. Switch B -> A while B is paused: discards B position and starts A from 0
+  audioEl.currentTime = 7.0;
+  await btnB.listeners['click'][0](); // pause B
+  await btnA.listeners['click'][0](); // play A
+  await new Promise(r => setTimeout(r, 10));
+  if (audioEl.src !== '/api/projects/albums/alb_draft/entries/ale_a/stream?g=1' || audioEl.currentTime !== 0 || btnA.textContent !== '⏸' || btnB.textContent !== '▶') {
+    throw new Error('Expected switching from paused B to A to start A from 0');
+  }
+
+  // 5. Ended event resets to idle without auto-advancing to B
+  await audioEl.dispatchEvent({ type: 'ended' });
+  if (btnA.textContent !== '▶' || btnB.textContent !== '▶') {
+    throw new Error('Expected ended to leave both idle without auto-advance');
+  }
+
+  // 6. Failure on B stops A and clears playing state
+  await btnA.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 10));
+  playMode = 'reject';
+  await btnB.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (!audioEl.paused || btnA.textContent !== '▶' || btnB.textContent !== '▶') {
+    throw new Error('Expected failed B to stop A and leave no false playing state');
+  }
+  if (!toasts.some(t => t.type === 'error')) throw new Error('Expected error toast on failed playback');
+  playMode = 'resolve';
+
+  // 7. Closing modal during deferred loading cancels late play() resolution
+  playMode = 'deferred';
+  await btnA.listeners['click'][0]();
+  await closeBtn.listeners['click'][0]();
+  if (deferredPlayResolve) deferredPlayResolve();
+  await new Promise(r => setTimeout(r, 10));
+  if (!audioEl.paused || btnA.textContent !== '▶') {
+    throw new Error('Expected closing modal during loading to prevent late playback restart');
+  }
+  playMode = 'resolve';
+
+  // 8. Finalized Album entry preview works
+  await cards[1].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  const finBtn = getEl('albumSequencerTbody').children[0].querySelectorAll('button[data-preview-entry-id]')[0];
+  if (!finBtn) throw new Error('Expected Play button on finalized Album entry');
+  await finBtn.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 10));
+  if (audioEl.src !== '/api/projects/albums/alb_fin/entries/ale_fin/stream?g=3' || finBtn.textContent !== '⏸') {
+    throw new Error('Expected finalized Album entry preview to play');
+  }
+
+  // 9. Switching back to draft album stops finalized preview
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (!audioEl.paused || audioEl.src !== '') {
+    throw new Error('Expected switching albums to stop preview and clear src');
+  }
+
+  console.log('F7_UI_CHECK_OK');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    env = os.environ.copy()
+    env["TARGET_JS_PATH"] = str(projects_js_path)
+    proc = subprocess.run([node_bin, "-e", js_script], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, f"node failed: {proc.stderr}\n{proc.stdout}"
+    assert "F7_UI_CHECK_OK" in proc.stdout
+
+
+def test_feature7_shared_player_integration_regressions():
+    """Feature 7 regressions: app.js + projects.js shared waveform duration/seek, source ownership, and A->B async race."""
+    import os
+    from pathlib import Path
+    import shutil
+    import subprocess
+
+    node_bin = shutil.which("node")
+    assert node_bin is not None
+    app_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "app.js"
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+
+    js_script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const appCode = fs.readFileSync(process.env.APP_JS_PATH, 'utf8');
+const projectsCode = fs.readFileSync(process.env.PROJECTS_JS_PATH, 'utf8');
+
+const elements = {};
+function findAll(root, pred, out = []) {
+  for (const c of (root.children || [])) {
+    if (pred(c)) out.push(c);
+    findAll(c, pred, out);
+  }
+  return out;
+}
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set();
+  const attrs = {};
+  const el = {
+    id, tagName: tag.toUpperCase(), value: '', name: '', type: '', textContent: '', className: '',
+    title: '', checked: false, disabled: false, files: [], listeners, dataset: {}, style: {}, children: [], _innerHTML: '',
+    offsetWidth: 200, offsetHeight: 60, width: 200, height: 60,
+    classList: {
+      add: (c) => classSet.add(c),
+      remove: (c) => classSet.delete(c),
+      contains: (c) => classSet.has(c),
+      toggle: (c, force) => { if (force === true) classSet.add(c); else if (force === false) classSet.delete(c); else if (classSet.has(c)) classSet.delete(c); else classSet.add(c); },
+    },
+    set innerHTML(val) { this._innerHTML = val; if (val === '' || (typeof val === 'string' && val.startsWith('<option'))) this.children = []; },
+    get innerHTML() { return this._innerHTML; },
+    addEventListener: (ev, fn) => { if (!listeners[ev]) listeners[ev] = []; listeners[ev].push(fn); },
+    dispatchEvent: async (ev) => { if (!ev.target) ev.target = el; for (const fn of (listeners[ev.type] || [])) await fn(ev); },
+    setAttribute: (k, v) => { attrs[k] = String(v); },
+    getAttribute: (k) => attrs[k],
+    removeAttribute: (k) => { if (k === 'src') el.src = ''; delete attrs[k]; },
+    appendChild: (child) => { el.children.push(child); return child; },
+    querySelector: () => null,
+    querySelectorAll: (sel) => findAll(el, c => {
+      if (sel === 'button') return c.tagName === 'BUTTON';
+      if (sel === 'button[data-preview-entry-id]') return c.tagName === 'BUTTON' && c.dataset && !!c.dataset.previewEntryId;
+      return false;
+    }),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 200, height: 60 }),
+    getContext: () => ({
+      clearRect() {}, fillRect() {}, beginPath() {}, rect() {}, roundRect() {}, fill() {}, scale() {},
+    }),
+    reset: () => {},
+    remove: () => {},
+  };
+  return el;
+}
+function getEl(id) {
+  if (!elements[id]) elements[id] = makeEl(id);
+  return elements[id];
+}
+
+const audioEl = getEl('audioElement');
+audioEl.src = '';
+audioEl.paused = true;
+audioEl.currentTime = 0;
+audioEl.duration = 0;
+let playMode = 'resolve';
+let deferredResolves = [];
+audioEl.load = () => {};
+audioEl.play = () => {
+  if (playMode === 'deferred') {
+    return new Promise((resolve) => {
+      deferredResolves.push(() => { audioEl.paused = false; resolve(); });
+    });
+  }
+  audioEl.paused = false;
+  return Promise.resolve();
+};
+audioEl.pause = () => {
+  audioEl.paused = true;
+};
+
+const closeBtn = makeEl('btnCloseAlbumModal', 'button');
+closeBtn.dataset.closeModal = 'modalAlbumDetail';
+const waveformContainer = getEl('waveformContainer');
+const playerCurrentTime = getEl('playerCurrentTime');
+const playerTotalTime = getEl('playerTotalTime');
+
+const docListeners = {};
+const draftAlbum = {
+  id: 'alb_reg', title: 'Reg LP', status: 'draft', is_finalized: false, revision: 2,
+  tracks: [
+    { id: 'ale_a', track_id: 'trk_1', take_id: 'tak_1', is_placeholder: false, has_owned_audio: true, active_generation: 1, track_number: 1, snapshot: { source_track_title: 'Song A' } },
+    { id: 'ale_b', track_id: 'trk_1', take_id: 'tak_2', is_placeholder: false, has_owned_audio: true, active_generation: 2, track_number: 2, snapshot: { source_track_title: 'Song B' } },
+  ],
+};
+
+class MockCustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } }
+
+let deferredDecodes = [];
+let decodeCallCount = 0;
+let deferredStreamFetch = null;
+class MockAudioContext {
+  decodeAudioData() {
+    decodeCallCount += 1;
+    return new Promise((resolve) => {
+      deferredDecodes.push((dur) => resolve({ duration: dur, getChannelData: () => new Float32Array(100) }));
+    });
+  }
+}
+
+const context = {
+  console, Date, Math, JSON, Set, Map, Promise, Float32Array, ArrayBuffer, URLSearchParams, encodeURIComponent, decodeURIComponent, setTimeout, clearTimeout,
+  requestAnimationFrame: () => 1,
+  cancelAnimationFrame: () => {},
+  CustomEvent: MockCustomEvent,
+  AudioContext: MockAudioContext,
+  devicePixelRatio: 1,
+  document: {
+    getElementById: getEl,
+    createElement: (tag) => makeEl('', tag),
+    querySelector: () => null,
+    querySelectorAll: (sel) => sel === '[data-close-modal]' ? [closeBtn] : [],
+    addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
+    dispatchEvent: () => {},
+    body: makeEl('body', 'body'),
+  },
+  window: {
+    location: { pathname: '/projects', search: '' },
+    addEventListener: () => {},
+    dispatchEvent: () => {},
+    AudioContext: MockAudioContext,
+  },
+  confirm: () => true,
+  alert: () => {},
+  sessionStorage: { _s: {}, getItem(k) { return this._s[k] || null; }, setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } },
+  localStorage: { _s: {}, getItem(k) { return this._s[k] || null; }, setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } },
+  fetch: async (url) => {
+    if (url.startsWith('/api/stream')) {
+      return new Promise((resolve) => {
+        deferredStreamFetch = () => resolve({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(16) });
+      });
+    }
+    if (url === '/api/projects/tracks') return { ok: true, status: 200, json: async () => [] };
+    if (url === '/api/projects/albums') return { ok: true, status: 200, json: async () => [draftAlbum] };
+    if (url === '/api/projects/albums/alb_reg') return { ok: true, status: 200, json: async () => draftAlbum };
+    if (url === '/api/storage/quota') return { ok: true, status: 200, json: async () => ({ used_bytes: 0, limit_bytes: 1000, usage_percent: 0 }) };
+    if (url === '/api/auth/status') return { ok: true, status: 200, json: async () => ({ authenticated: false }) };
+    if (url === '/api/session') return { ok: true, status: 200, json: async () => ({ has_session: false }) };
+    if (url === '/api/version') return { ok: true, status: 200, json: async () => ({ version: '0.6.0' }) };
+    if (url === '/api/policy/suno') return { ok: true, status: 200, json: async () => ({ enabled: false }) };
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+};
+context.window.window = context.window;
+context.window.document = context.document;
+
+vm.runInNewContext(appCode, context);
+vm.runInNewContext(projectsCode, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  await new Promise(r => setTimeout(r, 30));
+
+  // A. Duration and seeking regression: load 120s Take, switch to 30s Album preview
+  audioEl.dataset.previewOwner = 'editor';
+  audioEl.src = '/api/stream?t=take120';
+  audioEl.duration = 120;
+  await audioEl.dispatchEvent({ type: 'loadedmetadata' });
+  if (playerTotalTime.textContent !== '02:00') {
+    throw new Error('Expected initial 120s Take duration 02:00, got ' + playerTotalTime.textContent);
+  }
+
+  // Open Album modal and start 30s Album entry A preview
+  const cards = getEl('albumsGridContainer').children;
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  const rows = getEl('albumSequencerTbody').children;
+  const btnA = rows[0].querySelectorAll('button[data-preview-entry-id]')[0];
+  const btnB = rows[1].querySelectorAll('button[data-preview-entry-id]')[0];
+
+  await btnA.listeners['click'][0]();
+  audioEl.duration = 30;
+  await audioEl.dispatchEvent({ type: 'loadedmetadata' });
+  if (playerTotalTime.textContent !== '00:30') {
+    throw new Error('Expected Album preview duration 00:30, got ' + playerTotalTime.textContent);
+  }
+  audioEl.currentTime = 15;
+  await audioEl.dispatchEvent({ type: 'timeupdate' });
+  if (waveformContainer.getAttribute('aria-valuenow') !== '50') {
+    throw new Error('Expected 15s / 30s = 50% progress, got ' + waveformContainer.getAttribute('aria-valuenow'));
+  }
+  // Midpoint seek (clientX = 100 out of width 200) -> 15s
+  audioEl.currentTime = 0;
+  await waveformContainer.dispatchEvent({ type: 'pointerdown', pointerId: 1, clientX: 100 });
+  await waveformContainer.dispatchEvent({ type: 'pointerup', pointerId: 1, clientX: 100 });
+  if (Math.abs(audioEl.currentTime - 15) > 0.01) {
+    throw new Error('Expected midpoint seek to 15s, got ' + audioEl.currentTime);
+  }
+
+  // B. Playback ownership regression: switch to ordinary Take playback while Album modal is open
+  audioEl.dataset.previewOwner = 'editor';
+  audioEl.src = '/api/stream?t=ordinary_take';
+  audioEl.duration = 120;
+  await audioEl.dispatchEvent(new MockCustomEvent('mp3metafix:sourcechange', { detail: { owner: 'editor', src: audioEl.src } }));
+  await audioEl.dispatchEvent({ type: 'loadedmetadata' });
+  await audioEl.play();
+  await audioEl.dispatchEvent({ type: 'play' });
+  if (btnA.textContent !== '▶') {
+    throw new Error('Expected Album A button reset to ▶ when ordinary Take took over');
+  }
+  // Close Album modal -> must NOT pause or clear ordinary Take playback!
+  await closeBtn.listeners['click'][0]();
+  if (audioEl.paused || audioEl.src !== '/api/stream?t=ordinary_take') {
+    throw new Error('Closing Album modal must NOT stop or clear ordinary Take playback');
+  }
+  if (playerTotalTime.textContent !== '02:00') {
+    throw new Error('Expected ordinary Take 02:00 duration restored, got ' + playerTotalTime.textContent);
+  }
+
+  // C. Async race regression: defer Play A, start Play B, then resolve A -> B stays playing!
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  const rows2 = getEl('albumSequencerTbody').children;
+  const btnA2 = rows2[0].querySelectorAll('button[data-preview-entry-id]')[0];
+  const btnB2 = rows2[1].querySelectorAll('button[data-preview-entry-id]')[0];
+
+  playMode = 'deferred';
+  await btnA2.listeners['click'][0](); // A deferred
+  playMode = 'resolve';
+  await btnB2.listeners['click'][0](); // B resolves immediately
+  await new Promise(r => setTimeout(r, 10));
+  if (audioEl.paused || audioEl.src !== '/api/projects/albums/alb_reg/entries/ale_b/stream?g=2' || btnB2.textContent !== '⏸') {
+    throw new Error('Expected B to be playing');
+  }
+  // Now resolve A's stale promise!
+  deferredResolves[0]();
+  await new Promise(r => setTimeout(r, 10));
+  if (audioEl.paused || audioEl.src !== '/api/projects/albums/alb_reg/entries/ale_b/stream?g=2' || btnB2.textContent !== '⏸' || btnA2.textContent !== '▶') {
+    throw new Error('Stale A resolution must NOT pause B or overwrite B state');
+  }
+
+  // D. Deferred Take decodeAudioData race: obsolete 120s decode resolves AFTER 30s Album preview metadata loads
+  const wv = context.window.MP3MetaFixApp.waveformVisualizer;
+  wv.reset();
+  const staleDecodePromise = wv.loadFromBuffer(new ArrayBuffer(16)); // generation before Album preview
+  await btnA2.listeners['click'][0](); // resets waveform (bumps generation) and starts 30s Album preview
+  audioEl.duration = 30;
+  await audioEl.dispatchEvent({ type: 'loadedmetadata' });
+  if (playerTotalTime.textContent !== '00:30') {
+    throw new Error('Expected 00:30 before stale decode resolves');
+  }
+  // Now resolve the obsolete 120s Take decode!
+  deferredDecodes[0](120);
+  await staleDecodePromise;
+  if (wv.duration !== 30 || playerTotalTime.textContent !== '00:30') {
+    throw new Error('Obsolete 120s Take decode overwrote 30s Album duration: wv.duration=' + wv.duration + ' total=' + playerTotalTime.textContent);
+  }
+  audioEl.currentTime = 15;
+  await audioEl.dispatchEvent({ type: 'timeupdate' });
+  if (waveformContainer.getAttribute('aria-valuenow') !== '50') {
+    throw new Error('Expected 15s / 30s = 50% progress after stale decode, got ' + waveformContainer.getAttribute('aria-valuenow'));
+  }
+  audioEl.currentTime = 0;
+  await waveformContainer.dispatchEvent({ type: 'pointerdown', pointerId: 1, clientX: 100 });
+  await waveformContainer.dispatchEvent({ type: 'pointerup', pointerId: 1, clientX: 100 });
+  if (Math.abs(audioEl.currentTime - 15) > 0.01) {
+    throw new Error('Expected midpoint seek to 15s after stale decode, got ' + audioEl.currentTime);
+  }
+
+  // E. Delayed /api/stream fetch race: loadSession starts fetch, switches to Album preview, then fetch resolves
+  const decodeCountBeforeFetch = decodeCallCount;
+  context.window.MP3MetaFixApp.loadSession({
+    filename: 'take120.wav',
+    format: 'wav',
+    audio_info: { duration: 120, bitrate: 1411, sample_rate: 44100, channels: 2 },
+    tags: {},
+    artwork: { has_artwork: false },
+  });
+  await btnA2.listeners['click'][0](); // switch to 30s Album preview
+  audioEl.duration = 30;
+  await audioEl.dispatchEvent({ type: 'loadedmetadata' });
+  // Resolve obsolete /api/stream fetch from loadSession
+  deferredStreamFetch();
+  await new Promise(r => setTimeout(r, 20));
+  if (decodeCallCount !== decodeCountBeforeFetch) {
+    throw new Error('Obsolete /api/stream fetch initiated decodeAudioData after switching to Album preview');
+  }
+  if (wv.duration !== 30 || playerTotalTime.textContent !== '00:30') {
+    throw new Error('Delayed /api/stream fetch altered active Album preview duration');
+  }
+
+  console.log('F7_SHARED_PLAYER_REGRESSIONS_OK');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    env = os.environ.copy()
+    env["APP_JS_PATH"] = str(app_js_path)
+    env["PROJECTS_JS_PATH"] = str(projects_js_path)
+    proc = subprocess.run([node_bin, "-e", js_script], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, f"node failed: {proc.stderr}\n{proc.stdout}"
+    assert "F7_SHARED_PLAYER_REGRESSIONS_OK" in proc.stdout

@@ -361,8 +361,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Audio Player setup (clean endpoint using cookie session)
+    if (audioElement.dataset) {
+      audioElement.dataset.previewOwner = 'editor';
+    }
     audioElement.src = `/api/stream?t=${Date.now()}`;
     audioElement.load();
+    if (typeof audioElement.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+      audioElement.dispatchEvent(new CustomEvent('mp3metafix:sourcechange', { detail: { owner: 'editor', src: audioElement.src } }));
+    }
     playerCurrentTime.textContent = '00:00';
     playerTotalTime.textContent = duration;
     pauseAudio();
@@ -370,17 +376,25 @@ document.addEventListener('DOMContentLoaded', () => {
     // Waveform Visualizer setup
     if (waveformVisualizer) {
       waveformVisualizer.reset();
+      const waveformGen = waveformVisualizer.generation;
       if (pendingArrayBuffer) {
-        waveformVisualizer.loadFromBuffer(pendingArrayBuffer);
+        waveformVisualizer.loadFromBuffer(pendingArrayBuffer, waveformGen);
         pendingArrayBuffer = null;
       } else {
         fetch(`/api/stream?t=${Date.now()}`)
           .then(res => {
+            if (waveformGen !== waveformVisualizer.generation) return null;
             if (!res.ok) throw new Error('Stream fetch failed');
             return res.arrayBuffer();
           })
-          .then(buf => waveformVisualizer.loadFromBuffer(buf))
-          .catch(err => console.warn('Stream buffer fetch error for waveform:', err));
+          .then(buf => {
+            if (!buf || waveformGen !== waveformVisualizer.generation) return;
+            waveformVisualizer.loadFromBuffer(buf, waveformGen);
+          })
+          .catch(err => {
+            if (waveformGen !== waveformVisualizer.generation) return;
+            console.warn('Stream buffer fetch error for waveform:', err);
+          });
       }
     }
 
@@ -539,6 +553,7 @@ document.addEventListener('DOMContentLoaded', () => {
       this.duration = 0;
       this.currentProgress = 0;
       this.animFrameId = null;
+      this.generation = 0;
 
       if (this.container && this.canvas && this.audio) {
         this.initEvents();
@@ -608,6 +623,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (this.audio) {
         // Audio element bindings
+        this.audio.addEventListener('loadedmetadata', () => {
+          if (!isNaN(this.audio.duration) && this.audio.duration > 0) {
+            this.duration = this.audio.duration;
+            if (this.totalTimeEl) this.totalTimeEl.textContent = formatTime(this.duration);
+            this.updateProgress();
+          }
+        });
+
         this.audio.addEventListener('timeupdate', () => {
           if (!this.isDragging) {
             this.updateProgress();
@@ -740,14 +763,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (this.currentTimeEl) {
         this.currentTimeEl.textContent = formatTime(this.audio.currentTime);
       }
-      if (this.totalTimeEl && (!this.totalTimeEl.textContent || this.totalTimeEl.textContent === '00:00')) {
+      if (this.totalTimeEl && (!this.totalTimeEl.textContent || this.totalTimeEl.textContent === '00:00' || Math.abs(this.duration - (this.audio.duration || 0)) > 0.01)) {
         this.totalTimeEl.textContent = formatTime(dur);
       }
 
       this.render();
     }
 
-    async loadFromBuffer(arrayBuffer) {
+    async loadFromBuffer(arrayBuffer, expectedGeneration = this.generation) {
+      const myGen = expectedGeneration;
+      if (myGen !== this.generation) return;
       try {
         this.showLoader(true);
         if (this.statusBadge) {
@@ -760,8 +785,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const bufferCopy = arrayBuffer.slice(0);
-        this.audioBuffer = await this.audioCtx.decodeAudioData(bufferCopy);
-        this.duration = this.audioBuffer.duration;
+        const decoded = await this.audioCtx.decodeAudioData(bufferCopy);
+        if (myGen !== this.generation) return;
+
+        this.audioBuffer = decoded;
+        this.duration = decoded.duration;
 
         this.extractPeaks();
         this.resizeAndRender();
@@ -771,6 +799,7 @@ document.addEventListener('DOMContentLoaded', () => {
           this.statusBadge.textContent = 'Ready';
         }
       } catch (err) {
+        if (myGen !== this.generation) return;
         console.warn('Waveform audio decoding error:', err);
         this.generateFallbackPeaks();
         this.resizeAndRender();
@@ -913,6 +942,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     reset() {
+      this.generation += 1;
       this.stopProgressLoop();
       this.peaks = null;
       this.audioBuffer = null;
@@ -2132,5 +2162,11 @@ document.addEventListener('DOMContentLoaded', () => {
     restoreSession: restoreSessionIfExists,
     loadSession,
     state,
+    waveformVisualizer,
+    resetSharedWaveform: () => {
+      if (waveformVisualizer) waveformVisualizer.reset();
+      if (playerCurrentTime) playerCurrentTime.textContent = '00:00';
+      if (playerTotalTime) playerTotalTime.textContent = '00:00';
+    },
   };
 });
