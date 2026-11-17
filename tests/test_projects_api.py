@@ -1384,7 +1384,7 @@ const context = {
     }
     return nextFetchResponse;
   },
-  confirm: () => true,
+  confirm: () => context._confirmReturn !== undefined ? context._confirmReturn : true,
 };
 context.window.window = context.window;
 
@@ -2023,7 +2023,7 @@ const context = {
     addEventListener: () => {},
     dispatchEvent: () => {},
   },
-  confirm: () => true,
+  confirm: () => context._confirmReturn !== undefined ? context._confirmReturn : true,
   fetch: async (url, opts) => {
     fetchCalls.push({ url, opts });
     if (url === '/api/projects/tracks') {
@@ -2166,6 +2166,14 @@ vm.runInNewContext(code, context);
   if (!getEl('selectPickTrack').disabled) throw new Error('selectPickTrack should be disabled in Change Take mode');
   const editRadios = getEl('pickTrackTakesList').querySelectorAll('input[name="pickAlbumTakeId"]');
   editRadios.forEach(r => { r.checked = (r.value === 'tak_1'); });
+  // Cancel confirmation -> zero PATCH requests
+  context._confirmReturn = false;
+  await getEl('btnConfirmAddTrackToAlbum').listeners['click'][0]();
+  if (fetchCalls.some(c => c.url === '/api/projects/albums/alb_demo01/entries/ale_existing01' && c.opts && c.opts.method === 'PATCH')) {
+    throw new Error('Canceling replacement confirmation must not send PATCH');
+  }
+  // Confirm -> sends PATCH /entries/ale_existing01 with tak_1
+  context._confirmReturn = true;
   await getEl('btnConfirmAddTrackToAlbum').listeners['click'][0]();
   const patchEntry = fetchCalls.find(c => c.url === '/api/projects/albums/alb_demo01/entries/ale_existing01' && c.opts && c.opts.method === 'PATCH');
   if (!patchEntry || JSON.parse(patchEntry.opts.body).take_id !== 'tak_1') {
@@ -2254,10 +2262,10 @@ def test_phase1a_api_replacement_blocked_legacy_reorder_and_unknown_ids(client, 
     ).json()
     e_a1, e_a2, e_b1 = alb["tracks"]
 
-    # 1. Replacing owned audio via PATCH /entries/{id} returns 409 and preserves wav_1
+    # 1. Clearing owned audio to placeholder via PATCH /entries/{id} returns 409 and preserves wav_1
     res_rep_entry = client.patch(
         f"/api/projects/albums/{album_id}/entries/{e_a1['id']}",
-        json={"expected_revision": alb["revision"], "take_id": t_a2["id"]},
+        json={"expected_revision": alb["revision"], "clear_take_to_placeholder": True},
         cookies=auth_cookies,
     )
     assert res_rep_entry.status_code == 409
@@ -2465,7 +2473,7 @@ const context = {
     addEventListener: () => {},
     dispatchEvent: () => {},
   },
-  confirm: () => true,
+  confirm: () => context._confirmReturn !== undefined ? context._confirmReturn : true,
   fetch: async (url, opts) => {
     if (opts && (opts.method === 'POST' || opts.method === 'PATCH' || opts.method === 'DELETE')) {
       mutationCalls.push({ url, opts });
@@ -2731,7 +2739,7 @@ const context = {
     addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
   },
   window: { MP3MetaFixMaxUploadSizeMb: 150, showToast: () => {}, addEventListener: () => {}, dispatchEvent: () => {} },
-  confirm: () => true,
+  confirm: () => context._confirmReturn !== undefined ? context._confirmReturn : true,
   fetch: async (url, opts) => {
     if (opts && (opts.method === 'POST' || opts.method === 'PATCH' || opts.method === 'DELETE')) {
       mutationCalls.push({ url, opts });
@@ -2963,7 +2971,7 @@ const context = {
     addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
   },
   window: { MP3MetaFixMaxUploadSizeMb: 150, showToast: () => {}, addEventListener: () => {}, dispatchEvent: () => {} },
-  confirm: () => true,
+  confirm: () => context._confirmReturn !== undefined ? context._confirmReturn : true,
   fetch: async (url, opts) => {
     if (opts && (opts.method === 'POST' || opts.method === 'PATCH' || opts.method === 'DELETE')) mutationCalls.push({ url, opts });
     if (url === '/api/projects/tracks') return { ok: true, status: 200, json: async () => ([{ id: 'trk_1', title: 'Song 1', status: 'draft', takes_count: trackTakesPayload.length }]) };
@@ -3273,7 +3281,7 @@ const context = {
     addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
   },
   window: { MP3MetaFixMaxUploadSizeMb: 150, showToast: () => {}, addEventListener: () => {}, dispatchEvent: () => {} },
-  confirm: () => true,
+  confirm: () => context._confirmReturn !== undefined ? context._confirmReturn : true,
   fetch: async (url, opts) => {
     if (opts && opts.method) calls.push({ url, opts });
     if (url === '/api/projects/albums') return { ok: true, status: 200, json: async () => ([album1, album2]) };
@@ -3487,7 +3495,7 @@ const context = {
     location: { pathname: '/projects', hash: '', search: '' },
     addEventListener: () => {},
     history: { replaceState: () => {} },
-    confirm: () => true,
+    confirm: () => context._confirmReturn !== undefined ? context._confirmReturn : true,
   },
   localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
   sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
@@ -3750,10 +3758,9 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
     alb_dir = papi_mod.project_storage_manager._get_album_dir(user_id, alb["id"])
     journal_path = alb_dir / "journal.json"
 
-    def _call_5_unenrolled_routes(rev: int):
+    def _call_4_unenrolled_routes(rev: int):
         return [
             ("delete_album", client.delete(f"/api/projects/albums/{alb['id']}?expected_revision={rev}", cookies=auth_cookies)),
-            ("patch_entry", client.patch(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}", json={"custom_title": "Y", "expected_revision": rev}, cookies=auth_cookies)),
             ("del_entry", client.delete(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}?expected_revision={rev}", cookies=auth_cookies)),
             ("refresh", client.post(f"/api/projects/albums/{alb['id']}/entries/{entry_rec['id']}/refresh", json={"expected_revision": rev, "expected_source_revision": 1, "expected_source_audio_sha256": entry_rec["snapshot"]["audio_sha256"]}, cookies=auth_cookies)),
             ("artwork", client.post(f"/api/projects/albums/{alb['id']}/artwork", data={"expected_revision": str(rev)}, files={"file": ("cover.jpg", jpg_bytes, "image/jpeg")}, cookies=auth_cookies)),
@@ -3764,13 +3771,14 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
             ("patch_album", client.patch(f"/api/projects/albums/{alb['id']}", json={"title": "X", "expected_revision": rev}, cookies=auth_cookies)),
             ("finalize", client.post(f"/api/projects/albums/{alb['id']}/finalize?expected_revision={rev}", cookies=auth_cookies)),
             ("add_entry", client.post(f"/api/projects/albums/{alb['id']}/entries", json={"track_id": trk["id"], "expected_revision": rev}, cookies=auth_cookies)),
-            *_call_5_unenrolled_routes(rev),
+            ("patch_entry", client.patch(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}", json={"custom_title": "Y", "expected_revision": rev}, cookies=auth_cookies)),
+            *_call_4_unenrolled_routes(rev),
         ]
 
-    # 1. Idle v2 journal -> 409 mutation_not_enrolled on the 5 remaining unenrolled routes (and no reconciliation recommended)
+    # 1. Idle v2 journal -> 409 mutation_not_enrolled on the 4 remaining unenrolled routes (and no reconciliation recommended)
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb["id"])
     journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
-    for name, res in _call_5_unenrolled_routes(alb["revision"]):
+    for name, res in _call_4_unenrolled_routes(alb["revision"]):
         assert res.status_code == 409, f"{name} expected 409, got {res.status_code}: {res.text}"
         assert res.headers.get("X-Error-Code") == "mutation_not_enrolled"
         body = res.json()["detail"]
@@ -3856,9 +3864,8 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
     journal_path.write_text(json.dumps(raw_j.model_dump(mode="json")), encoding="utf-8")
     raw_m_bytes = manifest_path.read_bytes()
     raw_j_bytes = journal_path.read_bytes()
-    raw_res = client.patch(
-        f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}",
-        json={"custom_title": "Y", "expected_revision": persisted_data["revision"]},
+    raw_res = client.delete(
+        f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}?expected_revision={persisted_data['revision']}",
         cookies=auth_cookies,
     )
     assert raw_res.status_code == 409
@@ -4503,3 +4510,75 @@ def test_feature1_api_add_album_entry_v2_and_multi_take(client, auth_cookies):
         cookies=auth_cookies,
     )
     assert r_fin_add.status_code == 409
+
+
+def test_feature2_api_and_ui_confirm_recording_replacement(client, auth_cookies):
+    """Feature 2 API + UI: PATCH /entries/{id} replaces recording, retains prior generation, and UI cancel sends no PATCH."""
+    import io
+    import shutil
+    import subprocess
+    import wave
+
+    def _make_wav(sample_byte: bytes, frames: int = 300) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(sample_byte * frames)
+        return buf.getvalue()
+
+    wav_1 = _make_wav(b"\x61\x62")
+    wav_2 = _make_wav(b"\x71\x72")
+    wav_sib = _make_wav(b"\x81\x82")
+
+    trk = client.post("/api/projects/tracks", json={"title": "API F2 Track"}, cookies=auth_cookies).json()
+    tk_1 = client.post("/api/projects/tracks/" + trk["id"] + "/takes", files={"file": ("t1.wav", wav_1, "audio/wav")}, cookies=auth_cookies).json()
+    tk_2 = client.post("/api/projects/tracks/" + trk["id"] + "/takes", files={"file": ("t2.wav", wav_2, "audio/wav")}, cookies=auth_cookies).json()
+    tk_sib = client.post("/api/projects/tracks/" + trk["id"] + "/takes", files={"file": ("tsib.wav", wav_sib, "audio/wav")}, cookies=auth_cookies).json()
+
+    alb = client.post("/api/projects/albums", json={"title": "API F2 Album"}, cookies=auth_cookies).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk_1["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk_sib["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    e_target = alb["tracks"][0]["id"]
+    e_sib = alb["tracks"][1]["id"]
+
+    # Replace target entry recording via PATCH /entries/{id}
+    r_rep = client.patch(
+        f"/api/projects/albums/{alb['id']}/entries/{e_target}",
+        json={"expected_revision": alb["revision"], "take_id": tk_2["id"]},
+        cookies=auth_cookies,
+    )
+    assert r_rep.status_code == 200
+    rep_alb = r_rep.json()
+    assert rep_alb["tracks"][0]["take_id"] == tk_2["id"]
+    assert rep_alb["tracks"][0]["active_generation"] == 1
+    assert rep_alb["tracks"][1]["take_id"] == tk_sib["id"]
+
+    s_new = client.get(f"/api/projects/albums/{alb['id']}/entries/{e_target}/stream", cookies=auth_cookies)
+    assert s_new.status_code == 200 and s_new.content == wav_2
+    s_sib = client.get(f"/api/projects/albums/{alb['id']}/entries/{e_sib}/stream", cookies=auth_cookies)
+    assert s_sib.status_code == 200 and s_sib.content == wav_sib
+
+    # Finalize after replacement -> 200, active recording streams, retained wav_1 preserved
+    r_fin = client.post(
+        f"/api/projects/albums/{alb['id']}/finalize?expected_revision={rep_alb['revision']}",
+        cookies=auth_cookies,
+    )
+    assert r_fin.status_code == 200, r_fin.text
+    s_fin = client.get(f"/api/projects/albums/{alb['id']}/entries/{e_target}/stream", cookies=auth_cookies)
+    assert s_fin.status_code == 200 and s_fin.content == wav_2
+
+    import backend.projects_api as papi_mod
+    from backend.security import get_album_entry_dir_name
+    user_id = client.get("/api/auth/status", cookies=auth_cookies).json()["user"]["id"]
+    e_dir = papi_mod.project_storage_manager._get_album_dir(user_id, alb["id"]) / "entries" / get_album_entry_dir_name(e_target)
+    assert (e_dir / "audio.wav").read_bytes() == wav_1

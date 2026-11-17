@@ -1362,17 +1362,35 @@
       showToast('Please wait for track takes to finish loading or select a valid recording option.', 'error');
       return;
     }
+    let currentEditingEntry = null;
     if (state.pickTrackEditingEntryId) {
-      const currentEntry = Array.isArray(state.activeAlbum.tracks)
+      currentEditingEntry = Array.isArray(state.activeAlbum.tracks)
         ? state.activeAlbum.tracks.find(t => t.id === state.pickTrackEditingEntryId)
         : null;
-      if (!currentEntry || currentEntry.track_id !== trackId) {
+      if (!currentEditingEntry || currentEditingEntry.track_id !== trackId) {
         showToast('Album entry context changed. Please reopen the take picker.', 'error');
         closePickTrackModal();
         return;
       }
     }
     const takeId = checkedRadio.value ? checkedRadio.value : null;
+    if (
+      currentEditingEntry &&
+      takeId !== null &&
+      (currentEditingEntry.has_owned_audio || currentEditingEntry.take_id !== null) &&
+      takeId !== currentEditingEntry.take_id
+    ) {
+      if (
+        !confirm(
+          'Replace this Album entry\'s recording with the selected Take?\n\n' +
+          '• Only this Album entry\'s recording will change.\n' +
+          '• The previous Album recording will be safely retained.\n' +
+          '• Other Album entries will not be affected.'
+        )
+      ) {
+        return;
+      }
+    }
     const albumId = state.activeAlbum.id;
     const expectedRevision = state.activeAlbum.revision || 1;
 

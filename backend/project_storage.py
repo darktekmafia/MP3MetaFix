@@ -2862,6 +2862,7 @@ class ProjectStorageManager:
         album_dir_fd: int,
         generation: Optional[int] = None,
         staged_refs_out: Optional[List[ArtifactRefRecord]] = None,
+        allow_existing_artifacts: bool = False,
     ) -> Tuple[AlbumEntrySnapshot, Callable[[], None], Callable[[], None], Callable[[bool], None]]:
         """Stage and promote an independent audio copy and snapshot strictly via retained dir_fds."""
         track = self.get_track(user_id, track_id)
@@ -2956,7 +2957,7 @@ class ProjectStorageManager:
 
         try:
             existing_items = os.listdir(entry_dir_fd)
-            if existing_items:
+            if existing_items and not (allow_existing_artifacts and generation is not None):
                 raise AlbumReplacementDisabledError(
                     "Destination album entry already contains existing audio, snapshots, or recovery artifacts."
                 )
@@ -4098,7 +4099,7 @@ class ProjectStorageManager:
             superseded_refs=list(superseded_refs or []),
             idempotency_key=idempotency_key,
         )
-        final_journal = self._build_reconciled_journal(intent_journal, receipt, add_retained=False)
+        final_journal = self._build_reconciled_journal(intent_journal, receipt, add_retained=bool(superseded_refs))
         final_sha = self._compute_canonical_manifest_sha256(final_journal.model_dump(mode="json"))
         try:
             self._write_album_journal_atomic_in_dir(album_dir_fd, final_journal)
@@ -4778,6 +4779,147 @@ class ProjectStorageManager:
                 except OSError:
                     pass
 
+    def _compute_next_entry_generation_locked(
+        self,
+        album_dir_fd: int,
+        entry_id: str,
+        entry_dict: Dict[str, Any],
+        journal: Optional[AlbumJournal],
+    ) -> int:
+        """Compute non-colliding next generation > all active, retained, journaled, and on-disk generations."""
+        ehash = get_album_entry_dir_name(entry_id)
+        max_gen = 0
+        active_gen = entry_dict.get("active_generation")
+        if isinstance(active_gen, int) and not isinstance(active_gen, bool) and active_gen > max_gen:
+            max_gen = active_gen
+
+        if journal is not None:
+            prefix = f"entries/{ehash}/"
+            for ret in journal.retained_artifacts:
+                if ret.rel_path.startswith(prefix) and isinstance(ret.generation, int) and ret.generation > max_gen:
+                    max_gen = ret.generation
+            for rcp in journal.tx_receipts:
+                for ref in (*rcp.new_refs, *rcp.superseded_refs):
+                    if ref.entry_id == entry_id and isinstance(ref.generation, int) and ref.generation > max_gen:
+                        max_gen = ref.generation
+            if journal.active_tx is not None:
+                for ref in (*journal.active_tx.staging_refs, *journal.active_tx.new_refs, *journal.active_tx.superseded_refs):
+                    if ref.entry_id == entry_id and isinstance(ref.generation, int) and ref.generation > max_gen:
+                        max_gen = ref.generation
+
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        entries_fd: Optional[int] = None
+        entry_fd: Optional[int] = None
+        try:
+            entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
+            entry_fd = os.open(ehash, dir_flags, dir_fd=entries_fd)
+            for fname in os.listdir(entry_fd):
+                m = re.match(r"^(?:audio|snapshot)_g(\d+)(?:\.|$)", fname)
+                if m:
+                    g_val = int(m.group(1))
+                    if g_val > max_gen:
+                        max_gen = g_val
+        except OSError:
+            pass
+        finally:
+            if entry_fd is not None:
+                try:
+                    os.close(entry_fd)
+                except OSError:
+                    pass
+            if entries_fd is not None:
+                try:
+                    os.close(entries_fd)
+                except OSError:
+                    pass
+
+        return max_gen + 1
+
+    def _collect_superseded_entry_refs_locked(
+        self,
+        album_dir_fd: int,
+        entry_id: str,
+        entry_dict: Dict[str, Any],
+    ) -> List[ArtifactRefRecord]:
+        """Collect ArtifactRefRecord items for the current active audio and snapshot being superseded."""
+        ehash = get_album_entry_dir_name(entry_id)
+        active_gen = entry_dict.get("active_generation")
+        gen_val: Optional[int] = int(active_gen) if isinstance(active_gen, int) and not isinstance(active_gen, bool) else None
+
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        entries_fd: Optional[int] = None
+        entry_fd: Optional[int] = None
+        refs: List[ArtifactRefRecord] = []
+        try:
+            entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
+            entry_fd = os.open(ehash, dir_flags, dir_fd=entries_fd)
+
+            if gen_val is not None:
+                audio_name = entry_dict.get("active_audio_filename")
+                snap_name = entry_dict.get("active_snapshot_filename")
+            else:
+                snap_name = "snapshot.json"
+                audio_name = None
+                for ext in AUDIO_FORMATS:
+                    cand = f"audio{ext}"
+                    try:
+                        st = os.lstat(cand, dir_fd=entry_fd)
+                        if stat.S_ISREG(st.st_mode):
+                            audio_name = cand
+                            break
+                    except FileNotFoundError:
+                        continue
+
+            for role, fname in ((ArtifactRole.ENTRY_AUDIO, audio_name), (ArtifactRole.ENTRY_SNAPSHOT, snap_name)):
+                if not fname:
+                    continue
+                try:
+                    ffd = os.open(fname, file_flags, dir_fd=entry_fd)
+                except FileNotFoundError:
+                    continue
+                try:
+                    fst = os.fstat(ffd)
+                    if not stat.S_ISREG(fst.st_mode):
+                        continue
+                    h = hashlib.sha256()
+                    total = 0
+                    while True:
+                        chunk = os.read(ffd, 65536)
+                        if not chunk:
+                            break
+                        h.update(chunk)
+                        total += len(chunk)
+                    refs.append(
+                        ArtifactRefRecord(
+                            rel_path=f"entries/{ehash}/{fname}",
+                            role=role,
+                            sha256=h.hexdigest(),
+                            size_bytes=total,
+                            entry_id=entry_id,
+                            generation=gen_val,
+                        )
+                    )
+                finally:
+                    try:
+                        os.close(ffd)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        finally:
+            if entry_fd is not None:
+                try:
+                    os.close(entry_fd)
+                except OSError:
+                    pass
+            if entries_fd is not None:
+                try:
+                    os.close(entries_fd)
+                except OSError:
+                    pass
+        return refs
+
     def update_album_entry(
         self,
         user_id: str,
@@ -4789,7 +4931,7 @@ class ProjectStorageManager:
         disc_number: Optional[int] = None,
         custom_title: Optional[str] = None,
     ) -> Optional[AlbumMetadata]:
-        """Update an entry's metadata or perform initial assignment to an empty placeholder."""
+        """Update an entry's metadata, assign an initial take, or intentionally replace its recording."""
         expected_revision = self._validate_expected_revision(expected_revision)
         try:
             self._get_album_dir_path(user_id, album_id)
@@ -4805,12 +4947,17 @@ class ProjectStorageManager:
                 loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
                 if not loaded:
                     return None
-                album, norm_data, _ = loaded
+                album, norm_data, manifest_st = loaded
+                evidence: Dict[str, Any] = {}
                 _, journal, consistency = self._validate_album_evidence_phase_a_locked(
-                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
+                    album_id,
+                    album_dir_fd,
+                    raw_album_data=raw_holder[0],
+                    raw_album_identity=(manifest_st.st_dev, manifest_st.st_ino),
+                    evidence_out=evidence,
                 )
                 self._check_album_mutation_eligibility_phase_b_locked(
-                    album_id, journal, consistency, is_enrolled=False
+                    album_id, journal, consistency, is_enrolled=True
                 )
                 if self._is_album_finalized(album):
                     raise AlbumFinalizedError("Cannot modify entries of a finalized album.")
@@ -4836,28 +4983,140 @@ class ProjectStorageManager:
                             "Clearing an existing recording to a placeholder is temporarily disabled in Phase 1A."
                         )
                     target["take_id"] = None
-                elif take_id is not None:
-                    if has_existing_recording and take_id != target.get("take_id"):
-                        raise AlbumReplacementDisabledError(
-                            "Replacing existing album-owned audio is temporarily disabled while audio-replacement safety upgrades are in progress."
-                        )
+
+                is_replacement = bool(
+                    take_id is not None
+                    and has_existing_recording
+                    and take_id != target.get("take_id")
+                )
+                is_initial_assignment = bool(
+                    take_id is not None
+                    and not has_existing_recording
+                )
+
+                if journal is None and not is_replacement:
+                    if take_id is not None:
+                        target["take_id"] = take_id
+                    if disc_number is not None:
+                        target["disc_number"] = disc_number
+                    if custom_title is not None:
+                        target["custom_title"] = custom_title or None
+
+                    return self._update_album_locked_with_fd(
+                        album_dir_fd=album_dir_fd,
+                        user_id=user_id,
+                        album_id=album_id,
+                        album=album,
+                        data=norm_data,
+                        updates={"tracks": tracks},
+                        change_summary=f"Updated album entry {entry_id}",
+                        allow_entry_take_assignment=True,
+                    )
+
+                # Enrolled v2 path (all v2-journaled entry updates, and any recording replacement even on legacy albums)
+                if take_id is not None and not is_valid_project_id(take_id, expected_prefix="tak"):
+                    raise ProjectValidationError(f"Invalid take identifier '{take_id}'.")
+
+                new_refs: List[ArtifactRefRecord] = []
+                superseded_refs: List[ArtifactRefRecord] = []
+                commit_fn: Optional[Callable[[], None]] = None
+                cleanup_fn: Optional[Callable[[], None]] = None
+                rollback_fn: Optional[Callable[[bool], None]] = None
+                promoted = False
+
+                if is_replacement or is_initial_assignment:
+                    assert take_id is not None
+                    next_gen = self._compute_next_entry_generation_locked(album_dir_fd, entry_id, target, journal)
+                    if is_replacement:
+                        superseded_refs = self._collect_superseded_entry_refs_locked(album_dir_fd, entry_id, target)
+                    snap, commit_fn, cleanup_fn, rollback_fn = self._stage_entry_audio_copy(
+                        user_id,
+                        album_id,
+                        entry_id,
+                        target["track_id"],
+                        take_id,
+                        album_dir_fd=album_dir_fd,
+                        generation=next_gen,
+                        staged_refs_out=new_refs,
+                        allow_existing_artifacts=has_existing_recording,
+                    )
                     target["take_id"] = take_id
+                    target["is_placeholder"] = False
+                    target["has_owned_audio"] = True
+                    target["snapshot"] = snap.model_dump()
+                    target["active_generation"] = next_gen
+                    target["active_audio_filename"] = f"audio_g{next_gen}.{snap.format}"
+                    target["active_snapshot_filename"] = f"snapshot_g{next_gen}.json"
 
                 if disc_number is not None:
                     target["disc_number"] = disc_number
                 if custom_title is not None:
                     target["custom_title"] = custom_title or None
 
-                return self._update_album_locked_with_fd(
-                    album_dir_fd=album_dir_fd,
-                    user_id=user_id,
-                    album_id=album_id,
-                    album=album,
-                    data=norm_data,
-                    updates={"tracks": tracks},
-                    change_summary=f"Updated album entry {entry_id}",
-                    allow_entry_take_assignment=True,
-                )
+                try:
+                    target_data = dict(norm_data)
+                    new_rev = int(target_data.get("revision", 1)) + 1
+                    summary = (
+                        f"Replaced recording for entry {entry_id} with take {take_id}"
+                        if is_replacement
+                        else f"Updated album entry {entry_id}"
+                    )
+                    revs = list(target_data.get("revisions") or [])
+                    revs.append({
+                        "revision": new_rev,
+                        "timestamp": time.time(),
+                        "change_summary": summary,
+                        "changed_fields": ["tracks"],
+                    })
+                    target_data["tracks"] = tracks
+                    target_data["track_ids"] = [t["track_id"] for t in tracks if t.get("track_id")]
+                    target_data["revision"] = new_rev
+                    target_data["revisions"] = revs
+                    target_data["updated_at"] = time.time()
+
+                    payload_sha256 = self._compute_update_album_payload_sha256(
+                        "update_album_entry",
+                        expected_revision,
+                        {
+                            "entry_id": entry_id,
+                            "take_id": take_id,
+                            "clear_take_to_placeholder": clear_take_to_placeholder,
+                            "disc_number": disc_number,
+                            "custom_title": custom_title,
+                        },
+                    )
+
+                    def _promote_post_intent(is_post_intent: bool) -> None:
+                        nonlocal promoted
+                        if is_post_intent and commit_fn is not None and not promoted:
+                            commit_fn()
+                            promoted = True
+
+                    published = self._execute_v2_album_tx_locked(
+                        album_id=album_id,
+                        album_dir_fd=album_dir_fd,
+                        evidence=evidence,
+                        target_data=target_data,
+                        op="update_album_entry",
+                        expected_revision=expected_revision,
+                        payload_sha256=payload_sha256,
+                        idempotency_key=None,
+                        pre_manifest_publish_check=_promote_post_intent,
+                        new_refs=new_refs,
+                        superseded_refs=superseded_refs,
+                    )
+                except Exception as exc:
+                    if rollback_fn is not None:
+                        allow_unlink = not isinstance(exc, AlbumDurabilityUncertainError)
+                        try:
+                            rollback_fn(allow_promoted_unlink=allow_unlink)
+                        except Exception:
+                            pass
+                    raise
+
+                if cleanup_fn is not None:
+                    cleanup_fn()
+                return published
             finally:
                 try:
                     os.close(album_dir_fd)
@@ -5167,6 +5426,7 @@ class ProjectStorageManager:
         album: AlbumMetadata,
         *,
         has_journal: bool,
+        journal: Optional[AlbumJournal] = None,
     ) -> Dict[str, Any]:
         """Verify and durably seal all Album recordings, snapshots, cover, and directories before PREPARED."""
         import errno
@@ -5190,7 +5450,8 @@ class ProjectStorageManager:
 
         entries_fd: Optional[int] = None
         entries_dir_id: Optional[Tuple[int, int]] = None
-        sealed_entries: List[Tuple[str, str, Tuple[int, int], str, Tuple[int, int, int, int, int], str, Tuple[int, int, int, int, int], str]] = []
+        sealed_entries: List[Tuple[str, str, Tuple[int, int], str, Tuple[int, int, int, int, int], str, str, Tuple[int, int, int, int, int], str]] = []
+        sealed_retained_entries: List[Tuple[str, str, Tuple[int, int], str, Tuple[int, int, int, int, int], str]] = []
         sealed_cover: Optional[Tuple[str, Tuple[int, int, int, int, int], str]] = None
 
         try:
@@ -5271,14 +5532,83 @@ class ProjectStorageManager:
                         raise ValueError("Album-owned audio file is missing or not a regular file.")
 
                     expected_entry_files = {snap_name, audio_name}
+                    retained_for_entry: Dict[str, Tuple[str, int]] = {}
+                    if journal is not None and journal.retained_artifacts:
+                        entry_prefix = f"entries/{ehash}/"
+                        committed_superseded: Dict[Tuple[str, str], ArtifactRefRecord] = {}
+                        for rcp in journal.tx_receipts:
+                            if rcp.outcome == JournalTxState.COMMITTED:
+                                for sref in rcp.superseded_refs:
+                                    committed_superseded[(rcp.tx_id, sref.rel_path)] = sref
+                        for ret in journal.retained_artifacts:
+                            if not ret.rel_path.startswith(entry_prefix):
+                                continue
+                            if ret.kind not in (ArtifactRole.ENTRY_AUDIO.value, ArtifactRole.ENTRY_SNAPSHOT.value):
+                                raise ValueError(f"Unsupported retained artifact kind '{ret.kind}' in entry directory.")
+                            ret_fname = ret.rel_path[len(entry_prefix):]
+                            if (
+                                not ret_fname
+                                or "/" in ret_fname
+                                or ret_fname in expected_entry_files
+                                or ret_fname.startswith((".staging_", ".tmp_", ".backup_"))
+                            ):
+                                raise ValueError(f"Invalid retained artifact path '{ret.rel_path}'.")
+                            sref = committed_superseded.get((ret.superseded_by_tx_id, ret.rel_path))
+                            if (
+                                sref is None
+                                or sref.sha256 != ret.sha256
+                                or sref.role.value != ret.kind
+                                or sref.generation != ret.generation
+                                or (sref.entry_id is not None and sref.entry_id != entry.id)
+                            ):
+                                raise ValueError(f"Retained artifact '{ret_fname}' lacks matching committed provenance.")
+                            retained_for_entry[ret_fname] = (ret.sha256, int(sref.size_bytes))
+
+                    allowed_entry_files = expected_entry_files | set(retained_for_entry.keys())
                     for cname in os.listdir(entry_fd):
                         if cname.startswith((".staging_", ".tmp_", ".backup_")):
                             raise ValueError("Incomplete recording transfer files present in entry directory.")
-                        if cname not in expected_entry_files:
+                        if cname not in allowed_entry_files:
                             raise ValueError(f"Unexpected artifact '{cname}' present in entry directory.")
                         cst = os.lstat(cname, dir_fd=entry_fd)
                         if not stat.S_ISREG(cst.st_mode):
                             raise ValueError(f"Entry artifact '{cname}' is not a regular file.")
+
+                    for ret_fname, (exp_ret_sha, exp_ret_size) in retained_for_entry.items():
+                        try:
+                            rfd = os.open(ret_fname, file_flags, dir_fd=entry_fd)
+                        except FileNotFoundError as exc:
+                            raise ValueError(f"Retained artifact '{ret_fname}' is missing from entry directory.") from exc
+                        try:
+                            pre_rst = os.fstat(rfd)
+                            if not stat.S_ISREG(pre_rst.st_mode):
+                                raise AlbumManifestCorruptError(f"Retained artifact '{ret_fname}' is not a regular file.")
+                            if int(pre_rst.st_size) != exp_ret_size:
+                                raise ValueError(f"Retained artifact '{ret_fname}' size does not match recorded provenance.")
+                            rh = hashlib.sha256()
+                            while True:
+                                rchunk = os.read(rfd, 65536)
+                                if not rchunk:
+                                    break
+                                rh.update(rchunk)
+                            if rh.hexdigest() != exp_ret_sha:
+                                raise ValueError(f"Retained artifact '{ret_fname}' checksum does not match recorded provenance.")
+                            try:
+                                _fsync_file_fd(rfd)
+                                post_rst = os.fstat(rfd)
+                                dir_rst = os.lstat(ret_fname, dir_fd=entry_fd)
+                            except OSError as exc:
+                                raise AlbumDurabilityUncertainError(
+                                    f"Retained artifact sealing synchronization failed for entry '{entry.id}': {exc}"
+                                ) from exc
+                            pre_r_tup = self._seal_stat_tuple(pre_rst)
+                            if self._seal_stat_tuple(post_rst) != pre_r_tup or self._seal_stat_tuple(dir_rst) != pre_r_tup:
+                                raise AlbumManifestCorruptError(
+                                    f"Retained artifact '{ret_fname}' changed or was substituted during finalization sealing."
+                                )
+                            sealed_retained_entries.append((entry.id, ehash, entry_dir_id, ret_fname, pre_r_tup, exp_ret_sha))
+                        finally:
+                            os.close(rfd)
 
                     afd = os.open(audio_name, file_flags, dir_fd=entry_fd)
                     try:
@@ -5549,6 +5879,7 @@ class ProjectStorageManager:
                 "album_dir_id": album_dir_id,
                 "entries_dir_id": entries_dir_id,
                 "entries": sealed_entries,
+                "retained_entries": sealed_retained_entries,
                 "cover": sealed_cover,
             }
         finally:
@@ -5685,6 +6016,50 @@ class ProjectStorageManager:
                         except OSError:
                             pass
 
+            for entry_id, ehash, entry_dir_id, ret_fname, ret_stat, _ret_sha in sealed.get("retained_entries", []):
+                entry_fd = None
+                try:
+                    try:
+                        entry_fd = os.open(ehash, dir_flags, dir_fd=entries_fd)
+                        edir_st = os.fstat(entry_fd)
+                    except FileNotFoundError as exc:
+                        _handle_missing_or_io(f"Entry directory missing for '{entry_id}'", exc, is_missing=True)
+                        return
+                    except OSError as exc:
+                        _handle_missing_or_io(f"Cannot access entry directory for '{entry_id}'", exc, is_missing=False)
+                        return
+                    if (int(edir_st.st_dev), int(edir_st.st_ino)) != entry_dir_id:
+                        raise AlbumManifestCorruptError(f"Entry directory identity changed for '{entry_id}' before publication.")
+                    try:
+                        rfd = os.open(ret_fname, file_flags, dir_fd=entry_fd)
+                    except FileNotFoundError as exc:
+                        _handle_missing_or_io(f"Retained artifact '{ret_fname}' missing for '{entry_id}'", exc, is_missing=True)
+                        return
+                    except OSError as exc:
+                        _handle_missing_or_io(f"Cannot open retained artifact '{ret_fname}' for '{entry_id}'", exc, is_missing=False)
+                        return
+                    try:
+                        try:
+                            rst = os.fstat(rfd)
+                        except OSError as exc:
+                            _handle_missing_or_io(f"Cannot stat retained artifact '{ret_fname}' for '{entry_id}'", exc, is_missing=False)
+                            return
+                        if not stat.S_ISREG(rst.st_mode) or self._seal_stat_tuple(rst) != ret_stat:
+                            raise AlbumManifestCorruptError(
+                                f"Retained artifact '{ret_fname}' was substituted or modified before publication for '{entry_id}'."
+                            )
+                    finally:
+                        try:
+                            os.close(rfd)
+                        except OSError:
+                            pass
+                finally:
+                    if entry_fd is not None:
+                        try:
+                            os.close(entry_fd)
+                        except OSError:
+                            pass
+
             if sealed["cover"] is not None:
                 cover_name, cover_stat, cover_sha = sealed["cover"]
                 try:
@@ -5807,7 +6182,7 @@ class ProjectStorageManager:
                     )
 
                 sealed = self._seal_album_artifacts_for_finalization_locked(
-                    album_dir_fd, album, has_journal=(journal is not None)
+                    album_dir_fd, album, has_journal=(journal is not None), journal=journal
                 )
 
                 now = time.time()
