@@ -801,7 +801,12 @@ async def list_albums(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """List all album workspaces for the authenticated user."""
-    return project_storage_manager.list_albums(user["id"], status=status_filter)
+    try:
+        return project_storage_manager.list_albums(user["id"], status=status_filter)
+    except AlbumDurabilityUncertainError as e:
+        _raise_album_durability_or_conflict_http_error(e)
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @projects_router.post("/albums", response_model=AlbumMetadata, status_code=status.HTTP_201_CREATED)
@@ -825,9 +830,11 @@ async def create_album(
 
 
 def _get_album_or_http(user_id: str, album_id: str) -> AlbumMetadata:
-    """Fetch album or raise 404/422 cleanly, failing closed on corrupt manifests."""
+    """Fetch album or raise 404/422/503 cleanly, failing closed on corrupt or uncertain manifests."""
     try:
         album = project_storage_manager.get_album(user_id, album_id)
+    except AlbumDurabilityUncertainError as e:
+        _raise_album_durability_or_conflict_http_error(e)
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
     if not album:
@@ -1015,10 +1022,10 @@ async def stream_album_entry_audio(
     """Stream an album entry's owned audio copy using HTTP 206 Partial Content range requests (side-effect-free)."""
     try:
         opened = project_storage_manager.open_album_entry_audio_for_read(user["id"], album_id, entry_id)
+    except AlbumDurabilityUncertainError as e:
+        _raise_album_durability_or_conflict_http_error(e)
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    except (FileNotFoundError, OSError):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album entry audio copy not found.")
     if opened is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album entry audio copy not found.")
 
@@ -1036,10 +1043,10 @@ async def download_album_entry_audio(
     """Download an album entry's owned audio copy with RFC 5987 filename headers (side-effect-free)."""
     try:
         opened = project_storage_manager.open_album_entry_audio_for_read(user["id"], album_id, entry_id)
+    except AlbumDurabilityUncertainError as e:
+        _raise_album_durability_or_conflict_http_error(e)
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    except (FileNotFoundError, OSError):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album entry audio copy not found.")
     if opened is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album entry audio copy not found.")
 
@@ -1217,17 +1224,22 @@ async def get_album_artwork(
     """Serve master album cover artwork (side-effect-free)."""
     try:
         opened = project_storage_manager.open_album_cover_for_read(user["id"], album_id)
+    except AlbumDurabilityUncertainError as e:
+        _raise_album_durability_or_conflict_http_error(e)
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    except (FileNotFoundError, OSError):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album artwork not found.")
     if opened is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album artwork not found.")
 
     cover_path, fd, file_size = opened
     resource = _FdStreamResource(fd)
     try:
-        mime_type = "image/png" if cover_path.suffix.lower() == ".png" else "image/jpeg"
+        ext = cover_path.suffix.lower()
+        mime_type = (
+            "image/png"
+            if ext == ".png"
+            else ("image/webp" if ext == ".webp" else "image/jpeg")
+        )
         return _OwnedFdStreamingResponse(
             resource.iter_chunks(),
             media_type=mime_type,

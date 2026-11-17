@@ -5,6 +5,7 @@ cryptographic path hashing and strict POSIX 0700 filesystem isolation.
 """
 
 import os
+import re
 import copy
 import json
 import math
@@ -19,6 +20,7 @@ import secrets
 import tempfile
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Callable
@@ -61,6 +63,7 @@ from backend.project_models import (
     StorageQuotaStats,
     JournalTxState,
     JournalProtocol,
+    _validate_safe_active_basename,
     RecoveryConsistency,
     ArtifactRole,
     ArtifactRefRecord,
@@ -180,6 +183,37 @@ class ManifestPublishError(ProjectStorageError):
         super().__init__(message)
         self.publish_state = publish_state
         self.cause = cause
+
+
+_GEN_AUDIO_RE = re.compile(r"^audio_g(\d+)(\.[A-Za-z0-9]+)$")
+_GEN_SNAP_RE = re.compile(r"^snapshot_g(\d+)\.json$")
+_GEN_COVER_RE = re.compile(r"^cover_g(\d+)(\.[A-Za-z0-9]+)$")
+
+
+@dataclass
+class _AlbumReadContext:
+    """Descriptor-bound read snapshot retaining verified manifest and optional journal evidence."""
+
+    album_id: str
+    album_dir: Path
+    album_dir_fd: Optional[int]
+    raw_data: Dict[str, Any]
+    album_identity: Tuple[int, int]
+    raw_album_sha256: str
+    album: AlbumMetadata
+    norm_data: Dict[str, Any]
+    observed_identities: Dict[str, Any]
+    journal: Optional[AlbumJournal] = None
+    journal_identity: Optional[Tuple[int, int]] = None
+    journal_sha256: Optional[str] = None
+
+    def close(self) -> None:
+        if self.album_dir_fd is not None:
+            try:
+                os.close(self.album_dir_fd)
+            except OSError:
+                pass
+            self.album_dir_fd = None
 
 
 def _fsync_file_fd(file_fd: int) -> None:
@@ -1533,10 +1567,596 @@ class ProjectStorageManager:
         except ValueError:
             return True
 
-    def get_album_entry_audio_path(self, user_id: str, album_id: str, entry_id: str) -> Optional[Path]:
-        """Return path to an album entry's owned audio copy if it exists (side-effect-free, non-following)."""
+    def _open_album_read_context(
+        self,
+        user_id: str,
+        album_id: str,
+        *,
+        protect_finalized: bool = False,
+        load_journal: bool = False,
+    ) -> Optional[_AlbumReadContext]:
+        """Open a single descriptor-bound read snapshot of album.json (and journal.json when requested)."""
         try:
-            if not is_valid_project_id(album_id, expected_prefix="alb") or not is_valid_project_id(entry_id, expected_prefix="ale"):
+            album_dir = self._get_album_dir_path(user_id, album_id)
+            album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
+        except ValueError:
+            return None
+        if album_dir_fd is None:
+            return None
+        try:
+            raw_holder: List[Dict[str, Any]] = []
+            identities_holder: Dict[str, Any] = {}
+            loaded = self._read_album_from_dir_fd(
+                album_id,
+                album_dir_fd,
+                protect_finalized=protect_finalized,
+                raw_out=raw_holder,
+                identities_out=identities_holder,
+            )
+            if loaded is None:
+                os.close(album_dir_fd)
+                return None
+            album, norm_data, manifest_st = loaded
+            raw_data = raw_holder[0]
+            album_identity = (int(manifest_st.st_dev), int(manifest_st.st_ino))
+            raw_album_sha256 = self._compute_canonical_manifest_sha256(raw_data)
+
+            journal: Optional[AlbumJournal] = None
+            journal_identity: Optional[Tuple[int, int]] = None
+            journal_sha256: Optional[str] = None
+            if load_journal:
+                j_res = self._read_json_file_verified_in_dir(
+                    album_dir_fd, "journal.json", sync_file=False, required=False
+                )
+                if j_res is not None:
+                    j_raw, j_id, j_sha = j_res
+                    try:
+                        journal = AlbumJournal(**j_raw)
+                    except Exception as exc:
+                        raise AlbumManifestCorruptError(
+                            f"Album '{album_id}' journal.json failed validation: {exc}"
+                        ) from exc
+                    if journal.album_id != album_id:
+                        raise AlbumManifestCorruptError(
+                            f"Album '{album_id}' journal.json album_id mismatch ('{journal.album_id}')."
+                        )
+                    journal_identity = j_id
+                    journal_sha256 = j_sha
+                    # Re-verify album.json identity/digest to detect concurrent drift between manifest and journal
+                    try:
+                        _, cur_id, cur_sha = self._read_json_file_verified_in_dir(
+                            album_dir_fd, "album.json", sync_file=False, required=True
+                        )
+                    except AlbumManifestCorruptError:
+                        raise
+                    except Exception as exc:
+                        raise AlbumDurabilityUncertainError(
+                            f"Cannot re-verify album.json after journal acquisition for '{album_id}': {exc}"
+                        ) from exc
+                    if (cur_id, cur_sha) != (album_identity, raw_album_sha256):
+                        raise AlbumDurabilityUncertainError(
+                            f"Album '{album_id}' manifest changed concurrently during read acquisition."
+                        )
+                    cons = self._classify_album_consistency(raw_data, journal)
+                    if cons == RecoveryConsistency.CORRUPT:
+                        raise AlbumManifestCorruptError(
+                            f"Album '{album_id}' manifest and journal evidence are contradictory."
+                        )
+
+            return _AlbumReadContext(
+                album_id=album_id,
+                album_dir=album_dir,
+                album_dir_fd=album_dir_fd,
+                raw_data=raw_data,
+                album_identity=album_identity,
+                raw_album_sha256=raw_album_sha256,
+                album=album,
+                norm_data=norm_data,
+                observed_identities=identities_holder,
+                journal=journal,
+                journal_identity=journal_identity,
+                journal_sha256=journal_sha256,
+            )
+        except BaseException:
+            try:
+                os.close(album_dir_fd)
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def _open_regular_file_in_dir_for_read(
+        dir_fd: int,
+        filename: str,
+        *,
+        missing_is_uncertain: bool,
+    ) -> Optional[Tuple[int, os.stat_result]]:
+        """Open filename under dir_fd with O_NOFOLLOW and classify missing/unsafe/I/O errors cleanly."""
+        import errno
+
+        if not filename or "/" in filename or "\\" in filename or filename in (".", ".."):
+            raise AlbumManifestCorruptError(f"Invalid artifact filename '{filename}'.")
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            ffd = os.open(filename, file_flags, dir_fd=dir_fd)
+        except FileNotFoundError as exc:
+            if missing_is_uncertain:
+                raise AlbumDurabilityUncertainError(
+                    f"Declared active artifact '{filename}' is missing on disk."
+                ) from exc
+            return None
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                raise AlbumManifestCorruptError(f"Artifact '{filename}' is unsafe or non-regular: {exc}") from exc
+            raise AlbumDurabilityUncertainError(f"Cannot open artifact '{filename}' for reading: {exc}") from exc
+        try:
+            st = os.fstat(ffd)
+            if not stat.S_ISREG(st.st_mode):
+                raise AlbumManifestCorruptError(f"Artifact '{filename}' is not a regular file.")
+            return ffd, st
+        except (AlbumManifestCorruptError, AlbumDurabilityUncertainError):
+            try:
+                os.close(ffd)
+            except OSError:
+                pass
+            raise
+        except OSError as exc:
+            try:
+                os.close(ffd)
+            except OSError:
+                pass
+            raise AlbumDurabilityUncertainError(
+                f"Cannot stat opened artifact '{filename}': {exc}"
+            ) from exc
+        except BaseException:
+            try:
+                os.close(ffd)
+            except OSError:
+                pass
+            raise
+
+    def _verify_read_artifact_provenance_locked(
+        self,
+        context: _AlbumReadContext,
+        *,
+        role: ArtifactRole,
+        rel_path: str,
+        entry_id: Optional[str] = None,
+        generation: Optional[int] = None,
+        snapshot_rel_path: Optional[str] = None,
+    ) -> Tuple[Optional[ArtifactRefRecord], Optional[ArtifactRefRecord]]:
+        """Verify read-only artifact provenance via historical COMMITTED receipts or exact visible active_tx target."""
+        journal = context.journal
+        if journal is None:
+            if generation is not None:
+                raise AlbumManifestCorruptError(
+                    f"Album '{context.album_id}' declares generated artifact '{rel_path}' without a transaction journal."
+                )
+            return None, None
+
+        for ret in journal.retained_artifacts:
+            if ret.rel_path == rel_path or (snapshot_rel_path and ret.rel_path == snapshot_rel_path):
+                raise AlbumManifestCorruptError(
+                    f"Album '{context.album_id}' active artifact overlaps retained artifact '{ret.rel_path}'."
+                )
+
+        selected_ref: Optional[ArtifactRefRecord] = None
+        paired_snap_ref: Optional[ArtifactRefRecord] = None
+
+        # Path A: Exact visible target of PUBLISH_INTENT or UNCERTAIN
+        tx = journal.active_tx
+        if tx is not None and tx.state in (JournalTxState.PUBLISH_INTENT, JournalTxState.UNCERTAIN):
+            if context.raw_data.get("last_tx_id") == tx.tx_id:
+                if int(context.raw_data.get("revision", 0)) != tx.target_revision or context.raw_album_sha256 != tx.intended_manifest_sha256:
+                    raise AlbumManifestCorruptError(
+                        f"Album '{context.album_id}' visible manifest contradicts active transaction '{tx.tx_id}'."
+                    )
+                for ref in tx.new_refs:
+                    if ref.rel_path == rel_path:
+                        selected_ref = ref
+                    elif snapshot_rel_path and ref.rel_path == snapshot_rel_path:
+                        paired_snap_ref = ref
+
+        # Path B: Historical COMMITTED receipt introducing rel_path (also handles predecessor reads)
+        if selected_ref is None:
+            tx_history_set = set(context.album.tx_history or [])
+            for rcp in reversed(journal.tx_receipts):
+                if rcp.outcome != JournalTxState.COMMITTED:
+                    continue
+                found = next((r for r in rcp.new_refs if r.rel_path == rel_path), None)
+                if found is not None:
+                    if (
+                        rcp.tx_id not in tx_history_set
+                        and context.album.last_tx_id != rcp.tx_id
+                    ) or rcp.result_revision > context.album.revision:
+                        raise AlbumManifestCorruptError(
+                            f"Album '{context.album_id}' committed receipt '{rcp.tx_id}' contradicts manifest lineage."
+                        )
+                    selected_ref = found
+                    if snapshot_rel_path:
+                        paired_snap_ref = next((r for r in rcp.new_refs if r.rel_path == snapshot_rel_path), None)
+                    break
+
+        # Path C: Missing provenance
+        if selected_ref is None:
+            if generation is not None:
+                raise AlbumDurabilityUncertainError(
+                    f"Album '{context.album_id}' lacks transaction provenance for generated artifact '{rel_path}'."
+                )
+            # Legacy fixed-name artifact on a v2-enrolled album: reject if superseded by a committed receipt
+            for rcp in journal.tx_receipts:
+                if rcp.outcome == JournalTxState.COMMITTED and any(r.rel_path == rel_path for r in rcp.superseded_refs):
+                    raise AlbumManifestCorruptError(
+                        f"Album '{context.album_id}' legacy artifact '{rel_path}' was previously superseded."
+                    )
+            return None, None
+
+        if selected_ref.role != role or selected_ref.entry_id != entry_id or selected_ref.generation != generation:
+            raise AlbumManifestCorruptError(
+                f"Album '{context.album_id}' artifact reference metadata mismatch for '{rel_path}'."
+            )
+
+        refs_to_check = [selected_ref]
+        if role == ArtifactRole.ENTRY_AUDIO and generation is not None:
+            if paired_snap_ref is None:
+                raise AlbumDurabilityUncertainError(
+                    f"Album '{context.album_id}' lacks paired snapshot provenance for '{rel_path}'."
+                )
+            if (
+                paired_snap_ref.role != ArtifactRole.ENTRY_SNAPSHOT
+                or paired_snap_ref.entry_id != entry_id
+                or paired_snap_ref.generation != generation
+            ):
+                raise AlbumManifestCorruptError(
+                    f"Album '{context.album_id}' paired snapshot reference contradicts '{rel_path}'."
+                )
+            refs_to_check.append(paired_snap_ref)
+
+        binding_status = self._verify_v2_refs_against_manifest(context.raw_data, refs_to_check)
+        if binding_status == RecoveryConsistency.CORRUPT:
+            raise AlbumManifestCorruptError(
+                f"Album '{context.album_id}' artifact reference bindings contradict manifest for '{rel_path}'."
+            )
+        if binding_status == RecoveryConsistency.UNCERTAIN:
+            raise AlbumDurabilityUncertainError(
+                f"Album '{context.album_id}' artifact reference bindings are incomplete for '{rel_path}'."
+            )
+
+        return selected_ref, paired_snap_ref
+
+    def _verify_generated_snapshot_for_read_locked(
+        self,
+        context: _AlbumReadContext,
+        entry_fd: int,
+        entry: AlbumTrackEntry,
+        snap_name: str,
+        snap_ref: ArtifactRefRecord,
+    ) -> None:
+        """Open, stability-check, hash-check, and semantically verify a generated snapshot_g<N>.json."""
+        opened = self._open_regular_file_in_dir_for_read(entry_fd, snap_name, missing_is_uncertain=True)
+        assert opened is not None
+        sfd, pre_st = opened
+        try:
+            pre_tup = self._seal_stat_tuple(pre_st)
+            try:
+                with os.fdopen(os.dup(sfd), "rb") as sf:
+                    snap_bytes = sf.read()
+                post_st = os.fstat(sfd)
+                dir_st = os.lstat(snap_name, dir_fd=entry_fd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"Cannot read or stat generated snapshot '{snap_name}' for entry '{entry.id}': {exc}"
+                ) from exc
+            if self._seal_stat_tuple(post_st) != pre_tup or self._seal_stat_tuple(dir_st) != pre_tup:
+                raise AlbumDurabilityUncertainError(
+                    f"Generated snapshot '{snap_name}' changed concurrently during read verification."
+                )
+            snap_sha = hashlib.sha256(snap_bytes).hexdigest()
+            if len(snap_bytes) != snap_ref.size_bytes or snap_sha != snap_ref.sha256:
+                raise AlbumManifestCorruptError(
+                    f"Generated snapshot '{snap_name}' size or SHA-256 contradicts reference for entry '{entry.id}'."
+                )
+            try:
+                disk_snap = AlbumEntrySnapshot(**json.loads(snap_bytes.decode("utf-8")))
+            except Exception as exc:
+                raise AlbumManifestCorruptError(
+                    f"Generated snapshot '{snap_name}' is invalid JSON or schema for entry '{entry.id}': {exc}"
+                ) from exc
+            if (
+                disk_snap.entry_id != entry.id
+                or disk_snap.source_track_id != entry.track_id
+                or disk_snap.source_take_id != entry.take_id
+            ):
+                raise AlbumManifestCorruptError(
+                    f"Generated snapshot '{snap_name}' entry/track/take identity mismatch for entry '{entry.id}'."
+                )
+            if entry.active_audio_filename:
+                expected_ext = f".{disk_snap.format.lower().lstrip('.')}"
+                if os.path.splitext(entry.active_audio_filename)[1].lower() != expected_ext:
+                    raise AlbumManifestCorruptError(
+                        f"Generated snapshot '{snap_name}' format contradicts '{entry.active_audio_filename}'."
+                    )
+            if entry.snapshot is None or not self._snapshots_semantically_equal(disk_snap, entry.snapshot):
+                raise AlbumManifestCorruptError(
+                    f"Generated snapshot '{snap_name}' does not match manifest snapshot for entry '{entry.id}'."
+                )
+        finally:
+            try:
+                os.close(sfd)
+            except OSError:
+                pass
+
+    def _resolve_and_open_entry_audio_from_context(
+        self,
+        context: _AlbumReadContext,
+        entry: AlbumTrackEntry,
+        *,
+        verify_snapshot: bool,
+    ) -> Optional[Tuple[str, int, int]]:
+        """Resolve and open entry audio relative to context.album_dir_fd with provenance and snapshot checks."""
+        import errno
+
+        assert context.album_dir_fd is not None
+        assert entry.id is not None
+        is_generated = entry.active_generation is not None
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        ehash = get_album_entry_dir_name(entry.id)
+
+        entries_fd: Optional[int] = None
+        entry_fd: Optional[int] = None
+        try:
+            try:
+                entries_fd = os.open("entries", dir_flags, dir_fd=context.album_dir_fd)
+                entry_fd = os.open(ehash, dir_flags, dir_fd=entries_fd)
+            except FileNotFoundError as exc:
+                if is_generated:
+                    raise AlbumDurabilityUncertainError(
+                        f"Entry directory missing for generated entry '{entry.id}'."
+                    ) from exc
+                return None
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                    raise AlbumManifestCorruptError(
+                        f"Unsafe or symlinked entry directory for '{entry.id}': {exc}"
+                    ) from exc
+                raise AlbumDurabilityUncertainError(
+                    f"Cannot access entry directory for '{entry.id}': {exc}"
+                ) from exc
+
+            try:
+                ent_root_st = os.fstat(entries_fd)
+                edir_st = os.fstat(entry_fd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"Cannot stat entry directory for '{entry.id}': {exc}"
+                ) from exc
+
+            obs_entries_dir_id = context.observed_identities.get("entries_dir_id")
+            if obs_entries_dir_id is not None and (int(ent_root_st.st_dev), int(ent_root_st.st_ino)) != obs_entries_dir_id:
+                raise AlbumDurabilityUncertainError(
+                    f"Album '{context.album_id}' entries directory identity drifted during read acquisition."
+                )
+            obs_entry = context.observed_identities.get("entries", {}).get(entry.id)
+            if obs_entry is not None and (int(edir_st.st_dev), int(edir_st.st_ino)) != obs_entry["entry_dir_id"]:
+                raise AlbumDurabilityUncertainError(
+                    f"Entry directory identity drifted for '{entry.id}' during read acquisition."
+                )
+
+            if is_generated:
+                assert entry.active_audio_filename is not None and entry.active_snapshot_filename is not None
+                audio_rel = f"entries/{ehash}/{entry.active_audio_filename}"
+                snap_rel = f"entries/{ehash}/{entry.active_snapshot_filename}"
+                audio_ref, snap_ref = self._verify_read_artifact_provenance_locked(
+                    context,
+                    role=ArtifactRole.ENTRY_AUDIO,
+                    rel_path=audio_rel,
+                    entry_id=entry.id,
+                    generation=entry.active_generation,
+                    snapshot_rel_path=snap_rel,
+                )
+                opened = self._open_regular_file_in_dir_for_read(
+                    entry_fd, entry.active_audio_filename, missing_is_uncertain=True
+                )
+                assert opened is not None
+                afd, ast = opened
+                try:
+                    if obs_entry is not None and obs_entry.get("audio") is not None:
+                        if self._seal_stat_tuple(ast) != obs_entry["audio"][1]:
+                            raise AlbumDurabilityUncertainError(
+                                f"Generated audio '{entry.active_audio_filename}' identity changed during read acquisition."
+                            )
+                    if audio_ref is not None and ast.st_size != audio_ref.size_bytes:
+                        raise AlbumManifestCorruptError(
+                            f"Generated audio '{entry.active_audio_filename}' size contradicts reference."
+                        )
+                    if verify_snapshot:
+                        if audio_ref is not None:
+                            h_audio = hashlib.sha256()
+                            try:
+                                os.lseek(afd, 0, os.SEEK_SET)
+                                while True:
+                                    chunk = os.read(afd, 65536)
+                                    if not chunk:
+                                        break
+                                    h_audio.update(chunk)
+                                os.lseek(afd, 0, os.SEEK_SET)
+                                post_ast = os.fstat(afd)
+                                dir_ast = os.lstat(entry.active_audio_filename, dir_fd=entry_fd)
+                            except OSError as exc:
+                                raise AlbumDurabilityUncertainError(
+                                    f"Cannot verify generated audio '{entry.active_audio_filename}' contents: {exc}"
+                                ) from exc
+                            if (
+                                self._seal_stat_tuple(post_ast) != self._seal_stat_tuple(ast)
+                                or self._seal_stat_tuple(dir_ast) != self._seal_stat_tuple(ast)
+                            ):
+                                raise AlbumDurabilityUncertainError(
+                                    f"Generated audio '{entry.active_audio_filename}' changed during verification."
+                                )
+                            if h_audio.hexdigest() != audio_ref.sha256:
+                                raise AlbumManifestCorruptError(
+                                    f"Generated audio '{entry.active_audio_filename}' SHA-256 contradicts reference."
+                                )
+                        assert snap_ref is not None
+                        self._verify_generated_snapshot_for_read_locked(
+                            context, entry_fd, entry, entry.active_snapshot_filename, snap_ref
+                        )
+                        try:
+                            cur_ent_root_st = os.fstat(entries_fd)
+                            cur_edir_st = os.fstat(entry_fd)
+                            cur_dir_ast = os.lstat(entry.active_audio_filename, dir_fd=entry_fd)
+                            cur_ast = os.fstat(afd)
+                        except OSError as exc:
+                            raise AlbumDurabilityUncertainError(
+                                f"Cannot re-verify descriptors after snapshot check: {exc}"
+                            ) from exc
+                        if (
+                            (int(cur_ent_root_st.st_dev), int(cur_ent_root_st.st_ino)) != (int(ent_root_st.st_dev), int(ent_root_st.st_ino))
+                            or (int(cur_edir_st.st_dev), int(cur_edir_st.st_ino)) != (int(edir_st.st_dev), int(edir_st.st_ino))
+                            or self._seal_stat_tuple(cur_dir_ast) != self._seal_stat_tuple(ast)
+                            or self._seal_stat_tuple(cur_ast) != self._seal_stat_tuple(ast)
+                        ):
+                            raise AlbumDurabilityUncertainError(
+                                f"Entry or audio identity drifted during read verification for '{entry.id}'."
+                            )
+                    return entry.active_audio_filename, afd, int(ast.st_size)
+                except BaseException:
+                    try:
+                        os.close(afd)
+                    except OSError:
+                        pass
+                    raise
+            else:
+                for ext in AUDIO_FORMATS:
+                    filename = f"audio{ext}"
+                    opened = self._open_regular_file_in_dir_for_read(
+                        entry_fd, filename, missing_is_uncertain=False
+                    )
+                    if opened is not None:
+                        afd, ast = opened
+                        try:
+                            self._verify_read_artifact_provenance_locked(
+                                context,
+                                role=ArtifactRole.ENTRY_AUDIO,
+                                rel_path=f"entries/{ehash}/{filename}",
+                                entry_id=entry.id,
+                                generation=None,
+                            )
+                            return filename, afd, int(ast.st_size)
+                        except BaseException:
+                            try:
+                                os.close(afd)
+                            except OSError:
+                                pass
+                            raise
+                return None
+        finally:
+            if entry_fd is not None:
+                try:
+                    os.close(entry_fd)
+                except OSError:
+                    pass
+            if entries_fd is not None:
+                try:
+                    os.close(entries_fd)
+                except OSError:
+                    pass
+
+    def _resolve_and_open_cover_from_context(
+        self, context: _AlbumReadContext
+    ) -> Optional[Tuple[str, int, int]]:
+        """Resolve and open album cover relative to context.album_dir_fd with provenance checks."""
+        assert context.album_dir_fd is not None
+        if context.album.active_cover_filename is not None:
+            cover_name = context.album.active_cover_filename
+            cov_ref, _ = self._verify_read_artifact_provenance_locked(
+                context,
+                role=ArtifactRole.COVER_ART,
+                rel_path=cover_name,
+                entry_id=None,
+                generation=context.album.cover_generation,
+            )
+            opened = self._open_regular_file_in_dir_for_read(
+                context.album_dir_fd, cover_name, missing_is_uncertain=True
+            )
+            assert opened is not None
+            cfd, cst = opened
+            try:
+                obs_cov = context.observed_identities.get("cover")
+                if obs_cov is not None and self._seal_stat_tuple(cst) != obs_cov[1]:
+                    raise AlbumDurabilityUncertainError(
+                        f"Generated cover '{cover_name}' identity changed during read acquisition."
+                    )
+                if cov_ref is not None:
+                    if cst.st_size != cov_ref.size_bytes:
+                        raise AlbumManifestCorruptError(
+                            f"Generated cover '{cover_name}' size contradicts reference."
+                        )
+                    h_cov = hashlib.sha256()
+                    try:
+                        os.lseek(cfd, 0, os.SEEK_SET)
+                        while True:
+                            chunk = os.read(cfd, 65536)
+                            if not chunk:
+                                break
+                            h_cov.update(chunk)
+                        os.lseek(cfd, 0, os.SEEK_SET)
+                        post_cst = os.fstat(cfd)
+                    except OSError as exc:
+                        raise AlbumDurabilityUncertainError(
+                            f"Cannot verify generated cover '{cover_name}' contents: {exc}"
+                        ) from exc
+                    if self._seal_stat_tuple(post_cst) != self._seal_stat_tuple(cst):
+                        raise AlbumDurabilityUncertainError(
+                            f"Generated cover '{cover_name}' changed during verification."
+                        )
+                    if h_cov.hexdigest() != cov_ref.sha256:
+                        raise AlbumManifestCorruptError(
+                            f"Generated cover '{cover_name}' SHA-256 contradicts reference."
+                        )
+                return cover_name, cfd, int(cst.st_size)
+            except BaseException:
+                try:
+                    os.close(cfd)
+                except OSError:
+                    pass
+                raise
+
+        for ext in (".jpg", ".jpeg", ".png"):
+            cover_name = f"cover{ext}"
+            opened = self._open_regular_file_in_dir_for_read(
+                context.album_dir_fd, cover_name, missing_is_uncertain=False
+            )
+            if opened is not None:
+                cfd, cst = opened
+                try:
+                    self._verify_read_artifact_provenance_locked(
+                        context,
+                        role=ArtifactRole.COVER_ART,
+                        rel_path=cover_name,
+                        entry_id=None,
+                        generation=None,
+                    )
+                    return cover_name, cfd, int(cst.st_size)
+                except BaseException:
+                    try:
+                        os.close(cfd)
+                    except OSError:
+                        pass
+                    raise
+        return None
+
+
+    def get_album_entry_audio_path(self, user_id: str, album_id: str, entry_id: str) -> Optional[Path]:
+        """Return path to an album entry's active owned audio copy via shared read context (side-effect-free)."""
+        if not is_valid_project_id(album_id, expected_prefix="alb") or not is_valid_project_id(entry_id, expected_prefix="ale"):
+            return None
+        ctx = self._open_album_read_context(user_id, album_id, load_journal=True)
+        if ctx is None:
+            return None
+        try:
+            entry = next((t for t in ctx.album.tracks if t.id == entry_id), None)
+            if not entry or entry.is_placeholder or not entry.has_owned_audio:
                 return None
             rel_parts = [
                 get_tenant_storage_dir_name(user_id),
@@ -1545,74 +2165,58 @@ class ProjectStorageManager:
                 "entries",
                 get_album_entry_dir_name(entry_id),
             ]
+            entry_dir = self._get_album_entry_dir_path(user_id, album_id, entry_id)
             if not self._verify_ancestors_nofollow(rel_parts, allow_missing=True):
                 return None
-            entry_dir = self._get_album_entry_dir_path(user_id, album_id, entry_id)
-        except (ValueError, AlbumManifestCorruptError):
-            return None
-        try:
-            for ext in AUDIO_FORMATS:
-                audio_path = entry_dir / f"audio{ext}"
-                if audio_path.is_file() and not audio_path.is_symlink():
-                    return audio_path
-        except OSError:
-            return None
-        return None
+            opened = self._resolve_and_open_entry_audio_from_context(ctx, entry, verify_snapshot=False)
+            if opened is None:
+                return None
+            filename, fd, _size = opened
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            return entry_dir / filename
+        finally:
+            ctx.close()
 
     def open_album_entry_audio_for_read(
         self, user_id: str, album_id: str, entry_id: str
     ) -> Optional[tuple[AlbumTrackEntry, Path, int, int]]:
-        """Validate manifest and entry membership, then open entry audio fd without creating dirs/locks."""
+        """Validate manifest, provenance, and generated snapshot, then open entry audio fd via shared read context."""
         if not is_valid_project_id(album_id, expected_prefix="alb") or not is_valid_project_id(entry_id, expected_prefix="ale"):
             return None
-        album = self.get_album(user_id, album_id)
-        if not album:
+        ctx = self._open_album_read_context(user_id, album_id, load_journal=True)
+        if ctx is None:
             return None
-        entry = next((t for t in album.tracks if t.id == entry_id), None)
-        if not entry or entry.is_placeholder:
-            return None
-        rel_parts = [
-            get_tenant_storage_dir_name(user_id),
-            "albums",
-            get_album_dir_name(album_id),
-            "entries",
-            get_album_entry_dir_name(entry_id),
-        ]
-        if not self._verify_ancestors_nofollow(rel_parts, allow_missing=True):
-            return None
-        if not entry.has_owned_audio:
-            return None
-        entry_dir = self._get_album_entry_dir_path(user_id, album_id, entry_id)
-        for ext in AUDIO_FORMATS:
-            filename = f"audio{ext}"
-            opened = self._open_file_under_root_nofollow(rel_parts, filename)
-            if opened is not None:
-                fd, size = opened
-                return entry, entry_dir / filename, fd, size
-        return None
+        try:
+            entry = next((t for t in ctx.album.tracks if t.id == entry_id), None)
+            if not entry or entry.is_placeholder or not entry.has_owned_audio:
+                return None
+            opened = self._resolve_and_open_entry_audio_from_context(ctx, entry, verify_snapshot=True)
+            if opened is None:
+                return None
+            filename, fd, size = opened
+            entry_dir = self._get_album_entry_dir_path(user_id, album_id, entry_id)
+            return entry, entry_dir / filename, fd, size
+        finally:
+            ctx.close()
 
     def open_album_cover_for_read(self, user_id: str, album_id: str) -> Optional[tuple[Path, int, int]]:
-        """Validate album manifest and open cover fd without creating directories or lockfiles."""
+        """Validate album manifest and provenance, then open cover fd via shared read context."""
         if not is_valid_project_id(album_id, expected_prefix="alb"):
             return None
-        album = self.get_album(user_id, album_id)
-        if not album:
+        ctx = self._open_album_read_context(user_id, album_id, load_journal=True)
+        if ctx is None:
             return None
-        rel_parts = [
-            get_tenant_storage_dir_name(user_id),
-            "albums",
-            get_album_dir_name(album_id),
-        ]
-        if not self._verify_ancestors_nofollow(rel_parts, allow_missing=True):
-            return None
-        album_dir = self._get_album_dir_path(user_id, album_id)
-        for ext in (".jpg", ".jpeg", ".png"):
-            filename = f"cover{ext}"
-            opened = self._open_file_under_root_nofollow(rel_parts, filename)
-            if opened is not None:
-                fd, size = opened
-                return album_dir / filename, fd, size
-        return None
+        try:
+            opened = self._resolve_and_open_cover_from_context(ctx)
+            if opened is None:
+                return None
+            filename, fd, size = opened
+            return ctx.album_dir / filename, fd, size
+        finally:
+            ctx.close()
 
     def _get_album_lock_path(self, user_id: str, album_id: str) -> Path:
         if not is_valid_project_id(album_id, expected_prefix="alb"):
@@ -1682,6 +2286,140 @@ class ProjectStorageManager:
                     )
 
     @staticmethod
+    def _validate_raw_generation_declarations(raw_data: Dict[str, Any], album_id: str) -> None:
+        """Validate raw generation, ownership, placeholder/take, and snapshot declarations before normalization."""
+        cov_gen = raw_data.get("cover_generation")
+        cov_name = raw_data.get("active_cover_filename")
+        if cov_gen is not None or cov_name is not None:
+            if cov_gen is None or cov_name is None:
+                raise AlbumManifestCorruptError(
+                    f"Album manifest '{album_id}' has partial cover generation declaration."
+                )
+            if isinstance(cov_gen, bool) or not isinstance(cov_gen, int) or cov_gen < 1:
+                raise AlbumManifestCorruptError(
+                    f"Album manifest '{album_id}' has invalid cover_generation."
+                )
+            if not isinstance(cov_name, str):
+                raise AlbumManifestCorruptError(
+                    f"Album manifest '{album_id}' has invalid active_cover_filename."
+                )
+            try:
+                _validate_safe_active_basename(cov_name)
+            except ValueError as exc:
+                raise AlbumManifestCorruptError(
+                    f"Album manifest '{album_id}' has invalid active_cover_filename: {exc}"
+                ) from exc
+            cm = _GEN_COVER_RE.match(cov_name)
+            if not cm or int(cm.group(1)) != cov_gen or cm.group(2).lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+                raise AlbumManifestCorruptError(
+                    f"Album manifest '{album_id}' cover_generation/active_cover_filename mismatch."
+                )
+            if raw_data.get("has_cover") is False:
+                raise AlbumManifestCorruptError(
+                    f"Album manifest '{album_id}' declares active cover '{cov_name}' with has_cover=False."
+                )
+
+        raw_tracks = raw_data.get("tracks")
+        if not isinstance(raw_tracks, list):
+            return
+        for item in raw_tracks:
+            if not isinstance(item, dict):
+                continue
+            take_id = item.get("take_id")
+            is_ph = item.get("is_placeholder")
+            has_owned = item.get("has_owned_audio")
+            snap = item.get("snapshot")
+            gen = item.get("active_generation")
+            a_name = item.get("active_audio_filename")
+            s_name = item.get("active_snapshot_filename")
+
+            if is_ph is True and take_id is not None:
+                raise AlbumManifestCorruptError(
+                    f"Album manifest '{album_id}' has contradictory is_placeholder=True with take_id."
+                )
+            if take_id is None and (gen is not None or a_name is not None or s_name is not None):
+                raise AlbumManifestCorruptError(
+                    f"Album manifest '{album_id}' contains placeholder entry with generated artifact fields."
+                )
+
+            if gen is not None or a_name is not None or s_name is not None:
+                if gen is None or a_name is None or s_name is None:
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' has partial entry generation declaration."
+                    )
+                if isinstance(gen, bool) or not isinstance(gen, int) or gen < 1:
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' has invalid entry active_generation."
+                    )
+                if not isinstance(a_name, str):
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' has invalid active_audio_filename."
+                    )
+                try:
+                    _validate_safe_active_basename(a_name)
+                except ValueError as exc:
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' has invalid active_audio_filename: {exc}"
+                    ) from exc
+                am = _GEN_AUDIO_RE.match(a_name)
+                if not am or int(am.group(1)) != gen or am.group(2).lower() not in AUDIO_FORMATS:
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' active_generation/active_audio_filename mismatch."
+                    )
+                if not isinstance(s_name, str) or s_name != f"snapshot_g{gen}.json":
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' active_generation/active_snapshot_filename mismatch."
+                    )
+                if has_owned is not True:
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' generated entry must declare has_owned_audio=True."
+                    )
+                if not isinstance(snap, dict):
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' generated entry is missing embedded snapshot."
+                    )
+                try:
+                    snap_obj = AlbumEntrySnapshot(**snap)
+                except Exception as exc:
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' has invalid embedded snapshot: {exc}"
+                    ) from exc
+                eid = item.get("id")
+                if (
+                    snap_obj.source_track_id != item.get("track_id")
+                    or snap_obj.source_take_id != take_id
+                    or (isinstance(eid, str) and is_valid_project_id(eid, expected_prefix="ale") and snap_obj.entry_id != eid)
+                ):
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' embedded snapshot identity mismatch."
+                    )
+                audio_ext = os.path.splitext(a_name)[1].lower()
+                if f".{snap_obj.format.lower().lstrip('.')}" != audio_ext:
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' snapshot format '{snap_obj.format}' contradicts '{a_name}'."
+                    )
+            elif snap is not None:
+                if not isinstance(snap, dict):
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' has invalid embedded snapshot."
+                    )
+                try:
+                    snap_obj = AlbumEntrySnapshot(**snap)
+                except Exception as exc:
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' has invalid embedded snapshot: {exc}"
+                    ) from exc
+                eid = item.get("id")
+                if (
+                    snap_obj.source_track_id != item.get("track_id")
+                    or snap_obj.source_take_id != take_id
+                    or (isinstance(eid, str) and is_valid_project_id(eid, expected_prefix="ale") and snap_obj.entry_id != eid)
+                ):
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' embedded snapshot identity mismatch."
+                    )
+
+    @staticmethod
     def _normalize_album_entries_shared(album_id: str, data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Normalize album entry dicts with two-pass persisted ID reservation and deterministic legacy derivation."""
         raw_tracks = data.get("tracks")
@@ -1738,36 +2476,149 @@ class ProjectStorageManager:
         return norm_tracks
 
     def _normalize_album_data_from_dir_fd(
-        self, album_dir_fd: int, data: Dict[str, Any]
+        self,
+        album_dir_fd: int,
+        data: Dict[str, Any],
+        *,
+        identities_out: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Non-destructively normalize album manifest using validated album_dir_fd."""
+        import errno
+
         album_id = str(data.get("id") or "")
-        has_cover = False
-        for cov_name in ("cover.jpg", "cover.png"):
+        obs_entries: Dict[str, Any] = {}
+        obs_cover: Optional[Tuple[str, Tuple[int, int, int, int, int]]] = None
+        obs_entries_dir_id: Optional[Tuple[int, int]] = None
+
+        active_cov = data.get("active_cover_filename")
+        if active_cov is not None:
             try:
-                st = os.lstat(cov_name, dir_fd=album_dir_fd)
-                if stat.S_ISREG(st.st_mode):
-                    has_cover = True
-                    break
-            except FileNotFoundError:
-                continue
-        data["has_cover"] = has_cover
+                st = os.lstat(active_cov, dir_fd=album_dir_fd)
+            except FileNotFoundError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"Album '{album_id}' declared active cover '{active_cov}' is missing on disk."
+                ) from exc
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                    raise AlbumManifestCorruptError(
+                        f"Album '{album_id}' active cover '{active_cov}' is unsafe or symlinked."
+                    ) from exc
+                raise AlbumDurabilityUncertainError(
+                    f"Cannot stat declared active cover '{active_cov}' for album '{album_id}': {exc}"
+                ) from exc
+            if not stat.S_ISREG(st.st_mode):
+                raise AlbumManifestCorruptError(
+                    f"Album '{album_id}' active cover '{active_cov}' is not a regular file."
+                )
+            obs_cover = (active_cov, self._seal_stat_tuple(st))
+            data["has_cover"] = True
+        else:
+            has_cover = False
+            for cov_name in ("cover.jpg", "cover.jpeg", "cover.png"):
+                try:
+                    st = os.lstat(cov_name, dir_fd=album_dir_fd)
+                    if stat.S_ISREG(st.st_mode):
+                        has_cover = True
+                        break
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                        raise AlbumManifestCorruptError(
+                            f"Album '{album_id}' cover '{cov_name}' is unsafe or symlinked."
+                        ) from exc
+                    raise AlbumDurabilityUncertainError(
+                        f"Cannot stat album cover '{cov_name}' for '{album_id}': {exc}"
+                    ) from exc
+            data["has_cover"] = has_cover
+
         status_val = data.get("status", WorkspaceStatus.DRAFT.value)
         data["is_finalized"] = bool(data.get("is_finalized", False)) or (status_val == WorkspaceStatus.COMPLETED.value)
 
+        has_generated_entry = any(
+            isinstance(t, dict) and t.get("active_audio_filename") is not None
+            for t in (data.get("tracks") or [])
+        )
         entries_fd: Optional[int] = None
         dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
-            entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
-        except FileNotFoundError:
-            entries_fd = None
-        except OSError as e:
-            raise AlbumManifestCorruptError("Album 'entries' directory is invalid or a symlink.") from e
+            try:
+                entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
+            except FileNotFoundError as exc:
+                if has_generated_entry:
+                    raise AlbumDurabilityUncertainError(
+                        f"Album '{album_id}' entries directory is missing for declared generated recordings."
+                    ) from exc
+                entries_fd = None
+            except OSError as e:
+                if e.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                    raise AlbumManifestCorruptError("Album 'entries' directory is invalid or a symlink.") from e
+                raise AlbumDurabilityUncertainError(f"Cannot open album 'entries' directory: {e}") from e
 
-        try:
+            if entries_fd is not None:
+                try:
+                    ent_st = os.fstat(entries_fd)
+                except OSError as e:
+                    raise AlbumDurabilityUncertainError(f"Cannot stat album 'entries' directory: {e}") from e
+                obs_entries_dir_id = (int(ent_st.st_dev), int(ent_st.st_ino))
+
             norm_tracks = self._normalize_album_entries_shared(album_id, data)
             for norm_item in norm_tracks:
                 if not norm_item["is_placeholder"]:
+                    gen_audio = norm_item.get("active_audio_filename")
+                    gen_snap = norm_item.get("active_snapshot_filename")
+                    if gen_audio is not None:
+                        ehash = get_album_entry_dir_name(norm_item["id"])
+                        try:
+                            efd = os.open(ehash, dir_flags, dir_fd=entries_fd)
+                        except FileNotFoundError as exc:
+                            raise AlbumDurabilityUncertainError(
+                                f"Entry directory missing for generated entry '{norm_item['id']}'."
+                            ) from exc
+                        except OSError as e:
+                            if e.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                                raise AlbumManifestCorruptError(
+                                    f"Entry directory '{ehash}' is invalid or a symlink."
+                                ) from e
+                            raise AlbumDurabilityUncertainError(
+                                f"Cannot access entry directory '{ehash}': {e}"
+                            ) from e
+                        try:
+                            try:
+                                edir_st = os.fstat(efd)
+                            except OSError as exc:
+                                raise AlbumDurabilityUncertainError(
+                                    f"Cannot stat entry directory '{ehash}': {exc}"
+                                ) from exc
+                            entry_obs: Dict[str, Any] = {
+                                "entry_dir_id": (int(edir_st.st_dev), int(edir_st.st_ino))
+                            }
+                            for key_name, fname in (("audio", gen_audio), ("snapshot", gen_snap)):
+                                try:
+                                    fst = os.lstat(fname, dir_fd=efd)
+                                except FileNotFoundError as exc:
+                                    raise AlbumDurabilityUncertainError(
+                                        f"Declared generated artifact '{fname}' missing for entry '{norm_item['id']}'."
+                                    ) from exc
+                                except OSError as exc:
+                                    if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                                        raise AlbumManifestCorruptError(
+                                            f"Generated artifact '{fname}' is unsafe or symlinked."
+                                        ) from exc
+                                    raise AlbumDurabilityUncertainError(
+                                        f"Cannot stat generated artifact '{fname}': {exc}"
+                                    ) from exc
+                                if not stat.S_ISREG(fst.st_mode):
+                                    raise AlbumManifestCorruptError(
+                                        f"Generated artifact '{fname}' is not a regular file."
+                                    )
+                                entry_obs[key_name] = (fname, self._seal_stat_tuple(fst))
+                            obs_entries[norm_item["id"]] = entry_obs
+                        finally:
+                            os.close(efd)
+                        norm_item["has_owned_audio"] = True
+                        continue
+
                     has_owned = False
                     if entries_fd is not None and is_valid_project_id(norm_item["id"], expected_prefix="ale"):
                         ehash = get_album_entry_dir_name(norm_item["id"])
@@ -1795,6 +2646,10 @@ class ProjectStorageManager:
 
             data["tracks"] = norm_tracks
             data["track_ids"] = [t["track_id"] for t in norm_tracks if t.get("track_id")]
+            if identities_out is not None:
+                identities_out["entries_dir_id"] = obs_entries_dir_id
+                identities_out["cover"] = obs_cover
+                identities_out["entries"] = obs_entries
             return data
         finally:
             if entries_fd is not None:
@@ -1810,6 +2665,7 @@ class ProjectStorageManager:
         *,
         protect_finalized: bool = False,
         raw_out: Optional[List[Dict[str, Any]]] = None,
+        identities_out: Optional[Dict[str, Any]] = None,
     ) -> Optional[Tuple[AlbumMetadata, Dict[str, Any], os.stat_result]]:
         """Read, inspect, normalize, and validate album.json strictly through album_dir_fd."""
         try:
@@ -1845,6 +2701,7 @@ class ProjectStorageManager:
                     pass
 
         self._inspect_raw_album_manifest(raw_data, album_id, protect_finalized=protect_finalized)
+        self._validate_raw_generation_declarations(raw_data, album_id)
         if raw_out is not None:
             raw_out.append(raw_data)
 
@@ -1853,14 +2710,20 @@ class ProjectStorageManager:
             or raw_data.get("status") == WorkspaceStatus.COMPLETED.value
         ):
             try:
-                norm_data = self._normalize_album_data_from_dir_fd(album_dir_fd, copy.deepcopy(raw_data))
+                norm_data = self._normalize_album_data_from_dir_fd(
+                    album_dir_fd, copy.deepcopy(raw_data), identities_out=identities_out
+                )
                 return AlbumMetadata(**norm_data), norm_data, manifest_st
             except Exception as e:
                 raise AlbumFinalizedError("Finalized albums are immutable and cannot be modified or deleted.") from e
 
         try:
-            norm_data = self._normalize_album_data_from_dir_fd(album_dir_fd, copy.deepcopy(raw_data))
+            norm_data = self._normalize_album_data_from_dir_fd(
+                album_dir_fd, copy.deepcopy(raw_data), identities_out=identities_out
+            )
             return AlbumMetadata(**norm_data), norm_data, manifest_st
+        except (AlbumManifestCorruptError, AlbumDurabilityUncertainError, AlbumFinalizedError):
+            raise
         except Exception as e:
             logger.error(f"Failed to validate album manifest {album_id}: {e}")
             raise AlbumManifestCorruptError(
@@ -2232,15 +3095,46 @@ class ProjectStorageManager:
     def _normalize_album_data(self, user_id: str, album_dir: Path, data: Dict[str, Any]) -> Dict[str, Any]:
         """Non-destructively normalize legacy and current album manifests when reading from disk."""
         album_id = data.get("id", "")
-        data["has_cover"] = (album_dir / "cover.jpg").is_file() or (album_dir / "cover.png").is_file()
+        active_cov = data.get("active_cover_filename")
+        if active_cov is not None:
+            cov_path = album_dir / active_cov
+            if not cov_path.exists():
+                raise AlbumDurabilityUncertainError(
+                    f"Album '{album_id}' declared active cover '{active_cov}' is missing on disk."
+                )
+            if cov_path.is_symlink() or not cov_path.is_file():
+                raise AlbumManifestCorruptError(
+                    f"Album '{album_id}' active cover '{active_cov}' is unsafe or not a regular file."
+                )
+            data["has_cover"] = True
+        else:
+            data["has_cover"] = any(
+                (album_dir / f"cover{ext}").is_file() and not (album_dir / f"cover{ext}").is_symlink()
+                for ext in (".jpg", ".jpeg", ".png")
+            )
         status_val = data.get("status", WorkspaceStatus.DRAFT.value)
         data["is_finalized"] = bool(data.get("is_finalized", False)) or (status_val == WorkspaceStatus.COMPLETED.value)
 
         norm_tracks = self._normalize_album_entries_shared(album_id, data)
         for entry in norm_tracks:
             if not entry["is_placeholder"]:
-                owned_audio = self.get_album_entry_audio_path(user_id, album_id, entry["id"])
-                entry["has_owned_audio"] = bool(owned_audio is not None and entry.get("snapshot") is not None)
+                if entry.get("active_audio_filename") is not None:
+                    entry_dir = self._get_album_entry_dir_path(user_id, album_id, entry["id"])
+                    a_path = entry_dir / entry["active_audio_filename"]
+                    s_path = entry_dir / entry["active_snapshot_filename"]
+                    for p in (a_path, s_path):
+                        if not p.exists():
+                            raise AlbumDurabilityUncertainError(
+                                f"Declared generated artifact '{p.name}' missing for entry '{entry['id']}'."
+                            )
+                        if p.is_symlink() or not p.is_file():
+                            raise AlbumManifestCorruptError(
+                                f"Generated artifact '{p.name}' is unsafe or not a regular file."
+                            )
+                    entry["has_owned_audio"] = True
+                else:
+                    owned_audio = self.get_album_entry_audio_path(user_id, album_id, entry["id"])
+                    entry["has_owned_audio"] = bool(owned_audio is not None and entry.get("snapshot") is not None)
 
         data["tracks"] = norm_tracks
         data["track_ids"] = [t["track_id"] for t in norm_tracks if t.get("track_id")]
@@ -2366,26 +3260,71 @@ class ProjectStorageManager:
         return self._read_album_unlocked(user_id, album_id)
 
     def list_albums(self, user_id: str, status: Optional[WorkspaceStatus] = None) -> List[AlbumMetadata]:
-        """List all album workspaces for a user (side-effect-free)."""
-        albums_root = self._get_albums_root_path(user_id)
-        results = []
-        if not albums_root.exists() or albums_root.is_symlink() or not albums_root.is_dir():
+        """List all album workspaces for a user using descriptor-safe reads (side-effect-free)."""
+        import errno
+
+        results: List[AlbumMetadata] = []
+        albums_root_fd = self._open_albums_root_fd_nofollow(user_id)
+        if albums_root_fd is None:
             return results
 
-        for item in albums_root.iterdir():
-            if item.is_dir() and not item.is_symlink() and not item.name.startswith("."):
-                manifest_path = item / "album.json"
-                if manifest_path.is_file() and not manifest_path.is_symlink():
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            try:
+                names = os.listdir(albums_root_fd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(f"Cannot list albums root directory: {exc}") from exc
+
+            for dname in names:
+                if dname.startswith("."):
+                    continue
+                try:
+                    dst = os.lstat(dname, dir_fd=albums_root_fd)
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                        raise AlbumManifestCorruptError(f"Unsafe album directory entry '{dname}': {exc}") from exc
+                    raise AlbumDurabilityUncertainError(f"Cannot stat album directory '{dname}': {exc}") from exc
+
+                if stat.S_ISLNK(dst.st_mode):
+                    raise AlbumManifestCorruptError(f"Album directory '{dname}' must not be a symlink.")
+                if not stat.S_ISDIR(dst.st_mode):
+                    continue
+
+                album_dir_fd: Optional[int] = None
+                try:
                     try:
-                        with open(manifest_path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                        self._inspect_raw_album_manifest(data, item.name)
-                        data = self._normalize_album_data(user_id, item, data)
-                        meta = AlbumMetadata(**data)
-                        if status is None or meta.status == status:
-                            results.append(meta)
-                    except Exception as e:
-                        logger.warning(f"Skipping corrupted album {item.name}: {e}")
+                        album_dir_fd = os.open(dname, dir_flags, dir_fd=albums_root_fd)
+                    except FileNotFoundError:
+                        continue
+                    except OSError as exc:
+                        if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                            raise AlbumManifestCorruptError(f"Unsafe album directory '{dname}': {exc}") from exc
+                        raise AlbumDurabilityUncertainError(f"Cannot open album directory '{dname}': {exc}") from exc
+
+                    raw_holder: List[Dict[str, Any]] = []
+                    loaded = self._read_album_from_dir_fd(dname, album_dir_fd, protect_finalized=False, raw_out=raw_holder)
+                    if loaded is None:
+                        continue
+                    meta, _norm, _st = loaded
+                    if not is_valid_project_id(meta.id, expected_prefix="alb") or get_album_dir_name(meta.id) != dname:
+                        raise AlbumManifestCorruptError(
+                            f"Album directory '{dname}' manifest id '{meta.id}' mismatch."
+                        )
+                    if status is None or meta.status == status:
+                        results.append(meta)
+                finally:
+                    if album_dir_fd is not None:
+                        try:
+                            os.close(album_dir_fd)
+                        except OSError:
+                            pass
+        finally:
+            try:
+                os.close(albums_root_fd)
+            except OSError:
+                pass
 
         results.sort(key=lambda a: a.updated_at, reverse=True)
         return results
@@ -4972,26 +5911,24 @@ class ProjectStorageManager:
             return self._read_album_unlocked(user_id, album_id)
 
     def get_album_cover_path(self, user_id: str, album_id: str) -> Optional[Path]:
-        """Return path to album cover artwork if it exists (side-effect-free, non-following)."""
-        album = self.get_album(user_id, album_id)
-        if not album:
+        """Return path to active album cover artwork via shared read context (side-effect-free)."""
+        if not is_valid_project_id(album_id, expected_prefix="alb"):
             return None
-        rel_parts = [
-            get_tenant_storage_dir_name(user_id),
-            "albums",
-            get_album_dir_name(album_id),
-        ]
+        ctx = self._open_album_read_context(user_id, album_id, load_journal=True)
+        if ctx is None:
+            return None
         try:
-            if not self._verify_ancestors_nofollow(rel_parts, allow_missing=True):
+            opened = self._resolve_and_open_cover_from_context(ctx)
+            if opened is None:
                 return None
-        except AlbumManifestCorruptError:
-            return None
-        album_dir = self._get_album_dir_path(user_id, album_id)
-        for ext in (".jpg", ".jpeg", ".png"):
-            cover_path = album_dir / f"cover{ext}"
-            if cover_path.is_file() and not cover_path.is_symlink():
-                return cover_path
-        return None
+            filename, cfd, _size = opened
+            try:
+                os.close(cfd)
+            except OSError:
+                pass
+            return ctx.album_dir / filename
+        finally:
+            ctx.close()
 
     # --- Phase 1B Stage 1.1: Durable Journal, Recovery Classification & Verified Staging Cleanup ---
 

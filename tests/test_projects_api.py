@@ -2640,7 +2640,8 @@ def test_phase1a1_api_optimistic_concurrency_implicit_clear_and_corrupt_manifest
 
     assert client.get(f"/api/projects/albums/{album_id}", cookies=auth_cookies).status_code == 422
     assert client.delete(f"/api/projects/albums/{album_id}?expected_revision={rev_after_edit}", cookies=auth_cookies).status_code == 422
-    assert mgr.get_album_entry_audio_path(user_id, album_id, e1["id"]).read_bytes() == wav_1
+    from backend.security import get_album_entry_dir_name
+    assert (album_dir / "entries" / get_album_entry_dir_name(e1["id"]) / "audio.wav").read_bytes() == wav_1
 
 
 def test_phase1a1_frontend_overlapping_take_picker_and_expected_revision():
@@ -4167,10 +4168,244 @@ def test_phase1b_stage1_3b_2a2b_api_finalization_replay_and_errors(client, auth_
     assert cor_res.status_code == 422
 
 
+def test_phase1b_stage1_3b_2b1a_api_generation_readers_errors_and_webp(client, auth_cookies, monkeypatch):
+    """Phase 1B Stage 1.3B-2B-1A: generation-aware API list/detail/stream/download/artwork, 422/503/404, and WebP MIME."""
+    import hashlib
+    import io
+    import json
+    import wave
+    import backend.projects_api as papi_mod
+    from backend.project_models import (
+        AlbumJournal,
+        ArtifactRefRecord,
+        ArtifactRole,
+        JournalProtocol,
+        JournalTxState,
+        TerminalTxReceipt,
+    )
+    from backend.project_storage import ProjectStorageManager
+    from backend.security import get_album_entry_dir_name
 
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(8000); wf.writeframes(b"\x03\x04" * 300)
+    wav_ok = buf.getvalue()
+    wav_sha = hashlib.sha256(wav_ok).hexdigest()
+    webp_ok = b"RIFF\x18\x00\x00\x00WEBPVP8 \x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    webp_sha = hashlib.sha256(webp_ok).hexdigest()
 
+    trk = client.post("/api/projects/tracks", json={"title": "2B1A API Track"}, cookies=auth_cookies).json()
+    tk = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        files={"file": ("2b1a.wav", wav_ok, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    alb = client.post("/api/projects/albums", json={"title": "2B1A API Album"}, cookies=auth_cookies).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    eid = alb["tracks"][0]["id"]
 
+    # Absent optional cover -> 404
+    assert client.get(f"/api/projects/albums/{alb['id']}/artwork", cookies=auth_cookies).status_code == 404
 
+    user_id = client.get("/api/auth/status", cookies=auth_cookies).json()["user"]["id"]
+    alb_dir = papi_mod.project_storage_manager._get_album_dir(user_id, alb["id"])
+    ehash = get_album_entry_dir_name(eid)
+    entry_dir = alb_dir / "entries" / ehash
+    snap_bytes = (entry_dir / "snapshot.json").read_bytes()
+    snap_sha = hashlib.sha256(snap_bytes).hexdigest()
+    (entry_dir / "audio_g1.wav").write_bytes(wav_ok)
+    (entry_dir / "snapshot_g1.json").write_bytes(snap_bytes)
+    (alb_dir / "cover_g1.webp").write_bytes(webp_ok)
 
+    m = json.loads((alb_dir / "album.json").read_text(encoding="utf-8"))
+    m["revision"] = 3
+    m["cover_generation"] = 1
+    m["active_cover_filename"] = "cover_g1.webp"
+    m["has_cover"] = True
+    m["last_tx_id"] = "tx_api_gen_1"
+    m["tx_history"] = ["tx_api_gen_1"]
+    m["tracks"][0]["active_generation"] = 1
+    m["tracks"][0]["active_audio_filename"] = "audio_g1.wav"
+    m["tracks"][0]["active_snapshot_filename"] = "snapshot_g1.json"
+    (alb_dir / "album.json").write_text(json.dumps(m), encoding="utf-8")
+    m_sha = ProjectStorageManager._compute_canonical_manifest_sha256(m)
+
+    j = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb["id"],
+        tx_receipts=[
+            TerminalTxReceipt(
+                tx_id="tx_api_gen_1",
+                op="save_album_cover",
+                outcome=JournalTxState.COMMITTED,
+                expected_revision=2,
+                result_revision=3,
+                payload_sha256="a" * 64,
+                intended_manifest_sha256=m_sha,
+                new_refs=[
+                    ArtifactRefRecord(rel_path=f"entries/{ehash}/audio_g1.wav", role=ArtifactRole.ENTRY_AUDIO, sha256=wav_sha, size_bytes=len(wav_ok), entry_id=eid, generation=1),
+                    ArtifactRefRecord(rel_path=f"entries/{ehash}/snapshot_g1.json", role=ArtifactRole.ENTRY_SNAPSHOT, sha256=snap_sha, size_bytes=len(snap_bytes), entry_id=eid, generation=1),
+                    ArtifactRefRecord(rel_path="cover_g1.webp", role=ArtifactRole.COVER_ART, sha256=webp_sha, size_bytes=len(webp_ok), generation=1),
+                ],
+            )
+        ],
+    )
+    (alb_dir / "journal.json").write_text(json.dumps(j.model_dump(mode="json")), encoding="utf-8")
+
+    # 1. Valid generated list, detail, audio stream, download, and WebP artwork
+    assert client.get("/api/projects/albums", cookies=auth_cookies).status_code == 200
+    assert client.get(f"/api/projects/albums/{alb['id']}", cookies=auth_cookies).status_code == 200
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies).status_code == 200
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/download", cookies=auth_cookies).status_code == 200
+    art_res = client.get(f"/api/projects/albums/{alb['id']}/artwork", cookies=auth_cookies)
+    assert art_res.status_code == 200
+    assert art_res.headers.get("content-type", "").startswith("image/webp")
+    assert art_res.content == webp_ok
+
+    # 2. Missing generated cover -> 503 durability_uncertain across list, detail, and artwork
+    (alb_dir / "cover_g1.webp").unlink()
+    for url in (
+        "/api/projects/albums",
+        f"/api/projects/albums/{alb['id']}",
+        f"/api/projects/albums/{alb['id']}/artwork",
+    ):
+        r503 = client.get(url, cookies=auth_cookies)
+        assert r503.status_code == 503, f"{url} -> {r503.status_code}"
+        assert r503.headers.get("X-Error-Code") == "durability_uncertain"
+    (alb_dir / "cover_g1.webp").write_bytes(webp_ok)
+
+    # 3. Generated snapshot wrong content -> 422 on audio stream & download
+    (entry_dir / "snapshot_g1.json").write_bytes(snap_bytes.replace(b'"2b1a.wav"', b'"bad.wav"'))
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies).status_code == 422
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/download", cookies=auth_cookies).status_code == 422
+    (entry_dir / "snapshot_g1.json").write_bytes(snap_bytes)
+
+    # 4. Partial cover declaration -> 422 on list, detail, and artwork
+    good_m_bytes = (alb_dir / "album.json").read_bytes()
+    good_j_bytes = (alb_dir / "journal.json").read_bytes()
+    m_bad = json.loads(good_m_bytes.decode("utf-8"))
+    m_bad.pop("active_cover_filename")
+    (alb_dir / "album.json").write_text(json.dumps(m_bad), encoding="utf-8")
+    for url in (
+        "/api/projects/albums",
+        f"/api/projects/albums/{alb['id']}",
+        f"/api/projects/albums/{alb['id']}/artwork",
+    ):
+        assert client.get(url, cookies=auth_cookies).status_code == 422
+    (alb_dir / "album.json").write_bytes(good_m_bytes)
+
+    # 5. Unsafe active basename -> 422 across list, detail, and artwork
+    m_unsafe = json.loads(good_m_bytes.decode("utf-8"))
+    m_unsafe["active_cover_filename"] = "../evil.jpg"
+    (alb_dir / "album.json").write_text(json.dumps(m_unsafe), encoding="utf-8")
+    for url in (
+        "/api/projects/albums",
+        f"/api/projects/albums/{alb['id']}",
+        f"/api/projects/albums/{alb['id']}/artwork",
+    ):
+        assert client.get(url, cookies=auth_cookies).status_code == 422
+    (alb_dir / "album.json").write_bytes(good_m_bytes)
+
+    # 6. Correction 3: Schema-valid ABORTED receipt in last_tx_id/tx_history -> 422 on artwork & stream
+    m_aborted = json.loads(good_m_bytes.decode("utf-8"))
+    m_aborted["last_tx_id"] = "tx_aborted_api"
+    m_aborted["tx_history"] = ["tx_api_gen_1", "tx_aborted_api"]
+    (alb_dir / "album.json").write_text(json.dumps(m_aborted), encoding="utf-8")
+    j_base_ab = AlbumJournal.model_validate_json(good_j_bytes)
+    aborted_rcp = TerminalTxReceipt(
+        tx_id="tx_aborted_api",
+        op="album_mutation",
+        outcome=JournalTxState.ABORTED,
+        expected_revision=3,
+        result_revision=3,
+        payload_sha256="b" * 64,
+        intended_manifest_sha256="c" * 64,
+    )
+    j_aborted = AlbumJournal(
+        schema_version=j_base_ab.schema_version,
+        protocol=j_base_ab.protocol,
+        album_id=j_base_ab.album_id,
+        tx_receipts=[j_base_ab.tx_receipts[0], aborted_rcp],
+    )
+    j_aborted_text = json.dumps(j_aborted.model_dump(mode="json"))
+    AlbumJournal.model_validate_json(j_aborted_text)
+    (alb_dir / "journal.json").write_text(j_aborted_text, encoding="utf-8")
+    assert client.get(f"/api/projects/albums/{alb['id']}/artwork", cookies=auth_cookies).status_code == 422
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies).status_code == 422
+    (alb_dir / "album.json").write_bytes(good_m_bytes)
+    (alb_dir / "journal.json").write_bytes(good_j_bytes)
+
+    # 7. Descriptor-targeted os.fstat(EIO / ENOENT) on cover, audio, and entries/ -> 503 durability_uncertain on /artwork and /stream
+    import errno
+    import os
+    orig_os_open = os.open
+    orig_os_close = os.close
+    orig_os_fstat = os.fstat
+    target_fds: set[int] = set()
+
+    def _track_open_api(path, flags, *args, **kwargs):
+        fd = orig_os_open(path, flags, *args, **kwargs)
+        if str(path) in ("cover_g1.webp", "audio_g1.wav", "entries"):
+            target_fds.add(fd)
+        return fd
+
+    def _track_close_api(fd):
+        target_fds.discard(fd)
+        return orig_os_close(fd)
+
+    for err_no in (errno.EIO, errno.ENOENT):
+        def _fail_fstat_api(fd, _err=err_no):
+            if fd in target_fds:
+                raise OSError(_err, f"Simulated API fstat failure {_err}")
+            return orig_os_fstat(fd)
+
+        with monkeypatch.context() as mp:
+            mp.setattr(os, "open", _track_open_api)
+            mp.setattr(os, "close", _track_close_api)
+            mp.setattr(os, "fstat", _fail_fstat_api)
+            r_art_eio = client.get(f"/api/projects/albums/{alb['id']}/artwork", cookies=auth_cookies)
+            assert r_art_eio.status_code == 503
+            assert r_art_eio.headers.get("X-Error-Code") == "durability_uncertain"
+            r_str_eio = client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies)
+            assert r_str_eio.status_code == 503
+            assert r_str_eio.headers.get("X-Error-Code") == "durability_uncertain"
+
+    # 9. Valid idle LEGACY_PROVISIONAL (v1) journal remains readable via API without mutation
+    v1_alb = client.post("/api/projects/albums", json={"title": "2B1A V1 Journal"}, cookies=auth_cookies).json()
+    v1_alb = client.post(
+        f"/api/projects/albums/{v1_alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk["id"], "expected_revision": v1_alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    v1_eid = v1_alb["tracks"][0]["id"]
+    v1_dir = papi_mod.project_storage_manager._get_album_dir(user_id, v1_alb["id"])
+    v1_j = AlbumJournal(schema_version=1, protocol=JournalProtocol.LEGACY_PROVISIONAL, album_id=v1_alb["id"], active_tx=None)
+    (v1_dir / "journal.json").write_text(json.dumps(v1_j.model_dump(mode="json")), encoding="utf-8")
+    assert client.get(f"/api/projects/albums/{v1_alb['id']}", cookies=auth_cookies).status_code == 200
+    assert client.get(f"/api/projects/albums/{v1_alb['id']}/entries/{v1_eid}/stream", cookies=auth_cookies).status_code == 200
+
+    # 8. Atomic audio inode substitution on /stream -> 503, never returns foreign bytes
+    from backend.project_storage import ProjectStorageManager
+    foreign_wav = b"RIFF" + b"FOREIGN!" + wav_ok[12:]
+    orig_verify_prov = ProjectStorageManager._verify_read_artifact_provenance_locked
+
+    def _swap_audio_api(self, *args, **kwargs):
+        res = orig_verify_prov(self, *args, **kwargs)
+        if kwargs.get("role") == ArtifactRole.ENTRY_AUDIO or (len(args) > 2 and args[2] == ArtifactRole.ENTRY_AUDIO):
+            tmp_swap = entry_dir / "audio_g1.wav.swap"
+            tmp_swap.write_bytes(foreign_wav)
+            os.replace(tmp_swap, entry_dir / "audio_g1.wav")
+        return res
+
+    with monkeypatch.context() as mp:
+        mp.setattr(ProjectStorageManager, "_verify_read_artifact_provenance_locked", _swap_audio_api)
+        r_sub = client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies)
+        assert r_sub.status_code == 503
+        assert b"FOREIGN!" not in r_sub.content
 
 

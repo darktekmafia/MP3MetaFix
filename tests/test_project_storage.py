@@ -1549,7 +1549,10 @@ def test_phase1a1_fail_closed_corrupt_manifest_and_partial_delete_error(custom_s
         custom_storage.get_album(user_id, draft.id)
     with pytest.raises(AlbumManifestCorruptError):
         custom_storage.delete_album(user_id, draft.id, expected_revision=1)
-    assert custom_storage.get_album_entry_audio_path(user_id, draft.id, e_id).read_bytes() == wav_ok
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.get_album_entry_audio_path(user_id, draft.id, e_id)
+    from backend.security import get_album_entry_dir_name
+    assert (draft_dir / "entries" / get_album_entry_dir_name(e_id) / "audio.wav").read_bytes() == wav_ok
 
     # 2. Finalized album with malformed unrelated field ('year': 'bad_int') -> delete_album still raises AlbumFinalizedError
     fin = custom_storage.create_album(user_id=user_id, title="Malformed Finalized")
@@ -1563,7 +1566,9 @@ def test_phase1a1_fail_closed_corrupt_manifest_and_partial_delete_error(custom_s
 
     with pytest.raises(AlbumFinalizedError):
         custom_storage.delete_album(user_id, fin.id, expected_revision=fin.revision)
-    assert custom_storage.get_album_entry_audio_path(user_id, fin.id, fin_e_id).read_bytes() == wav_ok
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.get_album_entry_audio_path(user_id, fin.id, fin_e_id)
+    assert (custom_storage._get_album_dir(user_id, fin.id) / "entries" / get_album_entry_dir_name(fin_e_id) / "audio.wav").read_bytes() == wav_ok
 
     # 3. Fault injection on empty-album deletion: failure after album.json is unlinked before os.rmdir(album_dir_name)
     #    must raise ProjectStorageError, preserve remaining directory evidence, and never report success.
@@ -1811,7 +1816,8 @@ def test_phase1a2_artwork_safety_containment_finalization_and_concurrency(custom
     import shutil as _shutil
     _shutil.rmtree(sym_dir / "entries")
     (sym_dir / "entries").symlink_to(outside_dir)
-    assert custom_storage.get_album_entry_audio_path(user_id, sym_alb.id, sym_entry_id) is None
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.get_album_entry_audio_path(user_id, sym_alb.id, sym_entry_id)
     with pytest.raises(AlbumManifestCorruptError):
         custom_storage.open_album_entry_audio_for_read(user_id, sym_alb.id, sym_entry_id)
     (sym_dir / "entries").unlink()
@@ -2779,10 +2785,12 @@ def test_phase1a8_persisted_entry_id_protection_and_duplicate_rejection(custom_s
     dup_bytes = json.dumps(dup_raw, indent=2).encode("utf-8")
     manifest_path.write_bytes(dup_bytes)
 
-    with pytest.raises(AlbumManifestCorruptError, match="failed validation"):
+    with pytest.raises(AlbumManifestCorruptError, match="failed validation|duplicate persisted entry identifier"):
         custom_storage.get_album(user_id, alb.id)
     assert manifest_path.read_bytes() == dup_bytes
-    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, colliding_id).read_bytes() == wav_ok
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.get_album_entry_audio_path(user_id, alb.id, colliding_id)
+    assert (alb_dir / "entries" / get_album_entry_dir_name(colliding_id) / "audio.wav").read_bytes() == wav_ok
 
 
 def test_phase1a8_verified_directory_ownership_cleanup(custom_storage: ProjectStorageManager, tmp_path: Path, monkeypatch):
@@ -6444,3 +6452,559 @@ def test_phase1b_stage1_3b_2a2b_journaled_finalization_sealing_and_fault_matrix(
         assert entries_fstat_hit["done"] is True
         assert live_h2_fds == set()
         assert alb3_manifest.read_bytes() == raw_m3_idle and alb3_journal.read_bytes() == raw_j3_idle
+
+
+def test_phase1b_stage1_3b_2b1a_generation_readers_provenance_and_snapshot_matrix(
+    custom_storage: ProjectStorageManager, monkeypatch
+):
+    """Phase 1B Stage 1.3B-2B-1A: raw generation validation, provenance, generated snapshot verification, no fallback, and read purity."""
+    import copy
+    import errno
+    import hashlib
+    import io
+    import json
+    import os
+    import wave
+    import backend.project_storage as ps_mod
+    from backend.project_models import (
+        ActiveTxRecord,
+        AlbumJournal,
+        ArtifactRefRecord,
+        ArtifactRole,
+        JournalProtocol,
+        JournalTxState,
+        RetainedArtifactRecord,
+        TerminalTxReceipt,
+    )
+    from backend.project_storage import (
+        AlbumDurabilityUncertainError,
+        AlbumManifestCorruptError,
+        AlbumMutationNotEnrolledError,
+    )
+    from backend.security import get_album_entry_dir_name
+
+    user_id = "u_1b_s1_3b_2b1a"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x02\x03" * 400)
+    wav_ok = buf.getvalue()
+    wav_sha = hashlib.sha256(wav_ok).hexdigest()
+    webp_ok = b"RIFF\x18\x00\x00\x00WEBPVP8 \x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    webp_sha = hashlib.sha256(webp_ok).hexdigest()
+
+    trk = custom_storage.create_track(user_id=user_id, title="2B1A Track")
+    tk = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_ok, original_filename="2b1a.wav", extension=".wav")
+
+    # 1. Legacy compatibility (omitted track_ids & omitted entry id)
+    alb_leg = custom_storage.create_album(user_id=user_id, title="2B1A Legacy")
+    alb_leg = custom_storage.add_album_entry(user_id, alb_leg.id, trk.id, expected_revision=alb_leg.revision, take_id=tk.id)
+    orig_leg_eid = alb_leg.tracks[0].id
+    leg_dir = custom_storage._get_album_dir(user_id, alb_leg.id)
+    leg_m = json.loads((leg_dir / "album.json").read_text(encoding="utf-8"))
+    leg_m.pop("track_ids", None)
+    leg_m["tracks"][0].pop("id", None)
+    (leg_dir / "album.json").write_text(json.dumps(leg_m), encoding="utf-8")
+    got_leg = custom_storage.get_album(user_id, alb_leg.id)
+    assert got_leg is not None and len(got_leg.tracks) == 1
+    assert any(a.id == alb_leg.id for a in custom_storage.list_albums(user_id))
+    (leg_dir / "entries" / get_album_entry_dir_name(orig_leg_eid)).rename(
+        leg_dir / "entries" / get_album_entry_dir_name(got_leg.tracks[0].id)
+    )
+    opened_leg = custom_storage.open_album_entry_audio_for_read(user_id, alb_leg.id, got_leg.tracks[0].id)
+    assert opened_leg is not None
+    os.close(opened_leg[2])
+
+    # 2. Build a v2 Album with generated g1 audio, snapshot_g1.json, and cover_g1.webp, plus a later metadata-only update
+    alb = custom_storage.create_album(user_id=user_id, title="2B1A Generated")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk.id)
+    eid = alb.tracks[0].id
+    assert eid is not None
+    ehash = get_album_entry_dir_name(eid)
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    entry_dir = alb_dir / "entries" / ehash
+    manifest_path = alb_dir / "album.json"
+    journal_path = alb_dir / "journal.json"
+
+    # Place g1 artifacts alongside legacy files (legacy files simulate uncollected old artifacts)
+    snap_bytes = (entry_dir / "snapshot.json").read_bytes()
+    snap_sha = hashlib.sha256(snap_bytes).hexdigest()
+    (entry_dir / "audio_g1.wav").write_bytes(wav_ok)
+    (entry_dir / "snapshot_g1.json").write_bytes(snap_bytes)
+    (alb_dir / "cover_g1.webp").write_bytes(webp_ok)
+    (alb_dir / "cover.jpg").write_bytes(b"\xff\xd8\xff\xe0LEGACY")
+
+    base_m = json.loads(manifest_path.read_text(encoding="utf-8"))
+    base_m["revision"] = 3
+    base_m["cover_generation"] = 1
+    base_m["active_cover_filename"] = "cover_g1.webp"
+    base_m["has_cover"] = True
+    base_m["last_tx_id"] = "tx_gen_1"
+    base_m["tx_history"] = ["tx_gen_1"]
+    base_m["tracks"][0]["active_generation"] = 1
+    base_m["tracks"][0]["active_audio_filename"] = "audio_g1.wav"
+    base_m["tracks"][0]["active_snapshot_filename"] = "snapshot_g1.json"
+    manifest_path.write_text(json.dumps(base_m), encoding="utf-8")
+    m_rev3_sha = ProjectStorageManager._compute_canonical_manifest_sha256(base_m)
+
+    audio_ref = ArtifactRefRecord(
+        rel_path=f"entries/{ehash}/audio_g1.wav",
+        role=ArtifactRole.ENTRY_AUDIO,
+        sha256=wav_sha,
+        size_bytes=len(wav_ok),
+        entry_id=eid,
+        generation=1,
+    )
+    snap_ref = ArtifactRefRecord(
+        rel_path=f"entries/{ehash}/snapshot_g1.json",
+        role=ArtifactRole.ENTRY_SNAPSHOT,
+        sha256=snap_sha,
+        size_bytes=len(snap_bytes),
+        entry_id=eid,
+        generation=1,
+    )
+    cov_ref = ArtifactRefRecord(
+        rel_path="cover_g1.webp",
+        role=ArtifactRole.COVER_ART,
+        sha256=webp_sha,
+        size_bytes=len(webp_ok),
+        generation=1,
+    )
+    rcp1 = TerminalTxReceipt(
+        tx_id="tx_gen_1",
+        op="save_album_cover",
+        outcome=JournalTxState.COMMITTED,
+        expected_revision=2,
+        result_revision=3,
+        payload_sha256="a" * 64,
+        intended_manifest_sha256=m_rev3_sha,
+        new_refs=[audio_ref, snap_ref, cov_ref],
+    )
+    j_rev3 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id, tx_receipts=[rcp1])
+    journal_path.write_text(json.dumps(j_rev3.model_dump(mode="json")), encoding="utf-8")
+
+    # Later metadata-only update (new_refs=[]); historical COMMITTED provenance must still authorize g1 audio & cover
+    alb_rev4 = custom_storage.update_album(user_id, alb.id, {"title": "2B1A Meta v4", "expected_revision": 3})
+    assert alb_rev4.revision == 4
+    good_m4_bytes = manifest_path.read_bytes()
+    good_j4_bytes = journal_path.read_bytes()
+
+    # Zero writes, locks, reconciliation, or hashing on list_albums; reads resolve g1
+    reconcile_calls = {"n": 0}
+    monkeypatch.setattr(custom_storage, "reconcile_album_durability", lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1))
+    listed = custom_storage.list_albums(user_id)
+    assert any(a.id == alb.id and a.active_cover_filename == "cover_g1.webp" for a in listed)
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, eid).name == "audio_g1.wav"
+    assert custom_storage.get_album_cover_path(user_id, alb.id).name == "cover_g1.webp"
+
+    ent_got, a_path, afd, asize = custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+    os.close(afd)
+    assert ent_got.active_generation == 1 and a_path.name == "audio_g1.wav" and asize == len(wav_ok)
+    c_path, cfd, csize = custom_storage.open_album_cover_for_read(user_id, alb.id)
+    os.close(cfd)
+    assert c_path.name == "cover_g1.webp" and csize == len(webp_ok)
+    assert reconcile_calls["n"] == 0
+    assert manifest_path.read_bytes() == good_m4_bytes and journal_path.read_bytes() == good_j4_bytes
+
+    # All 6 unenrolled writers remain blocked
+    for blocked in (
+        lambda: custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=4, take_id=None),
+        lambda: custom_storage.update_album_entry(user_id, alb.id, eid, expected_revision=4, custom_title="X"),
+        lambda: custom_storage.remove_album_entry(user_id, alb.id, eid, expected_revision=4),
+        lambda: custom_storage.confirm_album_entry_refresh(user_id, alb.id, eid, 1, wav_sha, expected_revision=4),
+        lambda: custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=4, extension=".jpg"),
+        lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=4),
+    ):
+        with pytest.raises(AlbumMutationNotEnrolledError):
+            blocked()
+
+    # 3. Raw generation & ownership contradictions rejected before normalization (both get_album and list_albums)
+    good_m4 = json.loads(good_m4_bytes)
+    bad_manifests = []
+    for mut_fn in (
+        lambda d: d["tracks"][0].pop("active_audio_filename"),  # partial entry group
+        lambda d: d["tracks"][0].update({"active_generation": True}),  # bool generation
+        lambda d: d["tracks"][0].update({"active_snapshot_filename": "snapshot_g2.json"}),  # mismatched g<N>
+        lambda d: d["tracks"][0].update({"has_owned_audio": False}),  # ownership contradiction
+        lambda d: d["tracks"][0].update({"is_placeholder": True}),  # is_placeholder=True with take_id
+        lambda d: d["tracks"][0]["snapshot"].update({"entry_id": "ale_wrong000000000000000000"}),  # snapshot id mismatch
+        lambda d: d["tracks"][0]["snapshot"].update({"format": "mp3"}),  # format vs .wav mismatch
+        lambda d: d.pop("active_cover_filename"),  # partial cover group
+        lambda d: d.update({"has_cover": False}),  # has_cover=False with active_cover_filename
+    ):
+        bad_d = copy.deepcopy(good_m4)
+        mut_fn(bad_d)
+        bad_manifests.append(bad_d)
+
+    for bad_d in bad_manifests:
+        manifest_path.write_text(json.dumps(bad_d), encoding="utf-8")
+        with pytest.raises(AlbumManifestCorruptError):
+            custom_storage.get_album(user_id, alb.id)
+        with pytest.raises(AlbumManifestCorruptError):
+            custom_storage.list_albums(user_id)
+    manifest_path.write_bytes(good_m4_bytes)
+
+    # 4. Exact visible unresolved PUBLISH_INTENT target & predecessor read during unresolved newer active_tx
+    # 4a) Exact visible target of PUBLISH_INTENT (not committed) -> readable without inferring commitment
+    j_intent_target = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb.id,
+        active_tx=ActiveTxRecord(
+            tx_id="tx_vis_intent",
+            op="save_album_cover",
+            state=JournalTxState.PUBLISH_INTENT,
+            expected_revision=3,
+            target_revision=4,
+            payload_sha256="b" * 64,
+            intended_manifest_sha256=ProjectStorageManager._compute_canonical_manifest_sha256(good_m4),
+            new_refs=[audio_ref, snap_ref, cov_ref],
+        ),
+    )
+    m_intent = copy.deepcopy(good_m4)
+    m_intent["last_tx_id"] = "tx_vis_intent"
+    m_intent["tx_history"] = ["tx_vis_intent"]
+    j_intent_target.active_tx = j_intent_target.active_tx.model_copy(
+        update={"intended_manifest_sha256": ProjectStorageManager._compute_canonical_manifest_sha256(m_intent)}
+    )
+    manifest_path.write_text(json.dumps(m_intent), encoding="utf-8")
+    journal_path.write_text(json.dumps(j_intent_target.model_dump(mode="json")), encoding="utf-8")
+    _, _, fd_int, _ = custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+    os.close(fd_int)
+    _, cfd_int, _ = custom_storage.open_album_cover_for_read(user_id, alb.id)
+    os.close(cfd_int)
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["active_tx"]["state"] == "publish_intent"
+
+    # 4b) Predecessor manifest during unresolved newer active_tx -> readable
+    manifest_path.write_bytes(good_m4_bytes)
+    j_pred_active = AlbumJournal.model_validate_json(good_j4_bytes).model_copy(
+        update={
+            "active_tx": ActiveTxRecord(
+                tx_id="tx_newer_unc",
+                op="update_album",
+                state=JournalTxState.UNCERTAIN,
+                expected_revision=4,
+                target_revision=5,
+                payload_sha256="c" * 64,
+                intended_manifest_sha256="d" * 64,
+            )
+        }
+    )
+    journal_path.write_text(json.dumps(j_pred_active.model_dump(mode="json")), encoding="utf-8")
+    _, _, fd_pred, _ = custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+    os.close(fd_pred)
+
+    # 4c) Invalid rcp.tx_id lineage -> AlbumManifestCorruptError; active/retained overlap -> AlbumManifestCorruptError; missing provenance -> AlbumDurabilityUncertainError
+    j_bad_lin = AlbumJournal.model_validate_json(good_j4_bytes)
+    j_bad_lin.tx_receipts[0] = j_bad_lin.tx_receipts[0].model_copy(update={"tx_id": "tx_not_in_history"})
+    journal_path.write_text(json.dumps(j_bad_lin.model_dump(mode="json")), encoding="utf-8")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+
+    j_overlap = AlbumJournal.model_validate_json(good_j4_bytes).model_copy(
+        update={
+            "retained_artifacts": [
+                RetainedArtifactRecord(
+                    rel_path=f"entries/{ehash}/audio_g1.wav",
+                    sha256=wav_sha,
+                    kind="audio",
+                    generation=1,
+                    superseded_by_tx_id="tx_gen_1",
+                    superseded_at_rev=3,
+                )
+            ]
+        }
+    )
+    journal_path.write_text(json.dumps(j_overlap.model_dump(mode="json")), encoding="utf-8")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+
+    j_no_prov = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id)
+    journal_path.write_text(json.dumps(j_no_prov.model_dump(mode="json")), encoding="utf-8")
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+    journal_path.write_bytes(good_j4_bytes)
+
+    # 5. Generated snapshot verification (wrong content, semantic mismatch even with recomputed hash/size) & acquisition drift
+    (entry_dir / "snapshot_g1.json").write_bytes(snap_bytes.replace(b'"2b1a.wav"', b'"other.wav"'))
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+
+    # Even if snap_ref.sha256 & size_bytes in journal are updated to match altered snapshot_g1.json, semantic check fails
+    altered_snap = snap_bytes.replace(b'"2b1a.wav"', b'"other.wav"')
+    altered_snap_sha = hashlib.sha256(altered_snap).hexdigest()
+    j_rehash_snap = AlbumJournal.model_validate_json(good_j4_bytes)
+    j_rehash_snap.tx_receipts[0] = j_rehash_snap.tx_receipts[0].model_copy(
+        update={
+            "new_refs": [
+                r.model_copy(update={"sha256": altered_snap_sha, "size_bytes": len(altered_snap)})
+                if r.role == ArtifactRole.ENTRY_SNAPSHOT
+                else r
+                for r in j_rehash_snap.tx_receipts[0].new_refs
+            ]
+        }
+    )
+    journal_path.write_text(json.dumps(j_rehash_snap.model_dump(mode="json")), encoding="utf-8")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+    journal_path.write_bytes(good_j4_bytes)
+    (entry_dir / "snapshot_g1.json").write_bytes(snap_bytes)
+
+    # 6. No fallback when generated audio/snapshot/cover is missing (even though legacy audio.wav / cover.jpg exist)
+    (entry_dir / "audio.wav").write_bytes(wav_ok)
+    (entry_dir / "audio_g1.wav").unlink()
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.get_album_entry_audio_path(user_id, alb.id, eid)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.get_album(user_id, alb.id)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.list_albums(user_id)
+    (entry_dir / "audio_g1.wav").write_bytes(wav_ok)
+
+    (alb_dir / "cover_g1.webp").unlink()
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.open_album_cover_for_read(user_id, alb.id)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.get_album_cover_path(user_id, alb.id)
+    (alb_dir / "cover_g1.webp").write_bytes(webp_ok)
+
+    # 7. Concurrent manifest/journal drift during acquisition -> AlbumDurabilityUncertainError
+    orig_read_ver = ProjectStorageManager._read_json_file_verified_in_dir
+    ver_calls = {"n": 0}
+    def _drift_on_reverify(dfd, fname, **kw):
+        ver_calls["n"] += 1
+        res = orig_read_ver(dfd, fname, **kw)
+        if fname == "album.json" and res is not None:
+            raw_d, ident, _sha = res
+            return raw_d, ident, "f" * 64
+        return res
+    monkeypatch.setattr(ProjectStorageManager, "_read_json_file_verified_in_dir", staticmethod(_drift_on_reverify))
+    with pytest.raises(AlbumDurabilityUncertainError, match="changed concurrently"):
+        custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+    monkeypatch.undo()
+
+    # 8. Symlink substitution -> AlbumManifestCorruptError
+    (alb_dir / "cover_g1.webp").unlink()
+    os.symlink("cover.jpg", alb_dir / "cover_g1.webp")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.open_album_cover_for_read(user_id, alb.id)
+    (alb_dir / "cover_g1.webp").unlink()
+    (alb_dir / "cover_g1.webp").write_bytes(webp_ok)
+
+    # 9. Descriptor-targeted os.fstat(EIO) -> AlbumDurabilityUncertainError with zero leaked FDs
+    import errno
+    orig_os_open = os.open
+    orig_os_close = os.close
+    orig_os_fstat = os.fstat
+    live_fds: set[int] = set()
+    cover_fd_seen: list[int] = []
+
+    def _track_open(path, flags, *args, **kwargs):
+        fd = orig_os_open(path, flags, *args, **kwargs)
+        live_fds.add(fd)
+        if str(path) == "cover_g1.webp":
+            cover_fd_seen.append(fd)
+        return fd
+
+    def _track_close(fd):
+        live_fds.discard(fd)
+        return orig_os_close(fd)
+
+    def _eio_fstat(fd):
+        if fd in cover_fd_seen:
+            raise OSError(errno.EIO, "Simulated EIO on cover fstat")
+        return orig_os_fstat(fd)
+
+    monkeypatch.setattr(os, "open", _track_open)
+    monkeypatch.setattr(os, "close", _track_close)
+    monkeypatch.setattr(os, "fstat", _eio_fstat)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.open_album_cover_for_read(user_id, alb.id)
+    assert live_fds == set()
+    monkeypatch.undo()
+
+    # 10. Finding 1a: Atomic same-size audio inode substitution between provenance validation and open -> fails closed, zero leaked FDs
+    foreign_wav = b"RIFF" + b"FOREIGN!" + wav_ok[12:]
+    assert len(foreign_wav) == len(wav_ok)
+    orig_verify_prov = ProjectStorageManager._verify_read_artifact_provenance_locked
+    live_fds_sub: set[int] = set()
+
+    def _track_open_sub(path, flags, *args, **kwargs):
+        fd = orig_os_open(path, flags, *args, **kwargs)
+        live_fds_sub.add(fd)
+        return fd
+
+    def _track_close_sub(fd):
+        live_fds_sub.discard(fd)
+        return orig_os_close(fd)
+
+    def _swap_audio_after_prov(self, *args, **kwargs):
+        res = orig_verify_prov(self, *args, **kwargs)
+        if kwargs.get("role") == ArtifactRole.ENTRY_AUDIO or (len(args) > 2 and args[2] == ArtifactRole.ENTRY_AUDIO):
+            tmp_swap = entry_dir / "audio_g1.wav.swap"
+            tmp_swap.write_bytes(foreign_wav)
+            os.replace(tmp_swap, entry_dir / "audio_g1.wav")
+        return res
+
+    monkeypatch.setattr(os, "open", _track_open_sub)
+    monkeypatch.setattr(os, "close", _track_close_sub)
+    monkeypatch.setattr(ProjectStorageManager, "_verify_read_artifact_provenance_locked", _swap_audio_after_prov)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+    assert live_fds_sub == set()
+    monkeypatch.undo()
+    (entry_dir / "audio_g1.wav").write_bytes(wav_ok)
+
+    # 11. Accepted limitation (ancestor rename-and-replace race):
+    # Under the locally controlled cooperative-storage model, if an ancestor directory is renamed
+    # after its FD is already pinned, the open FD continues referring to the original directory inode
+    # (serving only original authorized audio, or failing closed). If swapped before entry_fd open
+    # with foreign bytes, identity drift + SHA-256 verification fail closed and never serve foreign audio.
+    import shutil
+    live_fds_dir: set[int] = set()
+
+    def _track_open_dir(path, flags, *args, **kwargs):
+        fd = orig_os_open(path, flags, *args, **kwargs)
+        live_fds_dir.add(fd)
+        return fd
+
+    def _track_close_dir(fd):
+        live_fds_dir.discard(fd)
+        return orig_os_close(fd)
+
+    orig_open_ctx = ProjectStorageManager._open_album_read_context
+
+    def _swap_entry_dir_before_open(self, *args, **kwargs):
+        ctx = orig_open_ctx(self, *args, **kwargs)
+        alt_dir = alb_dir / "entries" / f"{ehash}_alt"
+        alt_dir.mkdir(exist_ok=True)
+        (alt_dir / "audio_g1.wav").write_bytes(foreign_wav)
+        (alt_dir / "snapshot_g1.json").write_bytes(snap_bytes)
+        old_dir = alb_dir / "entries" / f"{ehash}_old"
+        os.replace(entry_dir, old_dir)
+        os.replace(alt_dir, entry_dir)
+        shutil.rmtree(old_dir)
+        return ctx
+
+    with monkeypatch.context() as mp:
+        mp.setattr(os, "open", _track_open_dir)
+        mp.setattr(os, "close", _track_close_dir)
+        mp.setattr(ProjectStorageManager, "_open_album_read_context", _swap_entry_dir_before_open)
+        with pytest.raises(AlbumDurabilityUncertainError):
+            custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+        assert live_fds_dir == set()
+    # Restore valid entry_dir bytes after substitution test
+    (entry_dir / "audio_g1.wav").write_bytes(wav_ok)
+    (entry_dir / "snapshot_g1.json").write_bytes(snap_bytes)
+
+    # 12. Correction 3: Schema-valid ABORTED receipt in last_tx_id/tx_history alongside valid COMMITTED artifact refs -> AlbumManifestCorruptError
+    good_m_bytes = manifest_path.read_bytes()
+    m_aborted_contradict = json.loads(good_m_bytes.decode("utf-8"))
+    m_aborted_contradict["last_tx_id"] = "tx_aborted_9"
+    m_aborted_contradict["tx_history"] = ["tx_gen_1", "tx_aborted_9"]
+    (alb_dir / "album.json").write_text(json.dumps(m_aborted_contradict), encoding="utf-8")
+    j_base_ab = AlbumJournal.model_validate_json(good_j4_bytes)
+    aborted_rcp = TerminalTxReceipt(
+        tx_id="tx_aborted_9",
+        op="album_mutation",
+        outcome=JournalTxState.ABORTED,
+        expected_revision=4,
+        result_revision=4,
+        payload_sha256="a" * 64,
+        intended_manifest_sha256="b" * 64,
+    )
+    j_aborted_contradict = AlbumJournal(
+        schema_version=j_base_ab.schema_version,
+        protocol=j_base_ab.protocol,
+        album_id=j_base_ab.album_id,
+        tx_receipts=[j_base_ab.tx_receipts[0], aborted_rcp],
+    )
+    j_aborted_text = json.dumps(j_aborted_contradict.model_dump(mode="json"))
+    # Must pass schema validation so reader reaches manifest/journal contradiction classification
+    AlbumJournal.model_validate_json(j_aborted_text)
+    journal_path.write_text(j_aborted_text, encoding="utf-8")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.open_album_cover_for_read(user_id, alb.id)
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+    (alb_dir / "album.json").write_bytes(good_m_bytes)
+    journal_path.write_bytes(good_j4_bytes)
+
+    # 13. Finding 3: Unsafe active basename -> AlbumManifestCorruptError; missing paired_snap_ref -> AlbumDurabilityUncertainError; contradictory paired_snap_ref -> AlbumManifestCorruptError
+    m_unsafe_cov = json.loads((alb_dir / "album.json").read_text(encoding="utf-8"))
+    m_unsafe_cov["active_cover_filename"] = "../bad_cover.jpg"
+    (alb_dir / "album.json").write_text(json.dumps(m_unsafe_cov), encoding="utf-8")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.open_album_cover_for_read(user_id, alb.id)
+    (alb_dir / "album.json").write_bytes(good_m_bytes)
+
+    j_missing_snap_ref = AlbumJournal.model_validate_json(good_j4_bytes)
+    j_missing_snap_ref.tx_receipts[0] = j_missing_snap_ref.tx_receipts[0].model_copy(
+        update={"new_refs": [r for r in j_missing_snap_ref.tx_receipts[0].new_refs if r.role != ArtifactRole.ENTRY_SNAPSHOT]}
+    )
+    journal_path.write_text(json.dumps(j_missing_snap_ref.model_dump(mode="json")), encoding="utf-8")
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+
+    j_bad_snap_ref = AlbumJournal.model_validate_json(good_j4_bytes)
+    j_bad_snap_ref.tx_receipts[0] = j_bad_snap_ref.tx_receipts[0].model_copy(
+        update={
+            "new_refs": [
+                r.model_copy(update={"generation": 99}) if r.role == ArtifactRole.ENTRY_SNAPSHOT else r
+                for r in j_bad_snap_ref.tx_receipts[0].new_refs
+            ]
+        }
+    )
+    journal_path.write_text(json.dumps(j_bad_snap_ref.model_dump(mode="json")), encoding="utf-8")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+    journal_path.write_bytes(good_j4_bytes)
+
+    # 14. Correction 1: Valid idle LEGACY_PROVISIONAL (v1) journal remains readable without mutating journal.json
+    v1_j = AlbumJournal(schema_version=1, protocol=JournalProtocol.LEGACY_PROVISIONAL, album_id=alb_leg.id, active_tx=None)
+    v1_j_bytes = json.dumps(v1_j.model_dump(mode="json")).encode("utf-8")
+    (leg_dir / "journal.json").write_bytes(v1_j_bytes)
+    got_v1 = custom_storage.get_album(user_id, alb_leg.id)
+    assert got_v1 is not None and got_v1.id == alb_leg.id
+    assert any(a.id == alb_leg.id for a in custom_storage.list_albums(user_id))
+    opened_v1 = custom_storage.open_album_entry_audio_for_read(user_id, alb_leg.id, got_leg.tracks[0].id)
+    assert opened_v1 is not None
+    os.close(opened_v1[2])
+    assert (leg_dir / "journal.json").read_bytes() == v1_j_bytes
+
+    # 15. Correction 2: Repeated entries/ fstat(EIO) and fstat(ENOENT) -> AlbumDurabilityUncertainError, zero leaked FDs
+    for err_no in (errno.EIO, errno.ENOENT):
+        live_fds_ent: set[int] = set()
+        entries_fds_seen: set[int] = set()
+
+        def _track_open_ent(path, flags, *args, **kwargs):
+            fd = orig_os_open(path, flags, *args, **kwargs)
+            live_fds_ent.add(fd)
+            if str(path) == "entries":
+                entries_fds_seen.add(fd)
+            return fd
+
+        def _track_close_ent(fd):
+            live_fds_ent.discard(fd)
+            entries_fds_seen.discard(fd)
+            return orig_os_close(fd)
+
+        def _fail_fstat_ent(fd):
+            if fd in entries_fds_seen:
+                raise OSError(err_no, f"Simulated entries fstat failure {err_no}")
+            return orig_os_fstat(fd)
+
+        with monkeypatch.context() as mp:
+            mp.setattr(os, "open", _track_open_ent)
+            mp.setattr(os, "close", _track_close_ent)
+            mp.setattr(os, "fstat", _fail_fstat_ent)
+            for _ in range(2):
+                with pytest.raises(AlbumDurabilityUncertainError):
+                    custom_storage.get_album(user_id, alb.id)
+                with pytest.raises(AlbumDurabilityUncertainError):
+                    custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+        assert live_fds_ent == set()
