@@ -2,34 +2,43 @@
 
 ---
 
-## ⚠️ DEVELOPMENT BRANCH — CRITICAL DATA SAFETY WARNING
+## DEVELOPMENT BRANCH — DATA SAFETY NOTICE
 
-**November 16, 2026 — Development build `5e79f16`**
+**MP3MetaFix is under active development. Exercise caution when using this branch with irreplaceable audio recordings.**
 
-An independent code audit has identified critical data-integrity defects in the new Album/Take functionality.
+### Phase 1A Recording Protection
 
-**DO NOT upgrade an installation containing important or irreplaceable data to the current development build.**
+Commit `484f9df` introduces safeguards addressing previously identified Album data-integrity defects, including:
 
-This includes installations using the documented `--upgrade -- dev` update procedure.
+- Protection against unintended deletion or replacement of existing Album recordings.
+- Revision checks to prevent conflicting Album updates.
+- Validation and protective handling of Album metadata, snapshots, and audio files.
+- Restrictions preventing modification or deletion of finalized Albums.
+- Improved compatibility with legacy Album entries.
 
-Potential problems include:
+These corrections have undergone independent static code review. The implementation also passed 235 tests as reported by the development environment; those results were not independently reproduced.
 
-- Loss of access to album-owned recordings during failed replacement operations.
-- Unsafe behavior when album operations overlap.
-- Unintended removal of album-owned recordings through certain sequencing operations.
-- Deletion of finalized albums despite their intended protection.
+### Temporarily Unavailable Operations
 
-**If you have already updated:**
+To protect existing recordings, the following Album operations remain disabled pending Phase 1B:
 
-1. Back up your complete MP3MetaFix data directory before making further changes.
-2. Avoid modifying, reordering, replacing recordings in, finalizing, or deleting Albums until corrective updates are available.
-3. Do not assume downgrading the application will restore data affected by these issues.
+- Replacing existing Album-owned audio recordings.
+- Clearing recordings from populated Album entries.
+- Confirming refresh operations that would replace existing recordings.
+- Replacing existing Album cover artwork.
+- Deleting Albums containing recordings or ambiguous storage artifacts.
 
-These defects were identified through code review. **No actual user data-loss incident has been confirmed.**
+These restrictions are intentional. They are not indications that your recordings have been lost.
 
-Corrective development is planned. This warning will remain until the identified data-integrity issues have been addressed and independently reviewed.
+### Important Limitations
 
-**This warning concerns the development branch. It does not establish that other branches or releases are affected.**
+Phase 1A improves protection against application-level failures and unintended destructive operations. It does not guarantee recovery from hardware failure, power loss, external filesystem modifications, or every possible failure condition.
+
+**Maintain independent backups of important recordings and Album data.**
+
+The current protective implementation primarily targets Linux. Native Windows and macOS installation compatibility has not yet been established.
+
+Phase 1B will address safe replacement, recovery, and additional Album-management workflows.
 
 ---
 
