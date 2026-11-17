@@ -5299,6 +5299,32 @@ class ProjectStorageManager:
             source_audio_stream_url=f"/api/projects/tracks/{entry.track_id}/takes/{entry.take_id}/stream",
         )
 
+    @staticmethod
+    def compute_refresh_source_metadata_fingerprint(source_snap: AlbumEntrySnapshot) -> str:
+        """Deterministic SHA-256 fingerprint of source Track + Take metadata copied into the Album snapshot."""
+        payload = {
+            "source_track_id": source_snap.source_track_id,
+            "source_track_title": source_snap.source_track_title,
+            "source_track_artist": source_snap.source_track_artist,
+            "source_track_revision": source_snap.source_track_revision,
+            "source_take_id": source_snap.source_take_id,
+            "source_take_label": source_snap.source_take_label,
+            "source_take_revision": source_snap.source_take_revision,
+            "take_notes": source_snap.take_notes,
+            "take_prompt": source_snap.take_prompt,
+            "take_style_tags": source_snap.take_style_tags,
+            "embedded_metadata": source_snap.embedded_metadata,
+            "embedded_lyrics": source_snap.embedded_lyrics,
+        }
+        canonical = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
+
     def confirm_album_entry_refresh(
         self,
         user_id: str,
@@ -5308,9 +5334,14 @@ class ProjectStorageManager:
         expected_source_audio_sha256: str,
         expected_source_updated_at: Optional[float] = None,
         expected_revision: Any = None,
+        expected_source_metadata_fingerprint: Optional[str] = None,
     ) -> Optional[AlbumMetadata]:
-        """Validate lock, revision, finalization, and entry identity via album_dir_fd; replacement remains disabled."""
+        """Refresh an album entry's owned recording and snapshot from its source take via v2 transaction."""
         expected_revision = self._validate_expected_revision(expected_revision)
+        if not isinstance(expected_source_metadata_fingerprint, str) or len(expected_source_metadata_fingerprint) != 64:
+            raise ProjectValidationError(
+                "expected_source_metadata_fingerprint is required and must be a 64-character SHA-256 hex digest."
+            )
         if not is_valid_project_id(entry_id, expected_prefix="ale"):
             raise ProjectValidationError(f"Invalid album entry identifier '{entry_id}'.")
         try:
@@ -5327,12 +5358,17 @@ class ProjectStorageManager:
                 loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
                 if not loaded:
                     return None
-                album, _, _ = loaded
+                album, norm_data, manifest_st = loaded
+                evidence: Dict[str, Any] = {}
                 _, journal, consistency = self._validate_album_evidence_phase_a_locked(
-                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
+                    album_id,
+                    album_dir_fd,
+                    raw_album_data=raw_holder[0],
+                    raw_album_identity=(manifest_st.st_dev, manifest_st.st_ino),
+                    evidence_out=evidence,
                 )
                 self._check_album_mutation_eligibility_phase_b_locked(
-                    album_id, journal, consistency, is_enrolled=False
+                    album_id, journal, consistency, is_enrolled=True
                 )
                 if self._is_album_finalized(album):
                     raise AlbumFinalizedError("Cannot refresh entries of a finalized album.")
@@ -5350,9 +5386,167 @@ class ProjectStorageManager:
                 if entry.is_placeholder or not entry.take_id:
                     raise ProjectValidationError("Cannot refresh a placeholder entry with no selected take.")
 
-                raise AlbumReplacementDisabledError(
-                    "Refreshing existing album-owned audio from a source take is temporarily disabled while audio-replacement safety upgrades are in progress."
+                track = self.get_track(user_id, entry.track_id)
+                take = self.get_take(user_id, entry.track_id, entry.take_id)
+                source_audio = self.get_take_audio_path(user_id, entry.track_id, entry.take_id)
+                if not track or not take or not source_audio or not source_audio.is_file():
+                    raise AlbumRefreshConflictError(
+                        "Source track or take has been deleted or is unavailable. The existing album recording is preserved."
+                    )
+
+                source_snap = self._build_take_snapshot(user_id, entry_id, track, take, source_audio)
+                if int(take.revision) != int(expected_source_revision):
+                    raise AlbumRefreshConflictError(
+                        "Source take revision changed since refresh preview. Reload preview and try again."
+                    )
+                if source_snap.audio_sha256 != expected_source_audio_sha256:
+                    raise AlbumRefreshConflictError(
+                        "Source take audio changed since refresh preview. Reload preview and try again."
+                    )
+                if expected_source_updated_at is not None and abs(float(take.updated_at or 0.0) - float(expected_source_updated_at)) > 1e-3:
+                    raise AlbumRefreshConflictError(
+                        "Source take timestamp changed since refresh preview. Reload preview and try again."
+                    )
+                actual_meta_fp = self.compute_refresh_source_metadata_fingerprint(source_snap)
+                if actual_meta_fp != expected_source_metadata_fingerprint:
+                    raise AlbumRefreshConflictError(
+                        "Source track or take metadata changed since refresh preview. Reload preview and try again."
+                    )
+                confirmed_meta_fp = expected_source_metadata_fingerprint
+
+                album_snap = entry.snapshot
+                audio_changed = (album_snap is None) or (not entry.has_owned_audio) or (album_snap.audio_sha256 != source_snap.audio_sha256)
+                lyrics_changed = ((album_snap.embedded_lyrics if album_snap else "") or "") != (source_snap.embedded_lyrics or "")
+                metadata_changed = album_snap is None
+                if not metadata_changed:
+                    for attr in (
+                        "source_take_label",
+                        "source_take_revision",
+                        "source_track_title",
+                        "source_track_artist",
+                        "format",
+                        "size_bytes",
+                        "duration_seconds",
+                        "take_notes",
+                        "take_prompt",
+                        "take_style_tags",
+                    ):
+                        if getattr(album_snap, attr, None) != getattr(source_snap, attr, None):
+                            metadata_changed = True
+                            break
+                    if not metadata_changed and album_snap.embedded_metadata != source_snap.embedded_metadata:
+                        metadata_changed = True
+
+                if not (audio_changed or lyrics_changed or metadata_changed):
+                    return album
+
+                tracks = [dict(t) if isinstance(t, dict) else t.model_dump() for t in (norm_data.get("tracks") or [])]
+                target = next(t for t in tracks if t.get("id") == entry_id)
+                has_existing_recording = bool(
+                    entry.has_owned_audio
+                    or entry.snapshot is not None
+                    or self._entry_has_filesystem_artifacts(user_id, album_id, entry_id)
                 )
+                next_gen = self._compute_next_entry_generation_locked(album_dir_fd, entry_id, target, journal)
+                superseded_refs = (
+                    self._collect_superseded_entry_refs_locked(album_dir_fd, entry_id, target)
+                    if has_existing_recording
+                    else []
+                )
+                new_refs: List[ArtifactRefRecord] = []
+                snap, commit_fn, cleanup_fn, rollback_fn = self._stage_entry_audio_copy(
+                    user_id,
+                    album_id,
+                    entry_id,
+                    entry.track_id,
+                    entry.take_id,
+                    album_dir_fd=album_dir_fd,
+                    generation=next_gen,
+                    staged_refs_out=new_refs,
+                    allow_existing_artifacts=has_existing_recording,
+                )
+                promoted = False
+                try:
+                    # Verify staged audio & metadata still match confirmed preview evidence before PREPARED
+                    if snap.audio_sha256 != expected_source_audio_sha256:
+                        raise AlbumRefreshConflictError(
+                            "Source take audio changed during refresh staging. Reload preview and try again."
+                        )
+                    if snap.source_track_id != entry.track_id or snap.source_take_id != entry.take_id:
+                        raise AlbumRefreshConflictError(
+                            "Staged source identity does not match confirmed album entry take."
+                        )
+                    if int(snap.source_take_revision) != int(expected_source_revision):
+                        raise AlbumRefreshConflictError(
+                            "Source take revision changed during refresh staging. Reload preview and try again."
+                        )
+                    if self.compute_refresh_source_metadata_fingerprint(snap) != confirmed_meta_fp:
+                        raise AlbumRefreshConflictError(
+                            "Source track or take metadata changed during refresh staging. Reload preview and try again."
+                        )
+
+                    target["is_placeholder"] = False
+                    target["has_owned_audio"] = True
+                    target["snapshot"] = snap.model_dump()
+                    target["active_generation"] = next_gen
+                    target["active_audio_filename"] = f"audio_g{next_gen}.{snap.format}"
+                    target["active_snapshot_filename"] = f"snapshot_g{next_gen}.json"
+
+                    target_data = dict(norm_data)
+                    new_rev = int(target_data.get("revision", 1)) + 1
+                    revs = list(target_data.get("revisions") or [])
+                    revs.append({
+                        "revision": new_rev,
+                        "timestamp": time.time(),
+                        "change_summary": f"Refreshed album entry {entry_id} from source take {entry.take_id}",
+                        "changed_fields": ["tracks"],
+                    })
+                    target_data["tracks"] = tracks
+                    target_data["track_ids"] = [t["track_id"] for t in tracks if t.get("track_id")]
+                    target_data["revision"] = new_rev
+                    target_data["revisions"] = revs
+                    target_data["updated_at"] = time.time()
+
+                    payload_sha256 = self._compute_update_album_payload_sha256(
+                        "confirm_album_entry_refresh",
+                        expected_revision,
+                        {
+                            "entry_id": entry_id,
+                            "expected_source_revision": expected_source_revision,
+                            "expected_source_audio_sha256": expected_source_audio_sha256,
+                            "expected_source_updated_at": expected_source_updated_at,
+                        },
+                    )
+
+                    def _promote_post_intent(is_post_intent: bool) -> None:
+                        nonlocal promoted
+                        if is_post_intent and not promoted:
+                            commit_fn()
+                            promoted = True
+
+                    published = self._execute_v2_album_tx_locked(
+                        album_id=album_id,
+                        album_dir_fd=album_dir_fd,
+                        evidence=evidence,
+                        target_data=target_data,
+                        op="confirm_album_entry_refresh",
+                        expected_revision=expected_revision,
+                        payload_sha256=payload_sha256,
+                        idempotency_key=None,
+                        pre_manifest_publish_check=_promote_post_intent,
+                        new_refs=new_refs,
+                        superseded_refs=superseded_refs,
+                    )
+                except Exception as exc:
+                    allow_unlink = not isinstance(exc, AlbumDurabilityUncertainError)
+                    try:
+                        rollback_fn(allow_promoted_unlink=allow_unlink)
+                    except Exception:
+                        pass
+                    raise
+
+                cleanup_fn()
+                return published
             finally:
                 try:
                     os.close(album_dir_fd)

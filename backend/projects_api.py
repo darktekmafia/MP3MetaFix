@@ -1071,7 +1071,15 @@ async def download_album_entry_audio(
         raise
 
 
-@projects_router.get("/albums/{album_id}/entries/{entry_id}/refresh-preview", response_model=AlbumEntryRefreshPreviewResponse)
+class AlbumEntryRefreshPreviewApiResponse(AlbumEntryRefreshPreviewResponse):
+    expected_source_metadata_fingerprint: Optional[str] = None
+
+
+class AlbumEntryRefreshConfirmApiRequest(AlbumEntryRefreshConfirmRequest):
+    expected_source_metadata_fingerprint: str = Field(..., min_length=64, max_length=64)
+
+
+@projects_router.get("/albums/{album_id}/entries/{entry_id}/refresh-preview", response_model=AlbumEntryRefreshPreviewApiResponse)
 async def preview_album_entry_refresh(
     album_id: str,
     entry_id: str,
@@ -1089,14 +1097,22 @@ async def preview_album_entry_refresh(
 
     if not preview:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
-    return preview
+    meta_fp = (
+        project_storage_manager.compute_refresh_source_metadata_fingerprint(preview.source_snapshot)
+        if preview.source_available and preview.source_snapshot is not None
+        else None
+    )
+    return AlbumEntryRefreshPreviewApiResponse(
+        **preview.model_dump(),
+        expected_source_metadata_fingerprint=meta_fp,
+    )
 
 
 @projects_router.post("/albums/{album_id}/entries/{entry_id}/refresh", response_model=AlbumMetadata)
 async def confirm_album_entry_refresh(
     album_id: str,
     entry_id: str,
-    payload: AlbumEntryRefreshConfirmRequest,
+    payload: AlbumEntryRefreshConfirmApiRequest,
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Confirm replacing an album entry's owned copy from its source take if the previewed version still matches."""
@@ -1111,6 +1127,7 @@ async def confirm_album_entry_refresh(
             expected_source_audio_sha256=payload.expected_source_audio_sha256,
             expected_source_updated_at=payload.expected_source_updated_at,
             expected_revision=payload.expected_revision,
+            expected_source_metadata_fingerprint=payload.expected_source_metadata_fingerprint,
         )
     except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumRevisionConflictError) as e:
         _raise_album_durability_or_conflict_http_error(e)

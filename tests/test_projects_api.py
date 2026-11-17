@@ -1741,7 +1741,22 @@ def test_album_entry_refresh_api_preview_confirm_and_conflict(client, auth_cooki
     assert preview["album_audio_stream_url"].endswith(f"/entries/{entry_id}/stream")
     assert preview["source_audio_stream_url"].endswith(f"/takes/{tak['id']}/stream")
 
-    # Phase 1A blocks POST /refresh with 409 Conflict and preserves wav_1
+    # Stale source_audio_sha256 on POST /refresh returns 409 Conflict and preserves wav_1
+    stale_refresh_res = client.post(
+        f"/api/projects/albums/{album['id']}/entries/{entry_id}/refresh",
+        json={
+            "expected_revision": album["revision"],
+            "expected_source_revision": preview["expected_source_revision"],
+            "expected_source_audio_sha256": "0" * 64,
+            "expected_source_updated_at": preview["expected_source_updated_at"],
+            "expected_source_metadata_fingerprint": preview["expected_source_metadata_fingerprint"],
+        },
+        cookies=auth_cookies,
+    )
+    assert stale_refresh_res.status_code == 409
+    assert client.get(f"/api/projects/albums/{album['id']}/entries/{entry_id}/download", cookies=auth_cookies).content == wav_1
+
+    # Feature 3: Valid POST /refresh succeeds (200) and updates Album-owned recording to wav_2
     refresh_res = client.post(
         f"/api/projects/albums/{album['id']}/entries/{entry_id}/refresh",
         json={
@@ -1749,12 +1764,12 @@ def test_album_entry_refresh_api_preview_confirm_and_conflict(client, auth_cooki
             "expected_source_revision": preview["expected_source_revision"],
             "expected_source_audio_sha256": preview["expected_source_audio_sha256"],
             "expected_source_updated_at": preview["expected_source_updated_at"],
+            "expected_source_metadata_fingerprint": preview["expected_source_metadata_fingerprint"],
         },
         cookies=auth_cookies,
     )
-    assert refresh_res.status_code == 409
-    assert "temporarily disabled" in refresh_res.json()["detail"].lower()
-    assert client.get(f"/api/projects/albums/{album['id']}/entries/{entry_id}/download", cookies=auth_cookies).content == wav_1
+    assert refresh_res.status_code == 200
+    assert client.get(f"/api/projects/albums/{album['id']}/entries/{entry_id}/download", cookies=auth_cookies).content == wav_2
 
 
 def test_album_finalization_api_validation_and_lock_enforcement(client, auth_cookies):
@@ -1844,7 +1859,12 @@ def test_album_finalization_api_validation_and_lock_enforcement(client, auth_coo
     assert client.get(f"/api/projects/albums/{album_id}/entries/{entry_id}/refresh-preview", cookies=auth_cookies).status_code == 409
     assert client.post(
         f"/api/projects/albums/{album_id}/entries/{entry_id}/refresh",
-        json={"expected_revision": fin_rev, "expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
+        json={
+            "expected_revision": fin_rev,
+            "expected_source_revision": 1,
+            "expected_source_audio_sha256": "a" * 64,
+            "expected_source_metadata_fingerprint": "a" * 64,
+        },
         cookies=auth_cookies,
     ).status_code == 409
     assert client.post(f"/api/projects/albums/{album_id}/finalize?expected_revision={fin_rev}", cookies=auth_cookies).status_code == 409
@@ -3385,33 +3405,33 @@ def test_phase1b_stage1_2_refresh_api_revision_and_concurrency(client, auth_cook
     # 1. Missing, zero, negative, boolean, string, and float expected_revision -> 422
     assert client.post(
         url,
-        json={"expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
+        json={"expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64, "expected_source_metadata_fingerprint": "a" * 64},
         cookies=auth_cookies,
     ).status_code == 422
     for bad_rev in (0, -1, True, False, "2", 1.5):
         assert client.post(
             url,
-            json={"expected_revision": bad_rev, "expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
+            json={"expected_revision": bad_rev, "expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64, "expected_source_metadata_fingerprint": "a" * 64},
             cookies=auth_cookies,
         ).status_code == 422
 
     # 2. Stale expected_revision -> 409 (conflict, not disabled-replacement message)
     stale_res = client.post(
         url,
-        json={"expected_revision": alb["revision"] - 1, "expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
+        json={"expected_revision": alb["revision"] - 1, "expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64, "expected_source_metadata_fingerprint": "a" * 64},
         cookies=auth_cookies,
     )
     assert stale_res.status_code == 409
     assert "modified concurrently" in stale_res.json()["detail"].lower()
 
-    # 3. Current expected_revision -> 409 disabled replacement, recording & revision preserved
+    # 3. Current expected_revision -> 409 conflict, recording & revision preserved
     cur_res = client.post(
         url,
-        json={"expected_revision": alb["revision"], "expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
+        json={"expected_revision": alb["revision"], "expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64, "expected_source_metadata_fingerprint": "a" * 64},
         cookies=auth_cookies,
     )
     assert cur_res.status_code == 409
-    assert "temporarily disabled" in cur_res.json()["detail"].lower()
+    assert "source take audio changed" in cur_res.json()["detail"].lower()
     assert client.get(f"/api/projects/albums/{alb['id']}", cookies=auth_cookies).json()["revision"] == alb["revision"]
     assert client.get(f"/api/projects/albums/{alb['id']}/entries/{entry_id}/download", cookies=auth_cookies).content == wav_ok
 
@@ -3544,6 +3564,7 @@ vm.runInNewContext(code, context);
       expected_source_revision: 3,
       expected_source_audio_sha256: 'a'.repeat(64),
       expected_source_updated_at: 100.0,
+      expected_source_metadata_fingerprint: 'b'.repeat(64),
       album_snapshot: { source_track_title: 'Song ' + entryId, source_take_label: 'T1', source_take_revision: 1, format: 'wav', duration_seconds: 1.0 },
       source_snapshot: { source_take_label: 'T1', source_take_revision: 3, format: 'wav', duration_seconds: 1.0 },
     }),
@@ -3615,8 +3636,8 @@ vm.runInNewContext(code, context);
   deferredFetches.shift().resolve(makePreview('ale_1'));
   await p5;
   await btnConfirm.listeners['click'][0]();
-  if (postCalls.length !== 1 || postCalls[0].body.expected_revision !== 7 || !postCalls[0].url.endsWith('/ale_1/refresh')) {
-    throw new Error('Case 5 failed: expected POST with captured revision 7, got ' + JSON.stringify(postCalls));
+  if (postCalls.length !== 1 || postCalls[0].body.expected_revision !== 7 || postCalls[0].body.expected_source_metadata_fingerprint !== 'b'.repeat(64) || !postCalls[0].url.endsWith('/ale_1/refresh')) {
+    throw new Error('Case 5 failed: expected POST with captured revision 7 and metadata fingerprint, got ' + JSON.stringify(postCalls));
   }
   await closeRefreshBtn.listeners['click'][0]();
 
@@ -3758,11 +3779,10 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
     alb_dir = papi_mod.project_storage_manager._get_album_dir(user_id, alb["id"])
     journal_path = alb_dir / "journal.json"
 
-    def _call_4_unenrolled_routes(rev: int):
+    def _call_3_unenrolled_routes(rev: int):
         return [
             ("delete_album", client.delete(f"/api/projects/albums/{alb['id']}?expected_revision={rev}", cookies=auth_cookies)),
             ("del_entry", client.delete(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}?expected_revision={rev}", cookies=auth_cookies)),
-            ("refresh", client.post(f"/api/projects/albums/{alb['id']}/entries/{entry_rec['id']}/refresh", json={"expected_revision": rev, "expected_source_revision": 1, "expected_source_audio_sha256": entry_rec["snapshot"]["audio_sha256"]}, cookies=auth_cookies)),
             ("artwork", client.post(f"/api/projects/albums/{alb['id']}/artwork", data={"expected_revision": str(rev)}, files={"file": ("cover.jpg", jpg_bytes, "image/jpeg")}, cookies=auth_cookies)),
         ]
 
@@ -3772,13 +3792,14 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
             ("finalize", client.post(f"/api/projects/albums/{alb['id']}/finalize?expected_revision={rev}", cookies=auth_cookies)),
             ("add_entry", client.post(f"/api/projects/albums/{alb['id']}/entries", json={"track_id": trk["id"], "expected_revision": rev}, cookies=auth_cookies)),
             ("patch_entry", client.patch(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}", json={"custom_title": "Y", "expected_revision": rev}, cookies=auth_cookies)),
-            *_call_4_unenrolled_routes(rev),
+            ("refresh", client.post(f"/api/projects/albums/{alb['id']}/entries/{entry_rec['id']}/refresh", json={"expected_revision": rev, "expected_source_revision": 1, "expected_source_audio_sha256": entry_rec["snapshot"]["audio_sha256"], "expected_source_metadata_fingerprint": "a" * 64}, cookies=auth_cookies)),
+            *_call_3_unenrolled_routes(rev),
         ]
 
-    # 1. Idle v2 journal -> 409 mutation_not_enrolled on the 4 remaining unenrolled routes (and no reconciliation recommended)
+    # 1. Idle v2 journal -> 409 mutation_not_enrolled on the 3 remaining unenrolled routes (and no reconciliation recommended)
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb["id"])
     journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
-    for name, res in _call_4_unenrolled_routes(alb["revision"]):
+    for name, res in _call_3_unenrolled_routes(alb["revision"]):
         assert res.status_code == 409, f"{name} expected 409, got {res.status_code}: {res.text}"
         assert res.headers.get("X-Error-Code") == "mutation_not_enrolled"
         body = res.json()["detail"]
@@ -4582,3 +4603,107 @@ def test_feature2_api_and_ui_confirm_recording_replacement(client, auth_cookies)
     user_id = client.get("/api/auth/status", cookies=auth_cookies).json()["user"]["id"]
     e_dir = papi_mod.project_storage_manager._get_album_dir(user_id, alb["id"]) / "entries" / get_album_entry_dir_name(e_target)
     assert (e_dir / "audio.wav").read_bytes() == wav_1
+
+
+def test_feature3_api_refresh_finalize_and_stream(client, auth_cookies):
+    """Feature 3 API: refresh-preview -> POST /refresh -> POST /finalize -> GET /stream, and cancel leaves album unchanged."""
+    import io
+    import wave
+
+    def _make_wav(sample_byte: bytes, frames: int = 300) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(sample_byte * frames)
+        return buf.getvalue()
+
+    wav_1 = _make_wav(b"\x51\x52")
+    wav_2 = _make_wav(b"\x61\x62")
+
+    trk = client.post("/api/projects/tracks", json={"title": "API F3 Track"}, cookies=auth_cookies).json()
+    tk = client.post(f"/api/projects/tracks/{trk['id']}/takes", files={"file": ("f3.wav", wav_1, "audio/wav")}, cookies=auth_cookies).json()
+    alb = client.post("/api/projects/albums", json={"title": "API F3 Album"}, cookies=auth_cookies).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    eid = alb["tracks"][0]["id"]
+
+    # Update source take audio via upload (or new take? update_take_audio via storage)
+    import backend.projects_api as papi_mod
+    user_id = client.get("/api/auth/status", cookies=auth_cookies).json()["user"]["id"]
+    papi_mod.project_storage_manager.update_take_audio(user_id, trk["id"], tk["id"], audio_bytes=wav_2, extension=".wav")
+
+    # Preview only (simulating opening modal and canceling without POST)
+    prev = client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/refresh-preview", cookies=auth_cookies).json()
+    assert prev["has_changes"] is True and prev["audio_changed"] is True
+    assert isinstance(prev.get("expected_source_metadata_fingerprint"), str) and len(prev["expected_source_metadata_fingerprint"]) == 64
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies).content == wav_1
+
+    # Missing or explicit null expected_source_metadata_fingerprint -> 422 (Album unchanged)
+    r_omit_fp = client.post(
+        f"/api/projects/albums/{alb['id']}/entries/{eid}/refresh",
+        json={
+            "expected_revision": alb["revision"],
+            "expected_source_revision": prev["expected_source_revision"],
+            "expected_source_audio_sha256": prev["expected_source_audio_sha256"],
+            "expected_source_updated_at": prev["expected_source_updated_at"],
+        },
+        cookies=auth_cookies,
+    )
+    assert r_omit_fp.status_code == 422
+    r_null_fp = client.post(
+        f"/api/projects/albums/{alb['id']}/entries/{eid}/refresh",
+        json={
+            "expected_revision": alb["revision"],
+            "expected_source_revision": prev["expected_source_revision"],
+            "expected_source_audio_sha256": prev["expected_source_audio_sha256"],
+            "expected_source_updated_at": prev["expected_source_updated_at"],
+            "expected_source_metadata_fingerprint": None,
+        },
+        cookies=auth_cookies,
+    )
+    assert r_null_fp.status_code == 422
+    assert client.get(f"/api/projects/albums/{alb['id']}", cookies=auth_cookies).json()["revision"] == alb["revision"]
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies).content == wav_1
+
+    # Track title drift after preview -> 409 Conflict with stale expected_source_metadata_fingerprint
+    assert client.patch(f"/api/projects/tracks/{trk['id']}", json={"title": "API F3 Track Updated"}, cookies=auth_cookies).status_code == 200
+    r_drift = client.post(
+        f"/api/projects/albums/{alb['id']}/entries/{eid}/refresh",
+        json={
+            "expected_revision": alb["revision"],
+            "expected_source_revision": prev["expected_source_revision"],
+            "expected_source_audio_sha256": prev["expected_source_audio_sha256"],
+            "expected_source_updated_at": prev["expected_source_updated_at"],
+            "expected_source_metadata_fingerprint": prev["expected_source_metadata_fingerprint"],
+        },
+        cookies=auth_cookies,
+    )
+    assert r_drift.status_code == 409
+
+    # Fresh preview + confirm refresh with current fingerprint -> 200
+    prev2 = client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/refresh-preview", cookies=auth_cookies).json()
+    r_ref = client.post(
+        f"/api/projects/albums/{alb['id']}/entries/{eid}/refresh",
+        json={
+            "expected_revision": alb["revision"],
+            "expected_source_revision": prev2["expected_source_revision"],
+            "expected_source_audio_sha256": prev2["expected_source_audio_sha256"],
+            "expected_source_updated_at": prev2["expected_source_updated_at"],
+            "expected_source_metadata_fingerprint": prev2["expected_source_metadata_fingerprint"],
+        },
+        cookies=auth_cookies,
+    )
+    assert r_ref.status_code == 200
+    ref_alb = r_ref.json()
+    assert ref_alb["tracks"][0]["snapshot"]["source_track_title"] == "API F3 Track Updated"
+
+    # Finalize and stream refreshed recording
+    r_fin = client.post(f"/api/projects/albums/{alb['id']}/finalize?expected_revision={ref_alb['revision']}", cookies=auth_cookies)
+    assert r_fin.status_code == 200
+    s_fin = client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies)
+    assert s_fin.status_code == 200 and s_fin.content == wav_2

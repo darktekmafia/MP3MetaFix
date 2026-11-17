@@ -1044,26 +1044,27 @@ def test_album_entry_refresh_preview_confirm_and_conflict(custom_storage):
     assert "+Line two revised" in preview.lyrics_diff
     assert any(c["field"] == "take_notes" and c["old"] == "Raw mix" and c["new"] == "Mastered mix" for c in preview.metadata_changes)
 
-    # Phase 1A blocks confirm_album_entry_refresh and preserves wav_v1 + snapshot
-    with pytest.raises(AlbumReplacementDisabledError):
-        custom_storage.confirm_album_entry_refresh(
-            user_id,
-            album.id,
-            entry_id,
-            expected_source_revision=preview.expected_source_revision,
-            expected_source_audio_sha256=preview.expected_source_audio_sha256,
-            expected_source_updated_at=preview.expected_source_updated_at,
-            expected_revision=album.revision,
-        )
-    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v1
-    assert custom_storage.get_album(user_id, album.id).tracks[0].snapshot.embedded_lyrics == "Line one\nLine two"
+    # Feature 3: confirm_album_entry_refresh updates owned audio & snapshot while retaining wav_v1
+    refreshed = custom_storage.confirm_album_entry_refresh(
+        user_id,
+        album.id,
+        entry_id,
+        expected_source_revision=preview.expected_source_revision,
+        expected_source_audio_sha256=preview.expected_source_audio_sha256,
+        expected_source_updated_at=preview.expected_source_updated_at,
+        expected_revision=album.revision,
+        expected_source_metadata_fingerprint=custom_storage.compute_refresh_source_metadata_fingerprint(preview.source_snapshot),
+    )
+    assert refreshed is not None
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v2
+    assert custom_storage.get_album(user_id, album.id).tracks[0].snapshot.embedded_lyrics == "Line one\nLine two revised"
 
     # Deleting source take -> source_available=False on preview, album copy intact
     custom_storage.delete_take(user_id, trk.id, t1.id)
     gone_preview = custom_storage.preview_album_entry_refresh(user_id, album.id, entry_id)
     assert gone_preview.source_available is False
     assert gone_preview.album_snapshot is not None
-    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v1
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v2
 
 
 def test_album_finalization_validation_locking_and_completion(custom_storage):
@@ -1141,9 +1142,12 @@ def test_album_finalization_validation_locking_and_completion(custom_storage):
         custom_storage.add_album_entry(user_id, album.id, trk_ok.id, expected_revision=finalized.revision, take_id=t_ok.id)
     with pytest.raises(AlbumFinalizedError):
         custom_storage.update_album_entry(user_id, album.id, r_id, expected_revision=finalized.revision, clear_take_to_placeholder=True)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, album.id, r_id, 1, "sha", expected_revision=finalized.revision, expected_source_metadata_fingerprint="a" * 64
+        )
     for unenrolled_call in (
         lambda: custom_storage.remove_album_entry(user_id, album.id, r_id, expected_revision=finalized.revision),
-        lambda: custom_storage.confirm_album_entry_refresh(user_id, album.id, r_id, 1, "sha", expected_revision=finalized.revision),
         lambda: custom_storage.save_album_cover(user_id, album.id, b"\xff\xd8\xff\xe0", expected_revision=finalized.revision, extension=".jpg"),
         lambda: custom_storage.delete_album(user_id, album.id, expected_revision=finalized.revision),
     ):
@@ -3403,22 +3407,22 @@ def test_phase1b_stage1_2_refresh_confirm_lock_revision_and_safety(custom_storag
     # 2. Stale revision rejected with AlbumRevisionConflictError
     with pytest.raises(AlbumRevisionConflictError):
         custom_storage.confirm_album_entry_refresh(
-            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=alb.revision - 1
+            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=alb.revision - 1, expected_source_metadata_fingerprint="a" * 64
         )
     assert manifest_path.read_bytes() == raw_before
 
     # 3. Missing or invalid entry IDs rejected cleanly
     with pytest.raises(ProjectValidationError):
         custom_storage.confirm_album_entry_refresh(
-            user_id, alb.id, "not_an_entry_id", 1, "a" * 64, expected_revision=alb.revision
+            user_id, alb.id, "not_an_entry_id", 1, "a" * 64, expected_revision=alb.revision, expected_source_metadata_fingerprint="a" * 64
         )
     with pytest.raises(ProjectValidationError, match="not found"):
         custom_storage.confirm_album_entry_refresh(
-            user_id, alb.id, "ale_0000000000000000", 1, "a" * 64, expected_revision=alb.revision
+            user_id, alb.id, "ale_0000000000000000", 1, "a" * 64, expected_revision=alb.revision, expected_source_metadata_fingerprint="a" * 64
         )
     with pytest.raises(ProjectValidationError, match="placeholder"):
         custom_storage.confirm_album_entry_refresh(
-            user_id, alb.id, placeholder_c, 1, "a" * 64, expected_revision=alb.revision
+            user_id, alb.id, placeholder_c, 1, "a" * 64, expected_revision=alb.revision, expected_source_metadata_fingerprint="a" * 64
         )
 
     # 4. Lock coverage: authoritative read occurs inside _album_lock via _read_album_from_dir_fd (never _read_album_unlocked)
@@ -3447,9 +3451,10 @@ def test_phase1b_stage1_2_refresh_confirm_lock_revision_and_safety(custom_storag
         "_read_album_unlocked",
         lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError("_read_album_unlocked must not be called")),
     )
-    with pytest.raises(AlbumReplacementDisabledError):
+    from backend.project_storage import AlbumRefreshConflictError
+    with pytest.raises(AlbumRefreshConflictError):
         custom_storage.confirm_album_entry_refresh(
-            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=alb.revision
+            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=alb.revision, expected_source_metadata_fingerprint="a" * 64
         )
     monkeypatch.undo()
     assert events == ["lock_enter", "read_fd", "lock_exit"]
@@ -3463,7 +3468,7 @@ def test_phase1b_stage1_2_refresh_confirm_lock_revision_and_safety(custom_storag
     manifest_path.write_text(json.dumps(dup_raw, indent=2), encoding="utf-8")
     with pytest.raises(AlbumManifestCorruptError):
         custom_storage.confirm_album_entry_refresh(
-            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=alb.revision
+            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=alb.revision, expected_source_metadata_fingerprint="a" * 64
         )
     manifest_path.write_bytes(raw_before)
 
@@ -3474,9 +3479,9 @@ def test_phase1b_stage1_2_refresh_confirm_lock_revision_and_safety(custom_storag
     fin = custom_storage.finalize_album(user_id, alb.id, expected_revision=alb_clean.revision)
     with pytest.raises(AlbumFinalizedError):
         custom_storage.preview_album_entry_refresh(user_id, alb.id, entry_a)
-    with pytest.raises(AlbumMutationNotEnrolledError):
+    with pytest.raises(AlbumFinalizedError):
         custom_storage.confirm_album_entry_refresh(
-            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=fin.revision
+            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=fin.revision, expected_source_metadata_fingerprint="a" * 64
         )
 
 
@@ -5048,9 +5053,8 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1),
     )
 
-    def _run_4_unenrolled_writers(rev: int):
+    def _run_3_unenrolled_writers(rev: int):
         yield lambda: custom_storage.remove_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev)
-        yield lambda: custom_storage.confirm_album_entry_refresh(user_id, alb.id, entry_rec.id, 1, "a" * 64, expected_revision=rev)
         yield lambda: custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=rev, extension=".jpg")
         yield lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=rev)
 
@@ -5059,7 +5063,8 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         yield lambda: custom_storage.finalize_album(user_id, alb.id, expected_revision=rev)
         yield lambda: custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=rev, take_id=None)
         yield lambda: custom_storage.update_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev, custom_title="X")
-        yield from _run_4_unenrolled_writers(rev)
+        yield lambda: custom_storage.confirm_album_entry_refresh(user_id, alb.id, entry_rec.id, 1, "a" * 64, expected_revision=rev, expected_source_metadata_fingerprint="a" * 64)
+        yield from _run_3_unenrolled_writers(rev)
 
     # 2. Idle v2 Album -> AlbumMutationNotEnrolledError on all 6 unenrolled writers, zero writes, guarded once
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id)
@@ -5075,7 +5080,7 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         return orig_phase_a(self_mgr, *args, **kwargs)
 
     monkeypatch.setattr(ProjectStorageManager, "_validate_album_evidence_phase_a_locked", _counted_phase_a)
-    for op_fn in _run_4_unenrolled_writers(alb.revision):
+    for op_fn in _run_3_unenrolled_writers(alb.revision):
         phase_a_calls["n"] = 0
         with pytest.raises(AlbumMutationNotEnrolledError):
             op_fn()
@@ -5263,12 +5268,17 @@ def test_phase1b_stage1_3b_2a1_raw_manifest_evidence_and_precedence(custom_stora
     assert journal_path.read_bytes() == raw_j
     assert sorted(os.listdir(alb_dir)) == dir_inv_before
 
-    # Journal-less targeted checks: replacement-disabled, invalid entry ID, finalized vs stale-revision precedence
+    # Journal-less targeted checks: stale-source conflict, invalid entry ID, finalized vs stale-revision precedence
     journal_path.unlink()
-    with pytest.raises(AlbumReplacementDisabledError):
-        custom_storage.confirm_album_entry_refresh(user_id, alb.id, entry.id, 1, "a" * 64, expected_revision=alb.revision)
+    from backend.project_storage import AlbumRefreshConflictError
+    with pytest.raises(AlbumRefreshConflictError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, entry.id, 1, "a" * 64, expected_revision=alb.revision, expected_source_metadata_fingerprint="a" * 64
+        )
     with pytest.raises(ProjectValidationError):
-        custom_storage.confirm_album_entry_refresh(user_id, alb.id, "bad_entry_id", 1, "a" * 64, expected_revision=alb.revision)
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, "bad_entry_id", 1, "a" * 64, expected_revision=alb.revision, expected_source_metadata_fingerprint="a" * 64
+        )
 
     fin = custom_storage.finalize_album(user_id, alb.id, expected_revision=alb.revision)
     assert fin is not None and fin.is_finalized is True
@@ -6610,10 +6620,9 @@ def test_phase1b_stage1_3b_2b1a_generation_readers_provenance_and_snapshot_matri
     assert reconcile_calls["n"] == 0
     assert manifest_path.read_bytes() == good_m4_bytes and journal_path.read_bytes() == good_j4_bytes
 
-    # All 4 remaining unenrolled writers remain blocked
+    # All 3 remaining unenrolled writers remain blocked
     for blocked in (
         lambda: custom_storage.remove_album_entry(user_id, alb.id, eid, expected_revision=4),
-        lambda: custom_storage.confirm_album_entry_refresh(user_id, alb.id, eid, 1, wav_sha, expected_revision=4),
         lambda: custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=4, extension=".jpg"),
         lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=4),
     ):
@@ -7405,3 +7414,372 @@ def test_feature2_retention_aware_finalization_and_tamper_rejection(custom_stora
     (e3_dir / "audio.wav").write_bytes(_make_wav(b"\x99\x99"))
     with pytest.raises(AlbumFinalizationError):
         custom_storage.finalize_album(user_id, alb3.id, expected_revision=alb3.revision)
+
+
+def test_feature3_refresh_entry_matrix(custom_storage: ProjectStorageManager, monkeypatch):
+    """Feature 3: audio-only, metadata-only, combined, no-change, sibling isolation, retention, finalization, and faults."""
+    import errno
+    import io
+    import json
+    import os
+    import wave
+    import backend.project_storage as ps_mod
+    from backend.project_models import AlbumJournal
+    from backend.project_storage import (
+        AlbumDurabilityUncertainError,
+        AlbumFinalizedError,
+        AlbumRevisionConflictError,
+        ProjectStorageError,
+    )
+    from backend.security import get_album_entry_dir_name
+
+    def _make_wav(sample_byte: bytes, frames: int = 300) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(sample_byte * frames)
+        return buf.getvalue()
+
+    wav_1 = _make_wav(b"\x14\x15")
+    wav_2 = _make_wav(b"\x24\x25")
+    wav_3 = _make_wav(b"\x34\x35")
+    wav_4 = _make_wav(b"\x44\x45")
+
+    user_id = "u_feature3_refresh"
+    trk = custom_storage.create_track(user_id=user_id, title="Refresh Track")
+    tk = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_1, original_filename="r.wav", extension=".wav", notes="v1")
+
+    # Journal-less Album with two entries referencing the SAME Track & Take
+    alb = custom_storage.create_album(user_id=user_id, title="Refresh LP")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk.id)
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk.id)
+    e_target = alb.tracks[0].id
+    e_sib = alb.tracks[1].id
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    e_dir = alb_dir / "entries" / get_album_entry_dir_name(e_target)
+
+    _fp = custom_storage.compute_refresh_source_metadata_fingerprint
+    # 1. No-change refresh -> no new generation, no revision bump, no journal created
+    p0 = custom_storage.preview_album_entry_refresh(user_id, alb.id, e_target)
+    assert p0.has_changes is False
+    alb_noop = custom_storage.confirm_album_entry_refresh(
+        user_id, alb.id, e_target,
+        expected_source_revision=p0.expected_source_revision,
+        expected_source_audio_sha256=p0.expected_source_audio_sha256,
+        expected_source_updated_at=p0.expected_source_updated_at,
+        expected_revision=alb.revision,
+        expected_source_metadata_fingerprint=_fp(p0.source_snapshot),
+    )
+    assert alb_noop.revision == alb.revision
+    assert not (alb_dir / "journal.json").exists()
+
+    # 2. Audio-only change on journal-less Album -> enrolls v2, writes g1, retains legacy audio.wav, sibling untouched
+    custom_storage.update_take_audio(user_id, trk.id, tk.id, audio_bytes=wav_2, extension=".wav")
+    p_aud = custom_storage.preview_album_entry_refresh(user_id, alb.id, e_target)
+    assert p_aud.has_changes is True and p_aud.audio_changed is True
+    alb = custom_storage.confirm_album_entry_refresh(
+        user_id, alb.id, e_target,
+        expected_source_revision=p_aud.expected_source_revision,
+        expected_source_audio_sha256=p_aud.expected_source_audio_sha256,
+        expected_source_updated_at=p_aud.expected_source_updated_at,
+        expected_revision=alb.revision,
+        expected_source_metadata_fingerprint=_fp(p_aud.source_snapshot),
+    )
+    assert alb.tracks[0].active_generation == 1
+    assert (e_dir / "audio.wav").read_bytes() == wav_1
+    assert (e_dir / "audio_g1.wav").read_bytes() == wav_2
+    _, _, fd_sib, _ = custom_storage.open_album_entry_audio_for_read(user_id, alb.id, e_sib)
+    with os.fdopen(fd_sib, "rb") as fs:
+        assert fs.read() == wav_1
+
+    # 3. Metadata-only change on v2-journaled Album -> writes g2, retains g1, updates snapshot notes
+    custom_storage.update_take(user_id, trk.id, tk.id, {"notes": "v2 notes"})
+    p_meta = custom_storage.preview_album_entry_refresh(user_id, alb.id, e_target)
+    assert p_meta.has_changes is True and p_meta.audio_changed is False
+    alb = custom_storage.confirm_album_entry_refresh(
+        user_id, alb.id, e_target,
+        expected_source_revision=p_meta.expected_source_revision,
+        expected_source_audio_sha256=p_meta.expected_source_audio_sha256,
+        expected_source_updated_at=p_meta.expected_source_updated_at,
+        expected_revision=alb.revision,
+        expected_source_metadata_fingerprint=_fp(p_meta.source_snapshot),
+    )
+    assert alb.tracks[0].active_generation == 2
+    assert alb.tracks[0].snapshot.take_notes == "v2 notes"
+    assert (e_dir / "audio_g1.wav").read_bytes() == wav_2
+
+    # 4. Combined audio + metadata change -> writes g3, retains g2
+    custom_storage.update_take_audio(user_id, trk.id, tk.id, audio_bytes=wav_3, extension=".wav", notes="v3 notes")
+    p_both = custom_storage.preview_album_entry_refresh(user_id, alb.id, e_target)
+    assert p_both.has_changes is True and p_both.audio_changed is True
+    alb = custom_storage.confirm_album_entry_refresh(
+        user_id, alb.id, e_target,
+        expected_source_revision=p_both.expected_source_revision,
+        expected_source_audio_sha256=p_both.expected_source_audio_sha256,
+        expected_source_updated_at=p_both.expected_source_updated_at,
+        expected_revision=alb.revision,
+        expected_source_metadata_fingerprint=_fp(p_both.source_snapshot),
+    )
+    assert alb.tracks[0].active_generation == 3
+    assert alb.tracks[0].snapshot.take_notes == "v3 notes"
+
+    # 5. Subsequent source Take change/deletion does not alter refreshed Album recording
+    custom_storage.update_take_audio(user_id, trk.id, tk.id, audio_bytes=wav_4, extension=".wav")
+    p_next = custom_storage.preview_album_entry_refresh(user_id, alb.id, e_target)
+
+    # Stale expected_revision rejected
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, e_target,
+            expected_source_revision=p_next.expected_source_revision,
+            expected_source_audio_sha256=p_next.expected_source_audio_sha256,
+            expected_source_updated_at=p_next.expected_source_updated_at,
+            expected_revision=alb.revision - 1,
+            expected_source_metadata_fingerprint=_fp(p_next.source_snapshot),
+        )
+
+    # Failed staging preserves original active recording
+    before_m = (alb_dir / "album.json").read_bytes()
+    with monkeypatch.context() as mp:
+        mp.setattr(ProjectStorageManager, "_stage_entry_audio_copy", lambda *_a, **_kw: (_ for _ in ()).throw(ProjectStorageError("Refresh stage fault")))
+        with pytest.raises(ProjectStorageError, match="Refresh stage fault"):
+            custom_storage.confirm_album_entry_refresh(
+                user_id, alb.id, e_target,
+                expected_source_revision=p_next.expected_source_revision,
+                expected_source_audio_sha256=p_next.expected_source_audio_sha256,
+                expected_source_updated_at=p_next.expected_source_updated_at,
+                expected_revision=alb.revision,
+                expected_source_metadata_fingerprint=_fp(p_next.source_snapshot),
+            )
+    assert (alb_dir / "album.json").read_bytes() == before_m
+
+    # Publication uncertainty (entry_dir fsync EIO) preserves promoted g4 without destructive unlink
+    alb_st = os.stat(alb_dir)
+    alb_dir_id = (int(alb_st.st_dev), int(alb_st.st_ino))
+    orig_fsync_dir = ps_mod._fsync_dir_fd
+    with monkeypatch.context() as mp:
+        def _fail_entry_sync(dir_fd: int) -> None:
+            st = os.fstat(dir_fd)
+            if (int(st.st_dev), int(st.st_ino)) != alb_dir_id:
+                raise OSError(errno.EIO, "Simulated refresh entry dir EIO")
+            return orig_fsync_dir(dir_fd)
+        mp.setattr(ps_mod, "_fsync_dir_fd", _fail_entry_sync)
+        with pytest.raises(AlbumDurabilityUncertainError):
+            custom_storage.confirm_album_entry_refresh(
+                user_id, alb.id, e_target,
+                expected_source_revision=p_next.expected_source_revision,
+                expected_source_audio_sha256=p_next.expected_source_audio_sha256,
+                expected_source_updated_at=p_next.expected_source_updated_at,
+                expected_revision=alb.revision,
+                expected_source_metadata_fingerprint=_fp(p_next.source_snapshot),
+            )
+    assert (alb_dir / "album.json").read_bytes() == before_m
+    assert (e_dir / "audio_g4.wav").read_bytes() == wav_4
+    (e_dir / "audio_g4.wav").unlink()
+    (e_dir / "snapshot_g4.json").unlink()
+    # Reconcile/clear active_tx before finalizing
+    j_cur = AlbumJournal(**json.loads((alb_dir / "journal.json").read_text(encoding="utf-8")))
+    j_cur = j_cur.model_copy(update={"active_tx": None})
+    (alb_dir / "journal.json").write_text(json.dumps(j_cur.model_dump(mode="json")), encoding="utf-8")
+
+    # Delete source take, then finalize and read active recording
+    assert custom_storage.delete_take(user_id, trk.id, tk.id) is True
+    fin = custom_storage.finalize_album(user_id, alb.id, expected_revision=alb.revision)
+    assert fin.is_finalized is True
+    _, _, fd_fin, _ = custom_storage.open_album_entry_audio_for_read(user_id, fin.id, e_target)
+    with os.fdopen(fd_fin, "rb") as ff:
+        assert ff.read() == wav_3
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, fin.id, e_target,
+            expected_source_revision=p_next.expected_source_revision,
+            expected_source_audio_sha256=p_next.expected_source_audio_sha256,
+            expected_source_updated_at=p_next.expected_source_updated_at,
+            expected_revision=fin.revision,
+            expected_source_metadata_fingerprint=_fp(p_next.source_snapshot),
+        )
+
+
+def test_feature3_confirmation_integrity_audio_race_and_track_metadata(custom_storage: ProjectStorageManager, monkeypatch):
+    """Feature 3 integrity: reject audio race between validation & staging and Track title/artist drift after preview."""
+    import io
+    import os
+    import wave
+    from backend.project_storage import AlbumRefreshConflictError
+    from backend.security import get_album_entry_dir_name
+
+    def _make_wav(sample_byte: bytes, frames: int = 300) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(sample_byte * frames)
+        return buf.getvalue()
+
+    wav_a = _make_wav(b"\x16\x17")
+    wav_b = _make_wav(b"\x26\x27")
+    wav_c = _make_wav(b"\x36\x37")
+
+    user_id = "u_feature3_integrity"
+    trk = custom_storage.create_track(user_id=user_id, title="Orig Title", artist="Orig Artist")
+    tk = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_a, original_filename="i.wav", extension=".wav")
+    alb = custom_storage.create_album(user_id=user_id, title="Integrity LP")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk.id)
+    eid = alb.tracks[0].id
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    e_dir = alb_dir / "entries" / get_album_entry_dir_name(eid)
+
+    # 1. Blocker 1: Source Take audio changes from wav_b to wav_c between confirmation validation and staging
+    custom_storage.update_take_audio(user_id, trk.id, tk.id, audio_bytes=wav_b, extension=".wav")
+    prev_b = custom_storage.preview_album_entry_refresh(user_id, alb.id, eid)
+    fp_b = custom_storage.compute_refresh_source_metadata_fingerprint(prev_b.source_snapshot)
+
+    orig_stage = ProjectStorageManager._stage_entry_audio_copy
+    injected = {"done": False}
+    before_m = (alb_dir / "album.json").read_bytes()
+
+    def _race_update_before_stage(self_mgr, *args, **kwargs):
+        if not injected["done"]:
+            injected["done"] = True
+            self_mgr.update_take_audio(user_id, trk.id, tk.id, audio_bytes=wav_c, extension=".wav")
+        return orig_stage(self_mgr, *args, **kwargs)
+
+    with monkeypatch.context() as mp:
+        mp.setattr(ProjectStorageManager, "_stage_entry_audio_copy", _race_update_before_stage)
+        with pytest.raises(AlbumRefreshConflictError):
+            custom_storage.confirm_album_entry_refresh(
+                user_id, alb.id, eid,
+                expected_source_revision=prev_b.expected_source_revision,
+                expected_source_audio_sha256=prev_b.expected_source_audio_sha256,
+                expected_source_updated_at=prev_b.expected_source_updated_at,
+                expected_revision=alb.revision,
+                expected_source_metadata_fingerprint=fp_b,
+            )
+    assert injected["done"] is True
+    assert (alb_dir / "album.json").read_bytes() == before_m
+    assert not (alb_dir / "journal.json").exists()
+    assert not any(f.startswith(".staging_") for f in os.listdir(e_dir))
+    assert not (e_dir / "audio_g1.wav").exists()
+    _, _, fd_orig, _ = custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
+    with os.fdopen(fd_orig, "rb") as fo:
+        assert fo.read() == wav_a
+
+    # Fresh preview + confirm succeeds with wav_c
+    prev_c = custom_storage.preview_album_entry_refresh(user_id, alb.id, eid)
+    fp_c = custom_storage.compute_refresh_source_metadata_fingerprint(prev_c.source_snapshot)
+    alb = custom_storage.confirm_album_entry_refresh(
+        user_id, alb.id, eid,
+        expected_source_revision=prev_c.expected_source_revision,
+        expected_source_audio_sha256=prev_c.expected_source_audio_sha256,
+        expected_source_updated_at=prev_c.expected_source_updated_at,
+        expected_revision=alb.revision,
+        expected_source_metadata_fingerprint=fp_c,
+    )
+    assert alb.tracks[0].active_generation == 1
+
+    # 2. Blocker 2: Track title changed after preview -> AlbumRefreshConflictError, then fresh preview succeeds
+    custom_storage.update_track(user_id, trk.id, {"title": "Previewed Title"})
+    prev_t1 = custom_storage.preview_album_entry_refresh(user_id, alb.id, eid)
+    fp_t1 = custom_storage.compute_refresh_source_metadata_fingerprint(prev_t1.source_snapshot)
+    custom_storage.update_track(user_id, trk.id, {"title": "Drifted Title"})
+    before_m2 = (alb_dir / "album.json").read_bytes()
+    with pytest.raises(AlbumRefreshConflictError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, eid,
+            expected_source_revision=prev_t1.expected_source_revision,
+            expected_source_audio_sha256=prev_t1.expected_source_audio_sha256,
+            expected_source_updated_at=prev_t1.expected_source_updated_at,
+            expected_revision=alb.revision,
+            expected_source_metadata_fingerprint=fp_t1,
+        )
+    assert (alb_dir / "album.json").read_bytes() == before_m2
+    prev_t2 = custom_storage.preview_album_entry_refresh(user_id, alb.id, eid)
+    fp_t2 = custom_storage.compute_refresh_source_metadata_fingerprint(prev_t2.source_snapshot)
+    alb = custom_storage.confirm_album_entry_refresh(
+        user_id, alb.id, eid,
+        expected_source_revision=prev_t2.expected_source_revision,
+        expected_source_audio_sha256=prev_t2.expected_source_audio_sha256,
+        expected_source_updated_at=prev_t2.expected_source_updated_at,
+        expected_revision=alb.revision,
+        expected_source_metadata_fingerprint=fp_t2,
+    )
+    assert alb.tracks[0].snapshot.source_track_title == "Drifted Title"
+
+    # 3. Blocker 2: Track artist changed after preview -> AlbumRefreshConflictError, then fresh preview succeeds
+    custom_storage.update_track(user_id, trk.id, {"artist": "Previewed Artist"})
+    prev_a1 = custom_storage.preview_album_entry_refresh(user_id, alb.id, eid)
+    fp_a1 = custom_storage.compute_refresh_source_metadata_fingerprint(prev_a1.source_snapshot)
+    custom_storage.update_track(user_id, trk.id, {"artist": "Drifted Artist"})
+    with pytest.raises(AlbumRefreshConflictError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, eid,
+            expected_source_revision=prev_a1.expected_source_revision,
+            expected_source_audio_sha256=prev_a1.expected_source_audio_sha256,
+            expected_source_updated_at=prev_a1.expected_source_updated_at,
+            expected_revision=alb.revision,
+            expected_source_metadata_fingerprint=fp_a1,
+        )
+    prev_a2 = custom_storage.preview_album_entry_refresh(user_id, alb.id, eid)
+    fp_a2 = custom_storage.compute_refresh_source_metadata_fingerprint(prev_a2.source_snapshot)
+    alb = custom_storage.confirm_album_entry_refresh(
+        user_id, alb.id, eid,
+        expected_source_revision=prev_a2.expected_source_revision,
+        expected_source_audio_sha256=prev_a2.expected_source_audio_sha256,
+        expected_source_updated_at=prev_a2.expected_source_updated_at,
+        expected_revision=alb.revision,
+        expected_source_metadata_fingerprint=fp_a2,
+    )
+    assert alb.tracks[0].snapshot.source_track_artist == "Drifted Artist"
+
+
+def test_feature3_mandatory_fingerprint_rejects_omission_and_none(custom_storage: ProjectStorageManager):
+    """Feature 3 final blocker: direct storage confirmation without fingerprint or with None is rejected before mutation."""
+    import io
+    import wave
+    from backend.project_storage import ProjectValidationError
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x18\x19" * 300)
+    wav_a = buf.getvalue()
+
+    user_id = "u_feature3_req_fp"
+    trk = custom_storage.create_track(user_id=user_id, title="Title A")
+    tk = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_a, original_filename="fp.wav", extension=".wav")
+    alb = custom_storage.create_album(user_id=user_id, title="Mandatory FP LP")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk.id)
+    eid = alb.tracks[0].id
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+
+    prev = custom_storage.preview_album_entry_refresh(user_id, alb.id, eid)
+    custom_storage.update_track(user_id, trk.id, {"title": "Title B"})
+    before_m = (alb_dir / "album.json").read_bytes()
+
+    # 1. Omitted fingerprint -> ProjectValidationError, Album unchanged
+    with pytest.raises(ProjectValidationError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, eid,
+            expected_source_revision=prev.expected_source_revision,
+            expected_source_audio_sha256=prev.expected_source_audio_sha256,
+            expected_source_updated_at=prev.expected_source_updated_at,
+            expected_revision=alb.revision,
+        )
+    # 2. Explicit None fingerprint -> ProjectValidationError, Album unchanged
+    with pytest.raises(ProjectValidationError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, eid,
+            expected_source_revision=prev.expected_source_revision,
+            expected_source_audio_sha256=prev.expected_source_audio_sha256,
+            expected_source_updated_at=prev.expected_source_updated_at,
+            expected_revision=alb.revision,
+            expected_source_metadata_fingerprint=None,
+        )
+    assert (alb_dir / "album.json").read_bytes() == before_m
+    assert not (alb_dir / "journal.json").exists()
+    assert custom_storage.get_album(user_id, alb.id).tracks[0].snapshot.source_track_title == "Title A"

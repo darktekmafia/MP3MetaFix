@@ -1585,6 +1585,7 @@
         expected_source_revision: preview.expected_source_revision,
         expected_source_audio_sha256: preview.expected_source_audio_sha256,
         expected_source_updated_at: preview.expected_source_updated_at,
+        expected_source_metadata_fingerprint: preview.expected_source_metadata_fingerprint || null,
         requestSeq,
       });
       if (dom.btnConfirmRefreshAlbumEntry) {
@@ -1624,6 +1625,7 @@
           expected_source_revision: pending.expected_source_revision,
           expected_source_audio_sha256: pending.expected_source_audio_sha256,
           expected_source_updated_at: pending.expected_source_updated_at,
+          expected_source_metadata_fingerprint: pending.expected_source_metadata_fingerprint || null,
         }),
       });
 
