@@ -2878,6 +2878,7 @@ class ProjectStorageManager:
         expected_revision: int,
         payload_sha256: str,
         idempotency_key: Optional[str],
+        pre_manifest_publish_check: Optional[Callable[[bool], None]] = None,
     ) -> AlbumMetadata:
         """Execute PREPARED -> PUBLISH_INTENT -> manifest -> COMMITTED receipt under _album_lock."""
         tx_id = f"tx_{secrets.token_hex(12)}"
@@ -2967,6 +2968,9 @@ class ProjectStorageManager:
         )
         prep_sha = self._compute_canonical_manifest_sha256(prep_journal.model_dump(mode="json"))
 
+        if pre_manifest_publish_check is not None:
+            pre_manifest_publish_check(False)
+
         # Step 1: Durable PREPARED
         try:
             self._write_album_journal_atomic_in_dir(album_dir_fd, prep_journal)
@@ -3019,6 +3023,16 @@ class ProjectStorageManager:
         self._read_json_file_verified_in_dir(
             album_dir_fd, "album.json", sync_file=False, required=True, expected_identity=album_identity, expected_sha256=album_sha256
         )
+
+        if pre_manifest_publish_check is not None:
+            try:
+                pre_manifest_publish_check(True)
+            except (AlbumManifestCorruptError, AlbumDurabilityUncertainError):
+                raise
+            except Exception as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"Pre-publication artifact revalidation failed after durable PUBLISH_INTENT for '{tx_id}': {exc}"
+                ) from exc
 
         # Step 3: Atomic Manifest Publication
         try:
@@ -3991,13 +4005,622 @@ class ProjectStorageManager:
                 return False
         return True
 
-    def finalize_album(self, user_id: str, album_id: str, expected_revision: int) -> Optional[AlbumMetadata]:
-        """Validate all recorded entries, standalone snapshots, and storage integrity via album_dir_fd before locking."""
+    @staticmethod
+    def _compute_finalize_album_payload_sha256(expected_revision: int) -> str:
+        """Compute deterministic canonical SHA-256 for an enrolled finalize_album request."""
+        payload = {
+            "op": "finalize_album",
+            "expected_revision": int(expected_revision),
+        }
+        canonical_bytes = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(canonical_bytes).hexdigest()
+
+    @staticmethod
+    def _seal_stat_tuple(st: os.stat_result) -> Tuple[int, int, int, int, int]:
+        """Return (st_dev, st_ino, st_size, st_mtime_ns, st_ctime_ns) for artifact sealing."""
+        mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))
+        ctime_ns = getattr(st, "st_ctime_ns", int(st.st_ctime * 1_000_000_000))
+        return (int(st.st_dev), int(st.st_ino), int(st.st_size), int(mtime_ns), int(ctime_ns))
+
+    def _seal_album_artifacts_for_finalization_locked(
+        self,
+        album_dir_fd: int,
+        album: AlbumMetadata,
+        *,
+        has_journal: bool,
+    ) -> Dict[str, Any]:
+        """Verify and durably seal all Album recordings, snapshots, cover, and directories before PREPARED."""
+        import errno
+
+        errors: List[Dict[str, Any]] = []
+        if not album.tracks:
+            errors.append({
+                "entry_id": None,
+                "track_number": None,
+                "track_id": None,
+                "reason": "Album must contain at least one recorded entry before finalization.",
+            })
+
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            alb_st = os.fstat(album_dir_fd)
+        except OSError as exc:
+            raise AlbumDurabilityUncertainError(f"I/O failure stating album directory: {exc}") from exc
+        album_dir_id = (int(alb_st.st_dev), int(alb_st.st_ino))
+
+        entries_fd: Optional[int] = None
+        entries_dir_id: Optional[Tuple[int, int]] = None
+        sealed_entries: List[Tuple[str, str, Tuple[int, int], str, Tuple[int, int, int, int, int], str, Tuple[int, int, int, int, int], str]] = []
+        sealed_cover: Optional[Tuple[str, Tuple[int, int, int, int, int], str]] = None
+
+        try:
+            try:
+                entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
+            except FileNotFoundError:
+                entries_fd = None
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                    raise AlbumManifestCorruptError(f"Album entries root is not a regular directory: {exc}") from exc
+                raise AlbumDurabilityUncertainError(
+                    f"Cannot access album entries directory during sealing: {exc}"
+                ) from exc
+            if entries_fd is not None:
+                try:
+                    ent_st = os.fstat(entries_fd)
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Cannot stat album entries directory during sealing: {exc}"
+                    ) from exc
+                if not stat.S_ISDIR(ent_st.st_mode):
+                    raise AlbumManifestCorruptError("Album entries root is not a regular directory.")
+                entries_dir_id = (int(ent_st.st_dev), int(ent_st.st_ino))
+
+            manifest_entry_ids = set()
+            for entry in album.tracks:
+                manifest_entry_ids.add(entry.id)
+                if entry.is_placeholder or not entry.take_id:
+                    errors.append({
+                        "entry_id": entry.id,
+                        "track_number": entry.track_number,
+                        "track_id": entry.track_id,
+                        "reason": f"Track #{entry.track_number} (entry {entry.id}) is a placeholder with no selected take.",
+                    })
+                    continue
+
+                if not entry.id or not is_valid_project_id(entry.id, expected_prefix="ale"):
+                    errors.append({
+                        "entry_id": entry.id,
+                        "track_number": entry.track_number,
+                        "track_id": entry.track_id,
+                        "reason": f"Track #{entry.track_number} has an invalid entry identifier.",
+                    })
+                    continue
+
+                if entries_fd is None or not entry.has_owned_audio or entry.snapshot is None:
+                    errors.append({
+                        "entry_id": entry.id,
+                        "track_number": entry.track_number,
+                        "track_id": entry.track_id,
+                        "reason": f"Track #{entry.track_number} (entry {entry.id}) is missing its album-owned audio copy or metadata snapshot.",
+                    })
+                    continue
+
+                ehash = get_album_entry_dir_name(entry.id)
+                entry_fd: Optional[int] = None
+                try:
+                    entry_fd = os.open(ehash, dir_flags, dir_fd=entries_fd)
+                    edir_st = os.fstat(entry_fd)
+                    entry_dir_id = (int(edir_st.st_dev), int(edir_st.st_ino))
+
+                    audio_name: Optional[str] = None
+                    for ext in AUDIO_FORMATS:
+                        cand = f"audio{ext}"
+                        try:
+                            cst = os.lstat(cand, dir_fd=entry_fd)
+                            if stat.S_ISREG(cst.st_mode):
+                                audio_name = cand
+                                break
+                        except FileNotFoundError:
+                            continue
+                    if not audio_name:
+                        raise ValueError("Album-owned audio file is missing or not a regular file.")
+
+                    expected_entry_files = {"snapshot.json", audio_name}
+                    for cname in os.listdir(entry_fd):
+                        if cname.startswith((".staging_", ".tmp_", ".backup_")):
+                            raise ValueError("Incomplete recording transfer files present in entry directory.")
+                        if cname not in expected_entry_files:
+                            raise ValueError(f"Unexpected artifact '{cname}' present in entry directory.")
+                        cst = os.lstat(cname, dir_fd=entry_fd)
+                        if not stat.S_ISREG(cst.st_mode):
+                            raise ValueError(f"Entry artifact '{cname}' is not a regular file.")
+
+                    afd = os.open(audio_name, file_flags, dir_fd=entry_fd)
+                    try:
+                        pre_ast = os.fstat(afd)
+                        if not stat.S_ISREG(pre_ast.st_mode):
+                            raise AlbumManifestCorruptError(f"Entry audio '{audio_name}' is not a regular file.")
+                        if pre_ast.st_size < 32:
+                            raise ValueError("Audio file is empty or truncated (< 32 bytes).")
+                        h = hashlib.sha256()
+                        first_chunk = os.read(afd, 64)
+                        h.update(first_chunk)
+                        ext = os.path.splitext(audio_name)[1].lower()
+                        if not matches_audio_header(first_chunk, ext):
+                            raise ValueError("Audio file header does not match container format.")
+                        while True:
+                            chunk = os.read(afd, 65536)
+                            if not chunk:
+                                break
+                            h.update(chunk)
+                        if ext == ".wav":
+                            import wave
+                            os.lseek(afd, 0, os.SEEK_SET)
+                            dup_fd = os.dup(afd)
+                            with os.fdopen(dup_fd, "rb") as wf:
+                                with wave.open(wf, "rb") as wv:
+                                    if wv.getnchannels() <= 0 or wv.getframerate() <= 0:
+                                        raise ValueError("Invalid WAV container parameters.")
+                        elif ext == ".m4a":
+                            import mutagen.mp4
+                            os.lseek(afd, 0, os.SEEK_SET)
+                            dup_fd = os.dup(afd)
+                            with os.fdopen(dup_fd, "rb") as mf:
+                                mutagen.mp4.MP4(mf)
+                        audio_sha = h.hexdigest()
+                        if pre_ast.st_size != entry.snapshot.size_bytes or audio_sha != entry.snapshot.audio_sha256:
+                            raise ValueError("Album audio copy checksum or size does not match snapshot.")
+                        try:
+                            _fsync_file_fd(afd)
+                            post_ast = os.fstat(afd)
+                            dir_ast = os.lstat(audio_name, dir_fd=entry_fd)
+                        except OSError as exc:
+                            raise AlbumDurabilityUncertainError(
+                                f"Audio sealing synchronization failed for entry '{entry.id}': {exc}"
+                            ) from exc
+                        pre_a_tup = self._seal_stat_tuple(pre_ast)
+                        if self._seal_stat_tuple(post_ast) != pre_a_tup or self._seal_stat_tuple(dir_ast) != pre_a_tup:
+                            raise AlbumManifestCorruptError(
+                                f"Entry audio '{audio_name}' changed or was substituted during finalization sealing."
+                            )
+                    finally:
+                        os.close(afd)
+
+                    sfd = os.open("snapshot.json", file_flags, dir_fd=entry_fd)
+                    try:
+                        pre_sst = os.fstat(sfd)
+                        if not stat.S_ISREG(pre_sst.st_mode):
+                            raise AlbumManifestCorruptError("Entry snapshot.json is not a regular file.")
+                        with os.fdopen(os.dup(sfd), "rb") as sf:
+                            snap_bytes = sf.read()
+                        snap_sha = hashlib.sha256(snap_bytes).hexdigest()
+                        try:
+                            disk_snap = AlbumEntrySnapshot(**json.loads(snap_bytes.decode("utf-8")))
+                        except Exception as se:
+                            raise ValueError(f"Standalone snapshot.json is missing or invalid: {se}") from se
+                        if (
+                            disk_snap.entry_id != entry.id
+                            or disk_snap.source_track_id != entry.track_id
+                            or disk_snap.source_take_id != entry.take_id
+                        ):
+                            raise ValueError("Standalone snapshot.json entry/track/take identity mismatch.")
+                        if not self._snapshots_semantically_equal(disk_snap, entry.snapshot):
+                            raise ValueError("Standalone snapshot.json does not match committed manifest snapshot.")
+                        try:
+                            _fsync_file_fd(sfd)
+                            post_sst = os.fstat(sfd)
+                            dir_sst = os.lstat("snapshot.json", dir_fd=entry_fd)
+                        except OSError as exc:
+                            raise AlbumDurabilityUncertainError(
+                                f"Snapshot sealing synchronization failed for entry '{entry.id}': {exc}"
+                            ) from exc
+                        pre_s_tup = self._seal_stat_tuple(pre_sst)
+                        if self._seal_stat_tuple(post_sst) != pre_s_tup or self._seal_stat_tuple(dir_sst) != pre_s_tup:
+                            raise AlbumManifestCorruptError(
+                                f"Entry snapshot.json changed or was substituted during finalization sealing for '{entry.id}'."
+                            )
+                    finally:
+                        os.close(sfd)
+
+                    try:
+                        _fsync_dir_fd(entry_fd)
+                        post_edir_st = os.fstat(entry_fd)
+                    except OSError as exc:
+                        raise AlbumDurabilityUncertainError(
+                            f"Entry directory sealing synchronization failed for '{entry.id}': {exc}"
+                        ) from exc
+                    if (int(post_edir_st.st_dev), int(post_edir_st.st_ino)) != entry_dir_id:
+                        raise AlbumManifestCorruptError(f"Entry directory identity changed during sealing for '{entry.id}'.")
+
+                    sealed_entries.append((entry.id, ehash, entry_dir_id, audio_name, pre_a_tup, audio_sha, pre_s_tup, snap_sha))
+                except (AlbumDurabilityUncertainError, AlbumManifestCorruptError):
+                    raise
+                except FileNotFoundError as exc:
+                    errors.append({
+                        "entry_id": entry.id,
+                        "track_number": entry.track_number,
+                        "track_id": entry.track_id,
+                        "reason": f"Track #{entry.track_number} (entry {entry.id}) failed integrity check: {exc}",
+                    })
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                        raise AlbumManifestCorruptError(
+                            f"Unsafe or non-regular entry artifact for '{entry.id}': {exc}"
+                        ) from exc
+                    raise AlbumDurabilityUncertainError(
+                        f"Unavailable verification evidence for entry '{entry.id}': {exc}"
+                    ) from exc
+                except Exception as e:
+                    errors.append({
+                        "entry_id": entry.id,
+                        "track_number": entry.track_number,
+                        "track_id": entry.track_id,
+                        "reason": f"Track #{entry.track_number} (entry {entry.id}) failed integrity check: {e}",
+                    })
+                finally:
+                    if entry_fd is not None:
+                        try:
+                            os.close(entry_fd)
+                        except OSError:
+                            pass
+
+            allowed_cover_names = {"cover.jpg", "cover.jpeg", "cover.png", "cover.webp"} if album.has_cover else set()
+            seen_covers = []
+            try:
+                root_names = os.listdir(album_dir_fd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"Cannot list album root directory during sealing: {exc}"
+                ) from exc
+            for rname in root_names:
+                try:
+                    rst = os.lstat(rname, dir_fd=album_dir_fd)
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                        raise AlbumManifestCorruptError(
+                            f"Unsafe album root artifact '{rname}': {exc}"
+                        ) from exc
+                    raise AlbumDurabilityUncertainError(
+                        f"Cannot stat album root artifact '{rname}' during sealing: {exc}"
+                    ) from exc
+                if rname == "album.json":
+                    if not stat.S_ISREG(rst.st_mode):
+                        errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Album manifest is not a regular file."})
+                elif rname == "journal.json" and has_journal:
+                    if not stat.S_ISREG(rst.st_mode):
+                        errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Album journal is not a regular file."})
+                elif rname == "entries":
+                    if not stat.S_ISDIR(rst.st_mode):
+                        errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Album entries root is not a regular directory."})
+                elif rname in allowed_cover_names:
+                    if not stat.S_ISREG(rst.st_mode):
+                        errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": f"Album cover '{rname}' is not a regular file."})
+                    seen_covers.append(rname)
+                else:
+                    errors.append({
+                        "entry_id": None,
+                        "track_number": None,
+                        "track_id": None,
+                        "reason": f"Unexpected album root artifact '{rname}' prevents finalization.",
+                    })
+            if len(seen_covers) > 1:
+                errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Multiple cover artwork files present in album root."})
+
+            if entries_fd is not None:
+                expected_dirs = {get_album_entry_dir_name(eid) for eid in manifest_entry_ids if eid}
+                try:
+                    entries_list = os.listdir(entries_fd)
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(f"Cannot list entries directory during sealing: {exc}") from exc
+                for iname in entries_list:
+                    try:
+                        ist = os.lstat(iname, dir_fd=entries_fd)
+                    except FileNotFoundError:
+                        continue
+                    except OSError as exc:
+                        if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                            raise AlbumManifestCorruptError(f"Unsafe entry directory '{iname}': {exc}") from exc
+                        raise AlbumDurabilityUncertainError(f"Cannot stat entry directory '{iname}' during sealing: {exc}") from exc
+                    if not stat.S_ISDIR(ist.st_mode) or iname not in expected_dirs:
+                        errors.append({
+                            "entry_id": None,
+                            "track_number": None,
+                            "track_id": None,
+                            "reason": f"Album storage directory '{iname}' is inconsistent with the manifest.",
+                        })
+
+            if errors:
+                raise AlbumFinalizationError(
+                    "Album cannot be finalized: " + " ".join(e["reason"] for e in errors),
+                    errors=errors,
+                )
+
+            if len(seen_covers) == 1:
+                cover_name = seen_covers[0]
+                try:
+                    cfd = os.open(cover_name, file_flags, dir_fd=album_dir_fd)
+                except FileNotFoundError as exc:
+                    raise AlbumFinalizationError(
+                        f"Album cannot be finalized: Cover '{cover_name}' disappeared during validation.",
+                        errors=[{"entry_id": None, "track_number": None, "track_id": None, "reason": f"Cover '{cover_name}' missing."}],
+                    ) from exc
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                        raise AlbumManifestCorruptError(f"Unsafe album cover '{cover_name}': {exc}") from exc
+                    raise AlbumDurabilityUncertainError(f"Cannot open album cover '{cover_name}' during sealing: {exc}") from exc
+                try:
+                    try:
+                        pre_cst = os.fstat(cfd)
+                    except OSError as exc:
+                        raise AlbumDurabilityUncertainError(f"Cannot stat album cover '{cover_name}' during sealing: {exc}") from exc
+                    if not stat.S_ISREG(pre_cst.st_mode) or pre_cst.st_size <= 0:
+                        raise AlbumManifestCorruptError(f"Album cover '{cover_name}' is invalid.")
+                    try:
+                        with os.fdopen(os.dup(cfd), "rb") as cf:
+                            cover_bytes = cf.read()
+                    except OSError as exc:
+                        raise AlbumDurabilityUncertainError(f"Cannot read album cover '{cover_name}' during sealing: {exc}") from exc
+                    cover_sha = hashlib.sha256(cover_bytes).hexdigest()
+                    try:
+                        _fsync_file_fd(cfd)
+                        post_cst = os.fstat(cfd)
+                        dir_cst = os.lstat(cover_name, dir_fd=album_dir_fd)
+                    except OSError as exc:
+                        raise AlbumDurabilityUncertainError(
+                            f"Cover artwork sealing synchronization failed for '{cover_name}': {exc}"
+                        ) from exc
+                    pre_c_tup = self._seal_stat_tuple(pre_cst)
+                    if self._seal_stat_tuple(post_cst) != pre_c_tup or self._seal_stat_tuple(dir_cst) != pre_c_tup:
+                        raise AlbumManifestCorruptError(
+                            f"Album cover '{cover_name}' changed or was substituted during finalization sealing."
+                        )
+                    sealed_cover = (cover_name, pre_c_tup, cover_sha)
+                finally:
+                    try:
+                        os.close(cfd)
+                    except OSError:
+                        pass
+
+            if entries_fd is not None:
+                try:
+                    _fsync_dir_fd(entries_fd)
+                    post_ent = os.fstat(entries_fd)
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(f"Entries directory sealing synchronization failed: {exc}") from exc
+                if (int(post_ent.st_dev), int(post_ent.st_ino)) != entries_dir_id:
+                    raise AlbumManifestCorruptError("Entries directory identity changed during sealing.")
+
+            try:
+                _fsync_dir_fd(album_dir_fd)
+                post_alb = os.fstat(album_dir_fd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(f"Album root directory sealing synchronization failed: {exc}") from exc
+            if (int(post_alb.st_dev), int(post_alb.st_ino)) != album_dir_id:
+                raise AlbumManifestCorruptError("Album root directory identity changed during sealing.")
+
+            return {
+                "album_dir_id": album_dir_id,
+                "entries_dir_id": entries_dir_id,
+                "entries": sealed_entries,
+                "cover": sealed_cover,
+            }
+        finally:
+            if entries_fd is not None:
+                try:
+                    os.close(entries_fd)
+                except OSError:
+                    pass
+
+    def _revalidate_sealed_finalization_bindings_locked(
+        self,
+        album_dir_fd: int,
+        sealed: Dict[str, Any],
+        *,
+        post_intent: bool,
+    ) -> None:
+        """Revalidate sealed artifact identities and hashes before PREPARED or manifest publication."""
+        import errno
+
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+
+        def _handle_missing_or_io(msg: str, exc: OSError, *, is_missing: bool) -> None:
+            if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                raise AlbumManifestCorruptError(f"{msg}: {exc}") from exc
+            if post_intent:
+                raise AlbumDurabilityUncertainError(f"{msg}: {exc}") from exc
+            if is_missing:
+                raise AlbumFinalizationError(
+                    f"Album cannot be finalized: {msg}",
+                    errors=[{"entry_id": None, "track_number": None, "track_id": None, "reason": msg}],
+                ) from exc
+            raise AlbumDurabilityUncertainError(f"{msg}: {exc}") from exc
+
+        try:
+            alb_st = os.fstat(album_dir_fd)
+        except OSError as exc:
+            _handle_missing_or_io("Cannot stat album directory during revalidation", exc, is_missing=False)
+            return
+        if (int(alb_st.st_dev), int(alb_st.st_ino)) != sealed["album_dir_id"]:
+            raise AlbumManifestCorruptError("Album root directory identity changed before publication.")
+
+        entries_fd: Optional[int] = None
+        try:
+            if sealed["entries_dir_id"] is not None:
+                try:
+                    entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
+                    ent_st = os.fstat(entries_fd)
+                except FileNotFoundError as exc:
+                    _handle_missing_or_io("Album entries directory disappeared before publication", exc, is_missing=True)
+                    return
+                except OSError as exc:
+                    _handle_missing_or_io("Cannot access album entries directory before publication", exc, is_missing=False)
+                    return
+                if (int(ent_st.st_dev), int(ent_st.st_ino)) != sealed["entries_dir_id"]:
+                    raise AlbumManifestCorruptError("Album entries directory identity changed before publication.")
+
+            for entry_id, ehash, entry_dir_id, audio_name, audio_stat, _audio_sha, snap_stat, snap_sha in sealed["entries"]:
+                entry_fd: Optional[int] = None
+                try:
+                    try:
+                        entry_fd = os.open(ehash, dir_flags, dir_fd=entries_fd)
+                        edir_st = os.fstat(entry_fd)
+                    except FileNotFoundError as exc:
+                        _handle_missing_or_io(f"Entry directory missing for '{entry_id}'", exc, is_missing=True)
+                        return
+                    except OSError as exc:
+                        _handle_missing_or_io(f"Cannot access entry directory for '{entry_id}'", exc, is_missing=False)
+                        return
+                    if (int(edir_st.st_dev), int(edir_st.st_ino)) != entry_dir_id:
+                        raise AlbumManifestCorruptError(f"Entry directory identity changed for '{entry_id}' before publication.")
+
+                    try:
+                        afd = os.open(audio_name, file_flags, dir_fd=entry_fd)
+                    except FileNotFoundError as exc:
+                        _handle_missing_or_io(f"Entry audio '{audio_name}' missing for '{entry_id}'", exc, is_missing=True)
+                        return
+                    except OSError as exc:
+                        _handle_missing_or_io(f"Cannot open entry audio '{audio_name}' for '{entry_id}'", exc, is_missing=False)
+                        return
+                    try:
+                        try:
+                            ast = os.fstat(afd)
+                        except OSError as exc:
+                            _handle_missing_or_io(f"Cannot stat entry audio '{audio_name}' for '{entry_id}'", exc, is_missing=False)
+                            return
+                        if not stat.S_ISREG(ast.st_mode) or self._seal_stat_tuple(ast) != audio_stat:
+                            raise AlbumManifestCorruptError(
+                                f"Entry audio '{audio_name}' was substituted or modified before publication for '{entry_id}'."
+                            )
+                    finally:
+                        try:
+                            os.close(afd)
+                        except OSError:
+                            pass
+
+                    try:
+                        sfd = os.open("snapshot.json", file_flags, dir_fd=entry_fd)
+                    except FileNotFoundError as exc:
+                        _handle_missing_or_io(f"Entry snapshot.json missing for '{entry_id}'", exc, is_missing=True)
+                        return
+                    except OSError as exc:
+                        _handle_missing_or_io(f"Cannot open entry snapshot.json for '{entry_id}'", exc, is_missing=False)
+                        return
+                    try:
+                        try:
+                            sst = os.fstat(sfd)
+                        except OSError as exc:
+                            _handle_missing_or_io(f"Cannot stat entry snapshot.json for '{entry_id}'", exc, is_missing=False)
+                            return
+                        if not stat.S_ISREG(sst.st_mode) or self._seal_stat_tuple(sst) != snap_stat:
+                            raise AlbumManifestCorruptError(
+                                f"Entry snapshot.json was substituted or modified before publication for '{entry_id}'."
+                            )
+                        try:
+                            with os.fdopen(os.dup(sfd), "rb") as sf:
+                                snap_read = sf.read()
+                        except OSError as exc:
+                            _handle_missing_or_io(f"Cannot read entry snapshot.json for '{entry_id}'", exc, is_missing=False)
+                            return
+                        if hashlib.sha256(snap_read).hexdigest() != snap_sha:
+                            raise AlbumManifestCorruptError(
+                                f"Entry snapshot.json content changed before publication for '{entry_id}'."
+                            )
+                    finally:
+                        try:
+                            os.close(sfd)
+                        except OSError:
+                            pass
+                finally:
+                    if entry_fd is not None:
+                        try:
+                            os.close(entry_fd)
+                        except OSError:
+                            pass
+
+            if sealed["cover"] is not None:
+                cover_name, cover_stat, cover_sha = sealed["cover"]
+                try:
+                    cfd = os.open(cover_name, file_flags, dir_fd=album_dir_fd)
+                except FileNotFoundError as exc:
+                    _handle_missing_or_io(f"Album cover '{cover_name}' missing before publication", exc, is_missing=True)
+                    return
+                except OSError as exc:
+                    _handle_missing_or_io(f"Cannot open album cover '{cover_name}' before publication", exc, is_missing=False)
+                    return
+                try:
+                    try:
+                        cst = os.fstat(cfd)
+                    except OSError as exc:
+                        _handle_missing_or_io(f"Cannot stat album cover '{cover_name}' before publication", exc, is_missing=False)
+                        return
+                    if not stat.S_ISREG(cst.st_mode) or self._seal_stat_tuple(cst) != cover_stat:
+                        raise AlbumManifestCorruptError(
+                            f"Album cover '{cover_name}' was substituted or modified before publication."
+                        )
+                    try:
+                        with os.fdopen(os.dup(cfd), "rb") as cf:
+                            cov_read = cf.read()
+                    except OSError as exc:
+                        _handle_missing_or_io(f"Cannot read album cover '{cover_name}' before publication", exc, is_missing=False)
+                        return
+                    if hashlib.sha256(cov_read).hexdigest() != cover_sha:
+                        raise AlbumManifestCorruptError(
+                            f"Album cover '{cover_name}' content changed before publication."
+                        )
+                finally:
+                    try:
+                        os.close(cfd)
+                    except OSError:
+                        pass
+        finally:
+            if entries_fd is not None:
+                try:
+                    os.close(entries_fd)
+                except OSError:
+                    pass
+
+    def finalize_album(
+        self,
+        user_id: str,
+        album_id: str,
+        expected_revision: int,
+        *,
+        idempotency_key: Optional[str] = None,
+    ) -> Optional[AlbumMetadata]:
+        """Validate, seal, and durably finalize an Album release under v2 transaction journaling."""
+        res = self.finalize_album_with_replay_status(
+            user_id, album_id, expected_revision=expected_revision, idempotency_key=idempotency_key
+        )
+        return res[0] if res is not None else None
+
+    def finalize_album_with_replay_status(
+        self,
+        user_id: str,
+        album_id: str,
+        expected_revision: int,
+        *,
+        idempotency_key: Optional[str] = None,
+    ) -> Optional[Tuple[AlbumMetadata, bool]]:
+        """Enrolled v2 Album finalization writer returning (AlbumMetadata, is_idempotent_replay)."""
         expected_revision = self._validate_expected_revision(expected_revision)
+        clean_key = self._validate_idempotency_key(idempotency_key)
         try:
             self._get_album_dir_path(user_id, album_id)
         except ValueError:
             return None
+
+        op = "finalize_album"
+        payload_sha256 = self._compute_finalize_album_payload_sha256(expected_revision)
 
         with self._album_lock(user_id, album_id):
             album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
@@ -4005,15 +4628,37 @@ class ProjectStorageManager:
                 return None
             try:
                 raw_holder: List[Dict[str, Any]] = []
-                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
+                loaded = self._read_album_from_dir_fd(
+                    album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder
+                )
                 if not loaded:
                     return None
-                album, data, _ = loaded
+                album, norm_data, manifest_st = loaded
+                raw_identity = (manifest_st.st_dev, manifest_st.st_ino)
+                evidence: Dict[str, Any] = {}
                 _, journal, consistency = self._validate_album_evidence_phase_a_locked(
-                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
+                    album_id,
+                    album_dir_fd,
+                    raw_album_data=raw_holder[0],
+                    raw_album_identity=raw_identity,
+                    evidence_out=evidence,
                 )
+
+                replay = self._resolve_v2_idempotency_replay_locked(
+                    album_id=album_id,
+                    album_dir_fd=album_dir_fd,
+                    current_album=album,
+                    evidence=evidence,
+                    idempotency_key=clean_key,
+                    op=op,
+                    expected_revision=expected_revision,
+                    payload_sha256=payload_sha256,
+                )
+                if replay is not None:
+                    return replay
+
                 self._check_album_mutation_eligibility_phase_b_locked(
-                    album_id, journal, consistency, is_enrolled=False
+                    album_id, journal, consistency, is_enrolled=True
                 )
 
                 if self._is_album_finalized(album):
@@ -4023,213 +4668,41 @@ class ProjectStorageManager:
                         f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
                     )
 
-                errors: List[Dict[str, Any]] = []
-                if not album.tracks:
-                    errors.append({
-                        "entry_id": None,
-                        "track_number": None,
-                        "track_id": None,
-                        "reason": "Album must contain at least one recorded entry before finalization.",
-                    })
+                sealed = self._seal_album_artifacts_for_finalization_locked(
+                    album_dir_fd, album, has_journal=(journal is not None)
+                )
 
-                dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-                file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-                entries_fd: Optional[int] = None
-                try:
-                    entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
-                except FileNotFoundError:
-                    entries_fd = None
-                except OSError:
-                    errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Album entries root is not a regular directory."})
+                now = time.time()
+                target_data = copy.deepcopy(norm_data)
+                new_rev = int(norm_data.get("revision", 1)) + 1
+                target_data["status"] = WorkspaceStatus.COMPLETED.value
+                target_data["is_finalized"] = True
+                target_data["finalized_at"] = now
+                target_data["revision"] = new_rev
+                target_data["updated_at"] = now
+                revs = list(target_data.get("revisions") or [])
+                revs.append({
+                    "revision": new_rev,
+                    "timestamp": now,
+                    "change_summary": "Finalized album release",
+                    "changed_fields": ["status", "is_finalized", "finalized_at"],
+                })
+                target_data["revisions"] = revs
 
-                try:
-                    manifest_entry_ids = set()
-                    for entry in album.tracks:
-                        manifest_entry_ids.add(entry.id)
-                        if entry.is_placeholder or not entry.take_id:
-                            errors.append({
-                                "entry_id": entry.id,
-                                "track_number": entry.track_number,
-                                "track_id": entry.track_id,
-                                "reason": f"Track #{entry.track_number} (entry {entry.id}) is a placeholder with no selected take.",
-                            })
-                            continue
-
-                        if not entry.id or not is_valid_project_id(entry.id, expected_prefix="ale"):
-                            errors.append({
-                                "entry_id": entry.id,
-                                "track_number": entry.track_number,
-                                "track_id": entry.track_id,
-                                "reason": f"Track #{entry.track_number} has an invalid entry identifier.",
-                            })
-                            continue
-
-                        if entries_fd is None or not entry.has_owned_audio or entry.snapshot is None:
-                            errors.append({
-                                "entry_id": entry.id,
-                                "track_number": entry.track_number,
-                                "track_id": entry.track_id,
-                                "reason": f"Track #{entry.track_number} (entry {entry.id}) is missing its album-owned audio copy or metadata snapshot.",
-                            })
-                            continue
-
-                        ehash = get_album_entry_dir_name(entry.id)
-                        entry_fd: Optional[int] = None
-                        try:
-                            entry_fd = os.open(ehash, dir_flags, dir_fd=entries_fd)
-                            audio_name: Optional[str] = None
-                            for ext in AUDIO_FORMATS:
-                                cand = f"audio{ext}"
-                                try:
-                                    cst = os.lstat(cand, dir_fd=entry_fd)
-                                    if stat.S_ISREG(cst.st_mode):
-                                        audio_name = cand
-                                        break
-                                except FileNotFoundError:
-                                    continue
-                            if not audio_name:
-                                raise ValueError("Album-owned audio file is missing or not a regular file.")
-
-                            expected_entry_files = {"snapshot.json", audio_name}
-                            for cname in os.listdir(entry_fd):
-                                if cname.startswith((".staging_", ".tmp_", ".backup_")):
-                                    raise ValueError("Incomplete recording transfer files present in entry directory.")
-                                if cname not in expected_entry_files:
-                                    raise ValueError(f"Unexpected artifact '{cname}' present in entry directory.")
-                                cst = os.lstat(cname, dir_fd=entry_fd)
-                                if not stat.S_ISREG(cst.st_mode):
-                                    raise ValueError(f"Entry artifact '{cname}' is not a regular file.")
-
-                            afd = os.open(audio_name, file_flags, dir_fd=entry_fd)
-                            try:
-                                ast = os.fstat(afd)
-                                if ast.st_size < 32:
-                                    raise ValueError("Audio file is empty or truncated (< 32 bytes).")
-                                h = hashlib.sha256()
-                                first_chunk = os.read(afd, 64)
-                                h.update(first_chunk)
-                                ext = os.path.splitext(audio_name)[1].lower()
-                                if not matches_audio_header(first_chunk, ext):
-                                    raise ValueError("Audio file header does not match container format.")
-                                while True:
-                                    chunk = os.read(afd, 65536)
-                                    if not chunk:
-                                        break
-                                    h.update(chunk)
-                                if ext == ".wav":
-                                    import wave
-                                    os.lseek(afd, 0, os.SEEK_SET)
-                                    dup_fd = os.dup(afd)
-                                    with os.fdopen(dup_fd, "rb") as wf:
-                                        with wave.open(wf, "rb") as wv:
-                                            if wv.getnchannels() <= 0 or wv.getframerate() <= 0:
-                                                raise ValueError("Invalid WAV container parameters.")
-                                elif ext == ".m4a":
-                                    import mutagen.mp4
-                                    os.lseek(afd, 0, os.SEEK_SET)
-                                    dup_fd = os.dup(afd)
-                                    with os.fdopen(dup_fd, "rb") as mf:
-                                        mutagen.mp4.MP4(mf)
-                                if ast.st_size != entry.snapshot.size_bytes or h.hexdigest() != entry.snapshot.audio_sha256:
-                                    raise ValueError("Album audio copy checksum or size does not match snapshot.")
-                            finally:
-                                os.close(afd)
-
-                            sfd = os.open("snapshot.json", file_flags, dir_fd=entry_fd)
-                            try:
-                                with os.fdopen(sfd, "r", encoding="utf-8") as sf:
-                                    disk_snap = AlbumEntrySnapshot(**json.load(sf))
-                            except Exception as se:
-                                raise ValueError(f"Standalone snapshot.json is missing or invalid: {se}") from se
-
-                            if (
-                                disk_snap.entry_id != entry.id
-                                or disk_snap.source_track_id != entry.track_id
-                                or disk_snap.source_take_id != entry.take_id
-                            ):
-                                raise ValueError("Standalone snapshot.json entry/track/take identity mismatch.")
-                            if not self._snapshots_semantically_equal(disk_snap, entry.snapshot):
-                                raise ValueError("Standalone snapshot.json does not match committed manifest snapshot.")
-                        except Exception as e:
-                            errors.append({
-                                "entry_id": entry.id,
-                                "track_number": entry.track_number,
-                                "track_id": entry.track_id,
-                                "reason": f"Track #{entry.track_number} (entry {entry.id}) failed integrity check: {e}",
-                            })
-                        finally:
-                            if entry_fd is not None:
-                                try:
-                                    os.close(entry_fd)
-                                except OSError:
-                                    pass
-
-                    allowed_cover_names = {"cover.jpg", "cover.jpeg", "cover.png", "cover.webp"} if album.has_cover else set()
-                    seen_covers = []
-                    for rname in os.listdir(album_dir_fd):
-                        rst = os.lstat(rname, dir_fd=album_dir_fd)
-                        if rname == "album.json":
-                            if not stat.S_ISREG(rst.st_mode):
-                                errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Album manifest is not a regular file."})
-                        elif rname == "entries":
-                            if not stat.S_ISDIR(rst.st_mode):
-                                errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Album entries root is not a regular directory."})
-                        elif rname in allowed_cover_names:
-                            if not stat.S_ISREG(rst.st_mode):
-                                errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": f"Album cover '{rname}' is not a regular file."})
-                            seen_covers.append(rname)
-                        else:
-                            errors.append({
-                                "entry_id": None,
-                                "track_number": None,
-                                "track_id": None,
-                                "reason": f"Unexpected album root artifact '{rname}' prevents finalization.",
-                            })
-                    if len(seen_covers) > 1:
-                        errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Multiple cover artwork files present in album root."})
-
-                    if entries_fd is not None:
-                        expected_dirs = {get_album_entry_dir_name(eid) for eid in manifest_entry_ids if eid}
-                        for iname in os.listdir(entries_fd):
-                            ist = os.lstat(iname, dir_fd=entries_fd)
-                            if not stat.S_ISDIR(ist.st_mode) or iname not in expected_dirs:
-                                errors.append({
-                                    "entry_id": None,
-                                    "track_number": None,
-                                    "track_id": None,
-                                    "reason": f"Album storage directory '{iname}' is inconsistent with the manifest.",
-                                })
-
-                    if errors:
-                        raise AlbumFinalizationError(
-                            "Album cannot be finalized: " + " ".join(e["reason"] for e in errors),
-                            errors=errors,
-                        )
-
-                    now = time.time()
-                    new_rev = int(data.get("revision", 1)) + 1
-                    data["status"] = WorkspaceStatus.COMPLETED.value
-                    data["is_finalized"] = True
-                    data["finalized_at"] = now
-                    data["revision"] = new_rev
-                    data["updated_at"] = now
-                    if "revisions" not in data or not isinstance(data["revisions"], list):
-                        data["revisions"] = []
-                    data["revisions"].append({
-                        "revision": new_rev,
-                        "timestamp": now,
-                        "change_summary": "Finalized album release",
-                        "changed_fields": ["status", "is_finalized", "finalized_at"],
-                    })
-                    validated_album = AlbumMetadata(**data)
-                    _publish_manifest_atomic_in_dir(album_dir_fd, "album.json", data)
-                    return validated_album
-                finally:
-                    if entries_fd is not None:
-                        try:
-                            os.close(entries_fd)
-                        except OSError:
-                            pass
+                published = self._execute_v2_album_tx_locked(
+                    album_id=album_id,
+                    album_dir_fd=album_dir_fd,
+                    evidence=evidence,
+                    target_data=target_data,
+                    op=op,
+                    expected_revision=expected_revision,
+                    payload_sha256=payload_sha256,
+                    idempotency_key=clean_key,
+                    pre_manifest_publish_check=lambda post_intent: self._revalidate_sealed_finalization_bindings_locked(
+                        album_dir_fd, sealed, post_intent=post_intent
+                    ),
+                )
+                return published, False
             finally:
                 try:
                     os.close(album_dir_fd)

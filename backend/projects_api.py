@@ -74,6 +74,8 @@ from backend.project_storage import (
     AlbumTransactionAbortedError,
     AlbumRefreshConflictError,
     AlbumFinalizationError,
+    ManifestPublishError,
+    ManifestPublishState,
 )
 
 
@@ -1122,7 +1124,9 @@ async def confirm_album_entry_refresh(
 @projects_router.post("/albums/{album_id}/finalize", response_model=AlbumMetadata)
 async def finalize_album(
     album_id: str,
+    response: Response,
     expected_revision: str = Query(...),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Validate all album recordings and atomically mark an album release as finalized and immutable."""
@@ -1130,20 +1134,44 @@ async def finalize_album(
     _get_album_or_http(user["id"], album_id)
 
     try:
-        finalized = project_storage_manager.finalize_album(
-            user["id"], album_id, expected_revision=rev
+        res = project_storage_manager.finalize_album_with_replay_status(
+            user["id"], album_id, expected_revision=rev, idempotency_key=idempotency_key
         )
-    except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumRevisionConflictError) as e:
+    except (
+        AlbumDurabilityUncertainError,
+        AlbumMutationNotEnrolledError,
+        AlbumIdempotencyConflictError,
+        AlbumTransactionAbortedError,
+        AlbumRevisionConflictError,
+    ) as e:
         _raise_album_durability_or_conflict_http_error(e)
+    except ManifestPublishError as e:
+        if e.publish_state == ManifestPublishState.NOT_PUBLISHED:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "message": "Album finalization failed before transaction journal publication.",
+                    "error_code": "publication_failed",
+                },
+                headers={"X-Error-Code": "publication_failed"},
+            )
+        _raise_album_durability_or_conflict_http_error(
+            AlbumDurabilityUncertainError("Album durability state is uncertain after publication failure.")
+        )
     except AlbumFinalizedError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except ProjectValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except AlbumFinalizationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"message": str(e), "errors": e.errors})
 
-    if not finalized:
+    if not res:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    finalized, is_replay = res
+    if is_replay:
+        response.headers["X-Idempotent-Replay"] = "true"
     return finalized
 
 
