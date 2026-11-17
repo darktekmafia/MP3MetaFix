@@ -67,6 +67,7 @@ from backend.project_models import (
     ActiveTxRecord,
     RetainedArtifactRecord,
     IdempotencyRecord,
+    TerminalTxReceipt,
     AlbumJournal,
 )
 from backend.audio_formats import AUDIO_FORMATS, matches_audio_header, validate_audio_container
@@ -144,6 +145,11 @@ class AlbumManifestCorruptError(ProjectStorageError):
     pass
 
 
+class AlbumDurabilityUncertainError(ProjectStorageError):
+    """Raised when album durability or recovery evidence is ambiguous or un-synchronized."""
+    pass
+
+
 class ManifestPublishState(str, Enum):
     NOT_PUBLISHED = "not_published"
     PUBLISHED = "published"
@@ -157,6 +163,11 @@ class ManifestPublishError(ProjectStorageError):
         super().__init__(message)
         self.publish_state = publish_state
         self.cause = cause
+
+
+def _fsync_file_fd(file_fd: int) -> None:
+    """Synchronize file contents and metadata on Linux POSIX filesystems without swallowing I/O errors."""
+    os.fsync(file_fd)
 
 
 def _fsync_dir_fd(dir_fd: int) -> None:
@@ -4223,6 +4234,773 @@ class ProjectStorageManager:
             return RecoveryConsistency.CORRUPT
 
         return RecoveryConsistency.CORRUPT
+
+    @classmethod
+    def _read_json_file_verified_in_dir(
+        cls,
+        dir_fd: int,
+        filename: str,
+        *,
+        sync_file: bool = False,
+        required: bool = False,
+        expected_identity: Optional[Tuple[int, int]] = None,
+        expected_sha256: Optional[str] = None,
+    ) -> Optional[Tuple[Dict[str, Any], Tuple[int, int], str]]:
+        """Read a JSON object via O_NOFOLLOW with stable (st_dev, st_ino) and optional digest/identity binding."""
+        import errno
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = -1
+        try:
+            try:
+                fd = os.open(filename, flags, dir_fd=dir_fd)
+            except FileNotFoundError as exc:
+                if required:
+                    raise AlbumDurabilityUncertainError(
+                        f"Required album file '{filename}' disappeared before verification."
+                    ) from exc
+                return None
+
+            try:
+                pre_st = os.fstat(fd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(f"I/O failure stating '{filename}': {exc}") from exc
+            if not stat.S_ISREG(pre_st.st_mode):
+                raise AlbumManifestCorruptError(f"Album file '{filename}' is not a regular file.")
+
+            chunks: List[bytes] = []
+            try:
+                while True:
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                post_st = os.fstat(fd)
+                lst = os.lstat(filename, dir_fd=dir_fd)
+            except FileNotFoundError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"Album file '{filename}' disappeared during verification."
+                ) from exc
+            except PermissionError as exc:
+                raise AlbumDurabilityUncertainError(f"Album file '{filename}' is inaccessible: {exc}") from exc
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                    raise AlbumManifestCorruptError(f"Unsafe or non-regular album file '{filename}': {exc}") from exc
+                raise AlbumDurabilityUncertainError(f"I/O failure reading '{filename}': {exc}") from exc
+
+            file_id = (pre_st.st_dev, pre_st.st_ino)
+            if (
+                not stat.S_ISREG(lst.st_mode)
+                or file_id != (post_st.st_dev, post_st.st_ino)
+                or file_id != (lst.st_dev, lst.st_ino)
+            ):
+                raise AlbumManifestCorruptError(f"Album file '{filename}' changed identity during read.")
+            if expected_identity is not None and file_id != expected_identity:
+                raise AlbumManifestCorruptError(
+                    f"Album file '{filename}' was replaced between validation and synchronization."
+                )
+
+            try:
+                raw = json.loads(b"".join(chunks).decode("utf-8"))
+                if not isinstance(raw, dict):
+                    raise AlbumManifestCorruptError(f"Album file '{filename}' root must be a JSON object.")
+                canonical_sha = cls._compute_canonical_manifest_sha256(raw)
+            except (AlbumManifestCorruptError, AlbumDurabilityUncertainError):
+                raise
+            except Exception as exc:
+                raise AlbumManifestCorruptError(f"Failed to parse '{filename}': {exc}") from exc
+
+            if expected_sha256 is not None and canonical_sha != expected_sha256:
+                raise AlbumManifestCorruptError(
+                    f"Album file '{filename}' content changed between validation and synchronization."
+                )
+
+            if sync_file:
+                try:
+                    _fsync_file_fd(fd)
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Failed to synchronize '{filename}' during recovery: {exc}"
+                    ) from exc
+                try:
+                    re_lst = os.lstat(filename, dir_fd=dir_fd)
+                except FileNotFoundError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Album file '{filename}' disappeared during synchronization."
+                    ) from exc
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"I/O failure revalidating '{filename}' after sync: {exc}"
+                    ) from exc
+                if not stat.S_ISREG(re_lst.st_mode) or (re_lst.st_dev, re_lst.st_ino) != file_id:
+                    raise AlbumManifestCorruptError(
+                        f"Album file '{filename}' was replaced during synchronization."
+                    )
+
+            return raw, file_id, canonical_sha
+        except (AlbumManifestCorruptError, AlbumDurabilityUncertainError):
+            raise
+        except PermissionError as exc:
+            raise AlbumDurabilityUncertainError(f"Album file '{filename}' is inaccessible: {exc}") from exc
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                raise AlbumManifestCorruptError(f"Unsafe or non-regular album file '{filename}': {exc}") from exc
+            raise AlbumDurabilityUncertainError(f"I/O failure opening '{filename}': {exc}") from exc
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+    @classmethod
+    def _sync_terminal_journal_in_dir(
+        cls,
+        album_dir_fd: int,
+        *,
+        expected_journal_sha256: str,
+        expected_identity: Optional[Tuple[int, int]] = None,
+    ) -> None:
+        """Verify journal.json matches expected validated evidence and synchronize both file and album_dir_fd."""
+        res = cls._read_json_file_verified_in_dir(
+            album_dir_fd,
+            "journal.json",
+            sync_file=True,
+            required=True,
+            expected_identity=expected_identity,
+            expected_sha256=expected_journal_sha256,
+        )
+        assert res is not None
+        _, file_id, _ = res
+        try:
+            _fsync_dir_fd(album_dir_fd)
+        except OSError as exc:
+            raise AlbumDurabilityUncertainError(f"Failed to synchronize album directory for terminal journal: {exc}") from exc
+        try:
+            lst = os.lstat("journal.json", dir_fd=album_dir_fd)
+        except FileNotFoundError as exc:
+            raise AlbumDurabilityUncertainError("Terminal journal 'journal.json' disappeared after directory sync.") from exc
+        except OSError as exc:
+            raise AlbumDurabilityUncertainError(f"Failed to revalidate 'journal.json' after directory sync: {exc}") from exc
+        if not stat.S_ISREG(lst.st_mode) or (lst.st_dev, lst.st_ino) != file_id:
+            raise AlbumManifestCorruptError("Terminal journal 'journal.json' was replaced during synchronization.")
+
+    @staticmethod
+    def _revalidate_live_artifact_binding_in_dir(
+        album_dir_fd: int,
+        ref: ArtifactRefRecord,
+        expected_album_dir_id: Tuple[int, int],
+        expected_dir_ids: List[Tuple[int, int]],
+        expected_leaf_id: Tuple[int, int],
+        *,
+        open_leaf_fd: int = -1,
+    ) -> None:
+        """Revalidate ancestor directory attachment and leaf inode/size against retained evidence."""
+        import errno
+        parts = ref.rel_path.split("/")
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        re_opened_dirs: List[int] = []
+        try:
+            try:
+                re_album_st = os.fstat(album_dir_fd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"I/O failure revalidating album directory for '{ref.rel_path}': {exc}"
+                ) from exc
+            if (re_album_st.st_dev, re_album_st.st_ino) != expected_album_dir_id:
+                raise AlbumManifestCorruptError(
+                    f"Album directory changed identity during verification of '{ref.rel_path}'."
+                )
+
+            re_cur_fd = album_dir_fd
+            for idx, seg in enumerate(parts[:-1]):
+                try:
+                    rnxt = os.open(seg, dir_flags, dir_fd=re_cur_fd)
+                except FileNotFoundError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Ancestor directory '{seg}' disappeared after sync for '{ref.rel_path}'."
+                    ) from exc
+                except PermissionError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Ancestor directory '{seg}' became inaccessible after sync for '{ref.rel_path}': {exc}"
+                    ) from exc
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                        raise AlbumManifestCorruptError(
+                            f"Ancestor directory '{seg}' became unsafe after sync for '{ref.rel_path}': {exc}"
+                        ) from exc
+                    raise AlbumDurabilityUncertainError(
+                        f"I/O failure revalidating '{seg}' after sync for '{ref.rel_path}': {exc}"
+                    ) from exc
+                re_opened_dirs.append(rnxt)
+                try:
+                    rdst = os.fstat(rnxt)
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"I/O failure stating ancestor directory '{seg}' after sync for '{ref.rel_path}': {exc}"
+                    ) from exc
+                if (rdst.st_dev, rdst.st_ino) != expected_dir_ids[idx]:
+                    raise AlbumManifestCorruptError(
+                        f"Ancestor directory '{seg}' was substituted during synchronization of '{ref.rel_path}'."
+                    )
+                re_cur_fd = rnxt
+
+            leaf = parts[-1]
+            try:
+                re_lst = os.lstat(leaf, dir_fd=re_cur_fd)
+                re_fst = os.fstat(open_leaf_fd) if open_leaf_fd >= 0 else None
+            except FileNotFoundError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"Live artifact '{ref.rel_path}' disappeared after synchronization."
+                ) from exc
+            except PermissionError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"Live artifact '{ref.rel_path}' became inaccessible after synchronization: {exc}"
+                ) from exc
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.EISDIR, errno.ENOTDIR):
+                    raise AlbumManifestCorruptError(
+                        f"Live artifact '{ref.rel_path}' became unsafe after synchronization: {exc}"
+                    ) from exc
+                raise AlbumDurabilityUncertainError(
+                    f"I/O failure revalidating '{ref.rel_path}' after synchronization: {exc}"
+                ) from exc
+
+            if (
+                not stat.S_ISREG(re_lst.st_mode)
+                or (re_lst.st_dev, re_lst.st_ino) != expected_leaf_id
+                or re_lst.st_size != ref.size_bytes
+                or (
+                    re_fst is not None
+                    and ((re_fst.st_dev, re_fst.st_ino) != expected_leaf_id or re_fst.st_size != ref.size_bytes)
+                )
+            ):
+                raise AlbumManifestCorruptError(
+                    f"Live artifact '{ref.rel_path}' was substituted or altered during synchronization."
+                )
+        finally:
+            for dfd in reversed(re_opened_dirs):
+                try:
+                    os.close(dfd)
+                except OSError:
+                    pass
+
+    @classmethod
+    def _verify_and_sync_live_artifact_in_dir(
+        cls,
+        album_dir_fd: int,
+        ref: ArtifactRefRecord,
+    ) -> Tuple[Tuple[int, int], List[Tuple[int, int]], Tuple[int, int]]:
+        """Verify live artifact via O_NOFOLLOW traversal, stable inode, size, SHA-256, child-to-parent fsync, and return retained binding evidence."""
+        import errno
+        parts = ref.rel_path.split("/")
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        opened_dirs: List[int] = []
+        dir_identities: List[Tuple[int, int]] = []
+        cur_dir_fd = album_dir_fd
+        ffd = -1
+        try:
+            try:
+                album_st = os.fstat(album_dir_fd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(f"I/O failure stating album directory for '{ref.rel_path}': {exc}") from exc
+            album_dir_id = (album_st.st_dev, album_st.st_ino)
+
+            for seg in parts[:-1]:
+                try:
+                    nxt = os.open(seg, dir_flags, dir_fd=cur_dir_fd)
+                except FileNotFoundError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Missing ancestor directory '{seg}' for artifact '{ref.rel_path}'."
+                    ) from exc
+                except PermissionError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Inaccessible ancestor directory '{seg}' for artifact '{ref.rel_path}': {exc}"
+                    ) from exc
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                        raise AlbumManifestCorruptError(
+                            f"Unsafe or non-directory ancestor '{seg}' for artifact '{ref.rel_path}': {exc}"
+                        ) from exc
+                    raise AlbumDurabilityUncertainError(
+                        f"I/O failure traversing '{seg}' for artifact '{ref.rel_path}': {exc}"
+                    ) from exc
+                opened_dirs.append(nxt)
+                try:
+                    dst = os.fstat(nxt)
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"I/O failure stating ancestor directory '{seg}' for artifact '{ref.rel_path}': {exc}"
+                    ) from exc
+                dir_identities.append((dst.st_dev, dst.st_ino))
+                cur_dir_fd = nxt
+
+            leaf = parts[-1]
+            try:
+                ffd = os.open(leaf, file_flags, dir_fd=cur_dir_fd)
+            except FileNotFoundError as exc:
+                raise AlbumDurabilityUncertainError(f"Missing live artifact '{ref.rel_path}'.") from exc
+            except PermissionError as exc:
+                raise AlbumDurabilityUncertainError(f"Inaccessible live artifact '{ref.rel_path}': {exc}") from exc
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.EISDIR, errno.ENOTDIR):
+                    raise AlbumManifestCorruptError(
+                        f"Unsafe or non-regular live artifact '{ref.rel_path}': {exc}"
+                    ) from exc
+                raise AlbumDurabilityUncertainError(f"I/O failure opening '{ref.rel_path}': {exc}") from exc
+
+            try:
+                pre_st = os.fstat(ffd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(f"I/O failure stating '{ref.rel_path}': {exc}") from exc
+            if not stat.S_ISREG(pre_st.st_mode):
+                raise AlbumManifestCorruptError(f"Live artifact '{ref.rel_path}' is not a regular file.")
+
+            h = hashlib.sha256()
+            total_bytes = 0
+            try:
+                while True:
+                    chunk = os.read(ffd, 65536)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+                    total_bytes += len(chunk)
+                post_st = os.fstat(ffd)
+                lst = os.lstat(leaf, dir_fd=cur_dir_fd)
+            except FileNotFoundError as exc:
+                raise AlbumDurabilityUncertainError(f"Live artifact '{ref.rel_path}' disappeared during read.") from exc
+            except PermissionError as exc:
+                raise AlbumDurabilityUncertainError(f"Inaccessible live artifact '{ref.rel_path}': {exc}") from exc
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.EISDIR, errno.ENOTDIR):
+                    raise AlbumManifestCorruptError(
+                        f"Unsafe or non-regular live artifact '{ref.rel_path}': {exc}"
+                    ) from exc
+                raise AlbumDurabilityUncertainError(f"I/O failure verifying '{ref.rel_path}': {exc}") from exc
+
+            leaf_id = (pre_st.st_dev, pre_st.st_ino)
+            if (
+                not stat.S_ISREG(lst.st_mode)
+                or leaf_id != (post_st.st_dev, post_st.st_ino)
+                or leaf_id != (lst.st_dev, lst.st_ino)
+            ):
+                raise AlbumManifestCorruptError(f"Live artifact '{ref.rel_path}' changed identity during verification.")
+
+            if total_bytes != ref.size_bytes or h.hexdigest() != ref.sha256:
+                raise AlbumManifestCorruptError(
+                    f"Live artifact '{ref.rel_path}' size/SHA-256 mismatch (expected {ref.size_bytes}B/{ref.sha256}, observed {total_bytes}B/{h.hexdigest()})."
+                )
+
+            try:
+                _fsync_file_fd(ffd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"Failed to synchronize live artifact '{ref.rel_path}': {exc}"
+                ) from exc
+
+            for dfd in reversed(opened_dirs):
+                try:
+                    _fsync_dir_fd(dfd)
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Failed to synchronize parent directory for '{ref.rel_path}': {exc}"
+                    ) from exc
+            try:
+                _fsync_dir_fd(album_dir_fd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"Failed to synchronize album directory for '{ref.rel_path}': {exc}"
+                ) from exc
+
+            cls._revalidate_live_artifact_binding_in_dir(
+                album_dir_fd,
+                ref,
+                album_dir_id,
+                dir_identities,
+                leaf_id,
+                open_leaf_fd=ffd,
+            )
+            return album_dir_id, dir_identities, leaf_id
+        finally:
+            if ffd >= 0:
+                try:
+                    os.close(ffd)
+                except OSError:
+                    pass
+            for dfd in reversed(opened_dirs):
+                try:
+                    os.close(dfd)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _check_live_artifact_absent_in_dir(album_dir_fd: int, ref: ArtifactRefRecord) -> None:
+        """Ensure a PREPARED transaction's target path does not already exist on disk (no overwrite/adoption)."""
+        import errno
+        parts = ref.rel_path.split("/")
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        opened_dirs: List[int] = []
+        cur_dir_fd = album_dir_fd
+        try:
+            for seg in parts[:-1]:
+                try:
+                    nxt = os.open(seg, dir_flags, dir_fd=cur_dir_fd)
+                except FileNotFoundError:
+                    return
+                except PermissionError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Cannot verify absence of '{ref.rel_path}' due to inaccessible directory '{seg}': {exc}"
+                    ) from exc
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                        raise AlbumManifestCorruptError(
+                            f"Unsafe ancestor directory '{seg}' checking '{ref.rel_path}': {exc}"
+                        ) from exc
+                    raise AlbumDurabilityUncertainError(f"I/O failure checking '{ref.rel_path}': {exc}") from exc
+                opened_dirs.append(nxt)
+                cur_dir_fd = nxt
+
+            try:
+                os.lstat(parts[-1], dir_fd=cur_dir_fd)
+            except FileNotFoundError:
+                return
+            except PermissionError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"Cannot verify absence of '{ref.rel_path}': {exc}"
+                ) from exc
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(
+                    f"I/O failure checking absence of '{ref.rel_path}': {exc}"
+                ) from exc
+            raise AlbumDurabilityUncertainError(
+                f"Destination '{ref.rel_path}' already exists during PREPARED transaction; refusing to abort or overwrite."
+            )
+        finally:
+            for dfd in reversed(opened_dirs):
+                try:
+                    os.close(dfd)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _build_reconciled_journal(
+        journal: AlbumJournal,
+        receipt: TerminalTxReceipt,
+        *,
+        add_retained: bool = False,
+    ) -> AlbumJournal:
+        """Build updated v2 AlbumJournal with appended TerminalTxReceipt and cleared active_tx."""
+        updated_idem: List[IdempotencyRecord] = []
+        matched_idem = False
+        for rec in journal.idempotency_records:
+            if rec.tx_id == receipt.tx_id:
+                matched_idem = True
+                updated_idem.append(
+                    IdempotencyRecord(
+                        key=rec.key,
+                        op=receipt.op,
+                        expected_revision=receipt.expected_revision,
+                        payload_sha256=receipt.payload_sha256,
+                        result_revision=receipt.result_revision if receipt.outcome == JournalTxState.COMMITTED else None,
+                        tx_id=receipt.tx_id,
+                        outcome=receipt.outcome,
+                        created_at=rec.created_at,
+                    )
+                )
+            else:
+                updated_idem.append(rec)
+        if receipt.idempotency_key is not None and not matched_idem:
+            updated_idem.append(
+                IdempotencyRecord(
+                    key=receipt.idempotency_key,
+                    op=receipt.op,
+                    expected_revision=receipt.expected_revision,
+                    payload_sha256=receipt.payload_sha256,
+                    result_revision=receipt.result_revision if receipt.outcome == JournalTxState.COMMITTED else None,
+                    tx_id=receipt.tx_id,
+                    outcome=receipt.outcome,
+                )
+            )
+
+        updated_retained = list(journal.retained_artifacts)
+        if add_retained and receipt.superseded_refs:
+            existing_ret_paths = {r.rel_path for r in updated_retained}
+            for sup in receipt.superseded_refs:
+                if sup.rel_path not in existing_ret_paths:
+                    updated_retained.append(
+                        RetainedArtifactRecord(
+                            rel_path=sup.rel_path,
+                            sha256=sup.sha256,
+                            kind=sup.role.value,
+                            generation=sup.generation,
+                            superseded_by_tx_id=receipt.tx_id,
+                            superseded_at_rev=receipt.result_revision,
+                        )
+                    )
+                    existing_ret_paths.add(sup.rel_path)
+
+        return AlbumJournal(
+            schema_version=2,
+            protocol=JournalProtocol.ENFORCED_V2,
+            album_id=journal.album_id,
+            active_tx=None,
+            tx_receipts=[*journal.tx_receipts, receipt],
+            retained_artifacts=updated_retained,
+            idempotency_records=updated_idem,
+        )
+
+    def _reconcile_album_durability_locked(
+        self,
+        user_id: str,
+        album_id: str,
+        album_dir_fd: int,
+    ) -> Dict[str, Any]:
+        """Authoritative storage-layer recovery coordinator (must be called under _album_lock)."""
+        album_loaded = self._read_json_file_verified_in_dir(album_dir_fd, "album.json", sync_file=False, required=False)
+        if album_loaded is None:
+            raise AlbumManifestCorruptError(f"Album manifest 'album.json' is missing for '{album_id}'.")
+        album_data, album_identity, album_sha256 = album_loaded
+
+        journal_loaded = self._read_json_file_verified_in_dir(album_dir_fd, "journal.json", sync_file=False, required=False)
+        journal: Optional[AlbumJournal] = None
+        journal_identity: Optional[Tuple[int, int]] = None
+        journal_sha256: Optional[str] = None
+        if journal_loaded is not None:
+            journal_raw, journal_identity, journal_sha256 = journal_loaded
+            try:
+                journal = AlbumJournal(**journal_raw)
+                if journal.album_id != album_id:
+                    raise AlbumManifestCorruptError(
+                        f"Album journal identity mismatch (expected '{album_id}', found '{journal.album_id}')."
+                    )
+            except AlbumManifestCorruptError:
+                raise
+            except Exception as exc:
+                raise AlbumManifestCorruptError(
+                    f"Album journal failed validation; preserving all artifacts: {exc}"
+                ) from exc
+
+        consistency = self._classify_album_consistency(album_data, journal)
+        if consistency == RecoveryConsistency.CORRUPT:
+            raise AlbumManifestCorruptError(f"Album '{album_id}' failed recovery consistency verification.")
+
+        manifest_rev = album_data["revision"]
+        last_tx_id = album_data.get("last_tx_id")
+        delete_tx_id = album_data.get("delete_tx_id")
+        is_deleted = album_data.get("is_deleted") is True
+
+        # Journal-less legacy Album: leave untouched
+        if journal is None:
+            return {
+                "outcome": "consistent_idle",
+                "protocol": None,
+                "tx_id": None,
+                "revision": manifest_rev,
+            }
+
+        assert journal_sha256 is not None
+
+        # Legacy v1 journal: never auto-migrate or promote provisional classifications
+        if journal.protocol == JournalProtocol.LEGACY_PROVISIONAL:
+            if journal.active_tx is None and consistency == RecoveryConsistency.CONSISTENT_IDLE:
+                self._sync_terminal_journal_in_dir(
+                    album_dir_fd,
+                    expected_journal_sha256=journal_sha256,
+                    expected_identity=journal_identity,
+                )
+                return {
+                    "outcome": "consistent_idle",
+                    "protocol": journal.protocol.value,
+                    "tx_id": None,
+                    "revision": manifest_rev,
+                }
+            raise AlbumDurabilityUncertainError(
+                f"Legacy v1 journal for album '{album_id}' has provisional state '{consistency.value}' and cannot be authoritatively reconciled."
+            )
+
+        # v2 enforced protocol
+        if journal.active_tx is None:
+            if consistency == RecoveryConsistency.UNCERTAIN:
+                raise AlbumDurabilityUncertainError(
+                    f"Album '{album_id}' journal has uncertain lineage/artifact evidence."
+                )
+            idle_bindings: List[Tuple[ArtifactRefRecord, Tuple[int, int], List[Tuple[int, int]], Tuple[int, int]]] = []
+            for rcp in journal.tx_receipts:
+                if (
+                    rcp.outcome == JournalTxState.COMMITTED
+                    and rcp.result_revision == manifest_rev
+                    and (rcp.tx_id == last_tx_id or (is_deleted and rcp.tx_id == delete_tx_id))
+                ):
+                    for ref in rcp.new_refs:
+                        album_dir_id, dir_ids, leaf_id = self._verify_and_sync_live_artifact_in_dir(album_dir_fd, ref)
+                        idle_bindings.append((ref, album_dir_id, dir_ids, leaf_id))
+            self._read_json_file_verified_in_dir(
+                album_dir_fd,
+                "album.json",
+                sync_file=True,
+                required=True,
+                expected_identity=album_identity,
+                expected_sha256=album_sha256,
+            )
+            for ref, album_dir_id, dir_ids, leaf_id in idle_bindings:
+                self._revalidate_live_artifact_binding_in_dir(album_dir_fd, ref, album_dir_id, dir_ids, leaf_id)
+            self._sync_terminal_journal_in_dir(
+                album_dir_fd,
+                expected_journal_sha256=journal_sha256,
+                expected_identity=journal_identity,
+            )
+            return {
+                "outcome": "consistent_idle",
+                "protocol": journal.protocol.value,
+                "tx_id": None,
+                "revision": manifest_rev,
+            }
+
+        tx = journal.active_tx
+        if tx.state in (JournalTxState.PREPARED, JournalTxState.ABORTED):
+            if consistency == RecoveryConsistency.UNCERTAIN:
+                raise AlbumDurabilityUncertainError(f"Album '{album_id}' PREPARED transaction '{tx.tx_id}' has uncertain evidence.")
+            if consistency != RecoveryConsistency.PROVISIONAL_ABORT_CANDIDATE:
+                raise AlbumManifestCorruptError(f"Album '{album_id}' PREPARED transaction '{tx.tx_id}' contradicts manifest.")
+            for ref in tx.new_refs:
+                self._check_live_artifact_absent_in_dir(album_dir_fd, ref)
+            self._read_json_file_verified_in_dir(
+                album_dir_fd,
+                "album.json",
+                sync_file=True,
+                required=True,
+                expected_identity=album_identity,
+                expected_sha256=album_sha256,
+            )
+            try:
+                _fsync_dir_fd(album_dir_fd)
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(f"Directory fsync failed during PREPARED abort for '{tx.tx_id}': {exc}") from exc
+
+            receipt = TerminalTxReceipt(
+                tx_id=tx.tx_id,
+                op=tx.op,
+                outcome=JournalTxState.ABORTED,
+                expected_revision=tx.expected_revision,
+                result_revision=tx.expected_revision,
+                payload_sha256=tx.payload_sha256,
+                intended_manifest_sha256=tx.intended_manifest_sha256,
+                new_refs=tx.new_refs,
+                superseded_refs=tx.superseded_refs,
+                idempotency_key=tx.idempotency_key,
+            )
+            new_journal = self._build_reconciled_journal(journal, receipt, add_retained=False)
+            new_journal_sha256 = self._compute_canonical_manifest_sha256(new_journal.model_dump(mode="json"))
+            try:
+                self._write_album_journal_atomic_in_dir(album_dir_fd, new_journal)
+                self._sync_terminal_journal_in_dir(album_dir_fd, expected_journal_sha256=new_journal_sha256)
+            except ManifestPublishError as exc:
+                raise AlbumDurabilityUncertainError(f"Terminal ABORTED receipt publication uncertain for '{tx.tx_id}': {exc}") from exc
+            return {
+                "outcome": "aborted",
+                "protocol": journal.protocol.value,
+                "tx_id": tx.tx_id,
+                "revision": tx.expected_revision,
+            }
+
+        # PUBLISH_INTENT / UNCERTAIN / COMMITTED
+        if consistency == RecoveryConsistency.UNCERTAIN:
+            raise AlbumDurabilityUncertainError(
+                f"Album '{album_id}' transaction '{tx.tx_id}' lacks sufficient target-publication proof."
+            )
+        if consistency != RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE:
+            raise AlbumManifestCorruptError(f"Album '{album_id}' transaction '{tx.tx_id}' contradicts manifest.")
+
+        # Independently verify exact-current publication proof (never promote historical candidates)
+        current_marker_matches = (
+            (is_deleted and delete_tx_id == tx.tx_id)
+            if tx.op == "delete_album"
+            else (not is_deleted and last_tx_id == tx.tx_id)
+        )
+        if manifest_rev != tx.target_revision or not current_marker_matches:
+            raise AlbumDurabilityUncertainError(
+                f"Album '{album_id}' transaction '{tx.tx_id}' is historical or superseded (manifest rev {manifest_rev}, target {tx.target_revision}); refusing authoritative COMMITTED promotion."
+            )
+        if album_sha256 != tx.intended_manifest_sha256:
+            raise AlbumManifestCorruptError(
+                f"Album '{album_id}' manifest digest does not match intended digest for '{tx.tx_id}'."
+            )
+        ref_binding = self._verify_v2_refs_against_manifest(album_data, tx.new_refs)
+        if ref_binding == RecoveryConsistency.CORRUPT:
+            raise AlbumManifestCorruptError(f"Album '{album_id}' artifact bindings contradict manifest for '{tx.tx_id}'.")
+        if ref_binding == RecoveryConsistency.UNCERTAIN:
+            raise AlbumDurabilityUncertainError(f"Album '{album_id}' artifact bindings are incomplete for '{tx.tx_id}'.")
+
+        verified_bindings: List[Tuple[ArtifactRefRecord, Tuple[int, int], List[Tuple[int, int]], Tuple[int, int]]] = []
+        for ref in tx.new_refs:
+            album_dir_id, dir_ids, leaf_id = self._verify_and_sync_live_artifact_in_dir(album_dir_fd, ref)
+            verified_bindings.append((ref, album_dir_id, dir_ids, leaf_id))
+
+        # Revalidate and synchronize album.json against validated identity/digest
+        self._read_json_file_verified_in_dir(
+            album_dir_fd,
+            "album.json",
+            sync_file=True,
+            required=True,
+            expected_identity=album_identity,
+            expected_sha256=album_sha256,
+        )
+        try:
+            _fsync_dir_fd(album_dir_fd)
+        except OSError as exc:
+            raise AlbumDurabilityUncertainError(f"Directory fsync failed during COMMITTED recovery for '{tx.tx_id}': {exc}") from exc
+
+        # Coordinated final verification of all required artifact & ancestor bindings after manifest/dir sync
+        # and before terminal receipt publication. Concurrency boundary: protects against any substitution
+        # observable prior to this final check; external writers after this point are excluded by _album_lock
+        # and immutable-storage assumptions.
+        for ref, album_dir_id, dir_ids, leaf_id in verified_bindings:
+            self._revalidate_live_artifact_binding_in_dir(album_dir_fd, ref, album_dir_id, dir_ids, leaf_id)
+
+        receipt = TerminalTxReceipt(
+            tx_id=tx.tx_id,
+            op=tx.op,
+            outcome=JournalTxState.COMMITTED,
+            expected_revision=tx.expected_revision,
+            result_revision=tx.target_revision,
+            payload_sha256=tx.payload_sha256,
+            intended_manifest_sha256=tx.intended_manifest_sha256,
+            new_refs=tx.new_refs,
+            superseded_refs=tx.superseded_refs,
+            idempotency_key=tx.idempotency_key,
+        )
+        new_journal = self._build_reconciled_journal(journal, receipt, add_retained=True)
+        new_journal_sha256 = self._compute_canonical_manifest_sha256(new_journal.model_dump(mode="json"))
+        try:
+            self._write_album_journal_atomic_in_dir(album_dir_fd, new_journal)
+            self._sync_terminal_journal_in_dir(album_dir_fd, expected_journal_sha256=new_journal_sha256)
+        except ManifestPublishError as exc:
+            raise AlbumDurabilityUncertainError(f"Terminal COMMITTED receipt publication uncertain for '{tx.tx_id}': {exc}") from exc
+        return {
+            "outcome": "committed",
+            "protocol": journal.protocol.value,
+            "tx_id": tx.tx_id,
+            "revision": tx.target_revision,
+        }
+
+    def reconcile_album_durability(self, user_id: str, album_id: str) -> Optional[Dict[str, Any]]:
+        """Explicitly reconcile and synchronize durability for an Album under _album_lock."""
+        try:
+            self._get_album_dir_path(user_id, album_id)
+        except ValueError:
+            return None
+
+        with self._album_lock(user_id, album_id):
+            album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
+            if album_dir_fd is None:
+                return None
+            try:
+                return self._reconcile_album_durability_locked(user_id, album_id, album_dir_fd)
+            finally:
+                try:
+                    os.close(album_dir_fd)
+                except OSError:
+                    pass
 
     @staticmethod
     def _cleanup_verified_staging_refs(
