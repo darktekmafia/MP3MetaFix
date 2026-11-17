@@ -1745,6 +1745,7 @@ def test_album_entry_refresh_api_preview_confirm_and_conflict(client, auth_cooki
     refresh_res = client.post(
         f"/api/projects/albums/{album['id']}/entries/{entry_id}/refresh",
         json={
+            "expected_revision": album["revision"],
             "expected_source_revision": preview["expected_source_revision"],
             "expected_source_audio_sha256": preview["expected_source_audio_sha256"],
             "expected_source_updated_at": preview["expected_source_updated_at"],
@@ -1843,7 +1844,7 @@ def test_album_finalization_api_validation_and_lock_enforcement(client, auth_coo
     assert client.get(f"/api/projects/albums/{album_id}/entries/{entry_id}/refresh-preview", cookies=auth_cookies).status_code == 409
     assert client.post(
         f"/api/projects/albums/{album_id}/entries/{entry_id}/refresh",
-        json={"expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
+        json={"expected_revision": fin_rev, "expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
         cookies=auth_cookies,
     ).status_code == 409
     assert client.post(f"/api/projects/albums/{album_id}/finalize?expected_revision={fin_rev}", cookies=auth_cookies).status_code == 409
@@ -2930,6 +2931,7 @@ function makeEl(id, tag = 'div') {
     querySelector: (sel) => findAll(el, c => sel === 'input[name="pickAlbumTakeId"]:checked' ? (c.tagName === 'INPUT' && c.name === 'pickAlbumTakeId' && !!c.checked) : false)[0] || null,
     querySelectorAll: (sel) => findAll(el, c => sel === 'button' ? c.tagName === 'BUTTON' : false),
     reset: () => {},
+    remove: () => {},
   };
   return el;
 }
@@ -3249,6 +3251,7 @@ function makeEl(id, tag = 'div') {
     querySelector: () => null,
     querySelectorAll: (sel) => findAll(el, c => sel === 'button' ? c.tagName === 'BUTTON' : false),
     reset: () => {},
+    remove: () => {},
   };
   return el;
 }
@@ -3340,6 +3343,366 @@ vm.runInNewContext(code, context);
     proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, env=env, check=False)
     assert proc.returncode == 0, f"Node Phase 1A.2 VM test failed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
     assert "NODE_PHASE1A2_VM_OK" in proc.stdout
+
+
+def test_phase1b_stage1_2_refresh_api_revision_and_concurrency(client, auth_cookies):
+    """Phase 1B Stage 1.2: POST /refresh enforces strict expected_revision (422), stale 409, and finalized 409."""
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 800)
+    wav_ok = buf.getvalue()
+
+    trk = client.post("/api/projects/tracks", json={"title": "Stage 1.2 API Track"}, cookies=auth_cookies).json()
+    take = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        files={"file": ("s12.wav", wav_ok, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    alb = client.post("/api/projects/albums", json={"title": "Stage 1.2 API LP"}, cookies=auth_cookies).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"expected_revision": alb["revision"], "track_id": trk["id"], "take_id": take["id"]},
+        cookies=auth_cookies,
+    ).json()
+    entry_id = alb["tracks"][0]["id"]
+    url = f"/api/projects/albums/{alb['id']}/entries/{entry_id}/refresh"
+
+    # 1. Missing, zero, negative, boolean, string, and float expected_revision -> 422
+    assert client.post(
+        url,
+        json={"expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
+        cookies=auth_cookies,
+    ).status_code == 422
+    for bad_rev in (0, -1, True, False, "2", 1.5):
+        assert client.post(
+            url,
+            json={"expected_revision": bad_rev, "expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
+            cookies=auth_cookies,
+        ).status_code == 422
+
+    # 2. Stale expected_revision -> 409 (conflict, not disabled-replacement message)
+    stale_res = client.post(
+        url,
+        json={"expected_revision": alb["revision"] - 1, "expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
+        cookies=auth_cookies,
+    )
+    assert stale_res.status_code == 409
+    assert "modified concurrently" in stale_res.json()["detail"].lower()
+
+    # 3. Current expected_revision -> 409 disabled replacement, recording & revision preserved
+    cur_res = client.post(
+        url,
+        json={"expected_revision": alb["revision"], "expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
+        cookies=auth_cookies,
+    )
+    assert cur_res.status_code == 409
+    assert "temporarily disabled" in cur_res.json()["detail"].lower()
+    assert client.get(f"/api/projects/albums/{alb['id']}", cookies=auth_cookies).json()["revision"] == alb["revision"]
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{entry_id}/download", cookies=auth_cookies).content == wav_ok
+
+
+def test_phase1b_stage1_2_frontend_refresh_async_revision_capture():
+    """Verify frontend openRefreshEntryModal/confirmRefreshAlbumEntry capture revision synchronously and discard stale responses."""
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node_bin = shutil.which("node")
+    assert node_bin is not None, "node is required to execute frontend behavior tests"
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+
+    harness = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
+
+const elements = {};
+function findAll(root, pred, out = []) {
+  for (const c of (root.children || [])) {
+    if (pred(c)) out.push(c);
+    findAll(c, pred, out);
+  }
+  return out;
+}
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set(['hidden']);
+  const el = {
+    id, tagName: tag.toUpperCase(), value: '', textContent: '', className: '',
+    disabled: false, files: [], listeners, dataset: {}, style: {}, children: [], _innerHTML: '', src: '',
+    classList: {
+      add: (c) => classSet.add(c), remove: (c) => classSet.delete(c), contains: (c) => classSet.has(c),
+      toggle: (c, f) => { if (f === true) classSet.add(c); else if (f === false) classSet.delete(c); },
+    },
+    set innerHTML(v) { this._innerHTML = v; if (v === '') this.children = []; }, get innerHTML() { return this._innerHTML; },
+    addEventListener: (ev, fn) => { if (!listeners[ev]) listeners[ev] = []; listeners[ev].push(fn); },
+    dispatchEvent: async (ev) => { if (!ev.target) ev.target = el; for (const fn of (listeners[ev.type] || [])) await fn(ev); },
+    setAttribute: () => {}, appendChild: (c) => { el.children.push(c); return c; },
+    querySelector: () => null,
+    querySelectorAll: (sel) => findAll(el, c => sel === 'button' ? c.tagName === 'BUTTON' : false),
+    reset: () => {},
+    remove: () => {},
+  };
+  return el;
+}
+const getEl = (id) => { if (!elements[id]) elements[id] = makeEl(id); return elements[id]; };
+const docListeners = {};
+const deferredFetches = [];
+const postCalls = [];
+
+let albumA = {
+  id: 'alb_A', title: 'Album A', status: 'draft', is_finalized: false, revision: 5, revisions: [],
+  tracks: [
+    { id: 'ale_1', track_id: 'trk_1', take_id: 'tak_1', track_number: 1, disc_number: 1, has_owned_audio: true, is_placeholder: false },
+    { id: 'ale_2', track_id: 'trk_2', take_id: 'tak_2', track_number: 2, disc_number: 1, has_owned_audio: true, is_placeholder: false },
+  ],
+};
+const albumB = {
+  id: 'alb_B', title: 'Album B', status: 'draft', is_finalized: false, revision: 2, revisions: [],
+  tracks: [],
+};
+
+const closeAlbumBtn = makeEl('closeAlbumBtn', 'button');
+closeAlbumBtn.dataset.closeModal = 'modalAlbumDetail';
+const closeRefreshBtn = makeEl('closeRefreshBtn', 'button');
+closeRefreshBtn.dataset.closeModal = 'modalRefreshAlbumEntry';
+
+const context = {
+  console, setTimeout, clearTimeout, URLSearchParams, Object, Array, Number, Boolean, String, JSON, Math, Promise, Date, Error, FormData: function() { return { append: () => {} }; },
+  document: {
+    getElementById: getEl,
+    createElement: (tag) => makeEl('dyn_' + Math.random().toString(36).slice(2), tag),
+    addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
+    querySelectorAll: (sel) => sel === '[data-close-modal]' ? [closeAlbumBtn, closeRefreshBtn] : [],
+  },
+  window: {
+    location: { pathname: '/projects', hash: '', search: '' },
+    addEventListener: () => {},
+    history: { replaceState: () => {} },
+    confirm: () => true,
+  },
+  localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+  sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+  showToast: () => {},
+  fetch: async (url, opts = {}) => {
+    const method = (opts.method || 'GET').toUpperCase();
+    if (url.includes('/refresh-preview')) {
+      return new Promise((resolve) => { deferredFetches.push({ url, resolve }); });
+    }
+    if (method === 'POST' && url.endsWith('/refresh')) {
+      postCalls.push({ url, body: JSON.parse(opts.body) });
+      return { ok: false, status: 409, json: async () => ({ detail: 'Temporarily disabled' }) };
+    }
+    if (method === 'PATCH' && url.endsWith('/alb_A')) {
+      albumA = { ...albumA, revision: albumA.revision + 1 };
+      return { ok: true, status: 200, json: async () => albumA };
+    }
+    if (url === '/api/projects/tracks') return { ok: true, status: 200, json: async () => [] };
+    if (url === '/api/projects/albums') return { ok: true, status: 200, json: async () => [albumA, albumB] };
+    if (url === '/api/projects/albums/alb_A') return { ok: true, status: 200, json: async () => albumA };
+    if (url === '/api/projects/albums/alb_B') return { ok: true, status: 200, json: async () => albumB };
+    if (url === '/api/storage/quota') return { ok: true, status: 200, json: async () => ({ used_bytes: 0, max_quota_bytes: 1000, used_percent: 0 }) };
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+};
+context.window.window = context.window;
+vm.runInNewContext(code, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  await new Promise(r => setTimeout(r, 20));
+  const cards = getEl('albumsGridContainer').children;
+  const modal = getEl('modalRefreshAlbumEntry');
+  const btnConfirm = getEl('btnConfirmRefreshAlbumEntry');
+  const btnSaveMeta = getEl('btnSaveAlbumDetails');
+
+  const makePreview = (entryId) => ({
+    ok: true,
+    json: async () => ({
+      track_id: 'trk_1',
+      source_available: true,
+      has_changes: true,
+      audio_changed: true,
+      lyrics_changed: false,
+      metadata_changes: [],
+      expected_source_revision: 3,
+      expected_source_audio_sha256: 'a'.repeat(64),
+      expected_source_updated_at: 100.0,
+      album_snapshot: { source_track_title: 'Song ' + entryId, source_take_label: 'T1', source_take_revision: 1, format: 'wav', duration_seconds: 1.0 },
+      source_snapshot: { source_take_label: 'T1', source_take_revision: 3, format: 'wav', duration_seconds: 1.0 },
+    }),
+  });
+
+  function findRefreshBtns(root, out = []) {
+    for (const c of (root.children || [])) {
+      if (c.tagName === 'BUTTON' && c.title === 'Compare & Refresh from Source Take') out.push(c);
+      findRefreshBtns(c, out);
+    }
+    return out;
+  }
+
+  // Open Album A (rev 5)
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  let refreshBtns = findRefreshBtns(getEl('albumSequencerTbody'));
+  if (refreshBtns.length < 2) throw new Error('Expected 2 refresh buttons rendered, got ' + refreshBtns.length);
+
+  // Case 1: Preview starts for Album A rev 5, then Album A advances to rev 6 before response arrives -> discard
+  modal.classList.add('hidden');
+  const p1 = refreshBtns[0].listeners.click[0]();
+  await btnSaveMeta.listeners['click'][0](); // rev 5 -> rev 6
+  deferredFetches.shift().resolve(makePreview('ale_1'));
+  await p1;
+  await btnConfirm.listeners['click'][0]();
+  if (!modal.classList.contains('hidden') || postCalls.length !== 0) {
+    throw new Error('Case 1 failed: stale rev 5 response opened modal or sent POST');
+  }
+
+  // Case 2: Preview starts for Album A (rev 6), then activeAlbum changes to Album B -> discard
+  refreshBtns = findRefreshBtns(getEl('albumSequencerTbody'));
+  const p2 = refreshBtns[0].listeners.click[0]();
+  await cards[1].querySelectorAll('button')[0].listeners['click'][0](); // switch to Album B
+  await new Promise(r => setTimeout(r, 20));
+  deferredFetches.shift().resolve(makePreview('ale_1'));
+  await p2;
+  await btnConfirm.listeners['click'][0]();
+  if (!modal.classList.contains('hidden') || postCalls.length !== 0) {
+    throw new Error('Case 2 failed: cross-album stale response opened modal or sent POST');
+  }
+
+  // Case 3: Two preview requests overlap on Album A (rev 6) and complete out of order (ale_1 resolves AFTER ale_2)
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  refreshBtns = findRefreshBtns(getEl('albumSequencerTbody'));
+  const p3a = refreshBtns[0].listeners.click[0]();
+  const p3b = refreshBtns[1].listeners.click[0]();
+  const f3a = deferredFetches.shift();
+  const f3b = deferredFetches.shift();
+  f3b.resolve(makePreview('ale_2'));
+  await p3b;
+  f3a.resolve(makePreview('ale_1'));
+  await p3a;
+  if (getEl('refreshEntrySubtitle').textContent !== 'Song ale_2 • Compare current album recording with latest source take') {
+    throw new Error('Case 3 failed: older ale_1 response overwrote newer ale_2 modal state');
+  }
+
+  // Case 4: Album state changes AFTER confirmation modal is displayed -> confirm rejects without POST
+  await btnSaveMeta.listeners['click'][0](); // rev 6 -> rev 7
+  await btnConfirm.listeners['click'][0]();
+  if (postCalls.length !== 0 || !modal.classList.contains('hidden')) {
+    throw new Error('Case 4 failed: confirm sent POST despite changed album revision');
+  }
+
+  // Case 5: Unchanged context preserves originally captured revision (7) in POST /refresh
+  refreshBtns = findRefreshBtns(getEl('albumSequencerTbody'));
+  const p5 = refreshBtns[0].listeners.click[0]();
+  deferredFetches.shift().resolve(makePreview('ale_1'));
+  await p5;
+  await btnConfirm.listeners['click'][0]();
+  if (postCalls.length !== 1 || postCalls[0].body.expected_revision !== 7 || !postCalls[0].url.endsWith('/ale_1/refresh')) {
+    throw new Error('Case 5 failed: expected POST with captured revision 7, got ' + JSON.stringify(postCalls));
+  }
+  await closeRefreshBtn.listeners['click'][0]();
+
+  // Case 6: Begin preview, close owning Album modal via Escape, then resolve -> refresh modal must NOT reopen
+  postCalls.length = 0;
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  refreshBtns = findRefreshBtns(getEl('albumSequencerTbody'));
+  const beforeEscAlbumHidden = getEl('modalAlbumDetail').classList.contains('hidden');
+  const keydownCount = (docListeners['keydown'] || []).length;
+  const p6 = refreshBtns[0].listeners.click[0]();
+  const f6 = deferredFetches.shift();
+  for (const fn of (docListeners['keydown'] || [])) fn({ key: 'Escape' });
+  f6.resolve(makePreview('ale_1'));
+  await p6;
+  await btnConfirm.listeners['click'][0]();
+  if (!modal.classList.contains('hidden') || postCalls.length !== 0) {
+    throw new Error('Case 6 failed (beforeEscAlbumHidden=' + beforeEscAlbumHidden + ', keydownCount=' + keydownCount + ', modalHidden=' + modal.classList.contains('hidden') + ', albumModalHidden=' + getEl('modalAlbumDetail').classList.contains('hidden') + ', postCalls=' + postCalls.length + ')');
+  }
+
+  // Case 7: Begin preview, explicitly close owning Album modal via close button, then resolve -> must NOT reopen
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  refreshBtns = findRefreshBtns(getEl('albumSequencerTbody'));
+  const p7 = refreshBtns[0].listeners.click[0]();
+  const f7 = deferredFetches.shift();
+  closeAlbumBtn.listeners['click'][0]();
+  f7.resolve(makePreview('ale_1'));
+  await p7;
+  await btnConfirm.listeners['click'][0]();
+  if (!modal.classList.contains('hidden') || postCalls.length !== 0) {
+    throw new Error('Case 7 failed: closing Album modal did not invalidate in-flight preview');
+  }
+
+  // Case 8: Begin preview, cancel refresh modal via close button, then resolve -> must NOT reopen
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  refreshBtns = findRefreshBtns(getEl('albumSequencerTbody'));
+  const p8 = refreshBtns[0].listeners.click[0]();
+  const f8 = deferredFetches.shift();
+  closeRefreshBtn.listeners['click'][0]();
+  f8.resolve(makePreview('ale_1'));
+  await p8;
+  await btnConfirm.listeners['click'][0]();
+  if (!modal.classList.contains('hidden') || postCalls.length !== 0) {
+    throw new Error('Case 8 failed: canceling refresh modal did not invalidate in-flight preview');
+  }
+
+  // Case 9: Open refresh confirmation modal, cancel it, verify pending request cannot be confirmed
+  const p9 = refreshBtns[0].listeners.click[0]();
+  deferredFetches.shift().resolve(makePreview('ale_1'));
+  await p9;
+  if (modal.classList.contains('hidden') || btnConfirm.disabled !== false) {
+    throw new Error('Case 9 setup failed: refresh modal did not open');
+  }
+  closeRefreshBtn.listeners['click'][0]();
+  await btnConfirm.listeners['click'][0]();
+  if (!modal.classList.contains('hidden') || btnConfirm.disabled !== true || postCalls.length !== 0) {
+    throw new Error('Case 9 failed: canceled refresh modal could still be confirmed');
+  }
+
+  // Case 10: A -> B -> A at same revision (7), then resolve original A response -> must remain invalid
+  const p10 = refreshBtns[0].listeners.click[0]();
+  const f10 = deferredFetches.shift();
+  await cards[1].querySelectorAll('button')[0].listeners['click'][0](); // switch to B
+  await new Promise(r => setTimeout(r, 20));
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0](); // return to A at same rev 7
+  await new Promise(r => setTimeout(r, 20));
+  f10.resolve(makePreview('ale_1'));
+  await p10;
+  await btnConfirm.listeners['click'][0]();
+  if (!modal.classList.contains('hidden') || postCalls.length !== 0) {
+    throw new Error('Case 10 failed: A -> B -> A at same revision revived original preview');
+  }
+
+  // Case 11: Fresh preview can still open and confirm normally after cancellation
+  refreshBtns = findRefreshBtns(getEl('albumSequencerTbody'));
+  const p11 = refreshBtns[0].listeners.click[0]();
+  deferredFetches.shift().resolve(makePreview('ale_1'));
+  await p11;
+  await btnConfirm.listeners['click'][0]();
+  if (postCalls.length !== 1 || postCalls[0].body.expected_revision !== 7) {
+    throw new Error('Case 11 failed: fresh preview after cancellation did not confirm normally');
+  }
+
+  console.log('NODE_STAGE1_2_REFRESH_VM_OK');
+})().catch(err => { console.error(err); process.exit(1); });
+"""
+    env = os.environ.copy()
+    env["TARGET_JS_PATH"] = str(projects_js_path)
+    proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, env=env, check=False)
+    assert proc.returncode == 0, f"Node Stage 1.2 refresh VM test failed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+    assert "NODE_STAGE1_2_REFRESH_VM_OK" in proc.stdout
+
+
 
 
 

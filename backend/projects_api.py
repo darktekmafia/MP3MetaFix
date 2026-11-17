@@ -1041,9 +1041,12 @@ async def confirm_album_entry_refresh(
             expected_source_revision=payload.expected_source_revision,
             expected_source_audio_sha256=payload.expected_source_audio_sha256,
             expected_source_updated_at=payload.expected_source_updated_at,
+            expected_revision=payload.expected_revision,
         )
-    except (AlbumFinalizedError, AlbumRefreshConflictError, AlbumReplacementDisabledError) as e:
+    except (AlbumFinalizedError, AlbumRevisionConflictError, AlbumRefreshConflictError, AlbumReplacementDisabledError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except ProjectValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ProjectStorageQuotaExceeded as e:

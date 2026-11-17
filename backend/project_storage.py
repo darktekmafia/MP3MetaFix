@@ -3086,29 +3086,50 @@ class ProjectStorageManager:
         expected_source_revision: int,
         expected_source_audio_sha256: str,
         expected_source_updated_at: Optional[float] = None,
+        expected_revision: Any = None,
     ) -> Optional[AlbumMetadata]:
-        """Temporarily block refreshing existing album-owned audio until Phase 1B replacement safety is complete."""
+        """Validate lock, revision, finalization, and entry identity via album_dir_fd; replacement remains disabled."""
+        expected_revision = self._validate_expected_revision(expected_revision)
+        if not is_valid_project_id(entry_id, expected_prefix="ale"):
+            raise ProjectValidationError(f"Invalid album entry identifier '{entry_id}'.")
         try:
-            self._get_album_dir(user_id, album_id)
+            self._get_album_dir_path(user_id, album_id)
         except ValueError:
             return None
 
         with self._album_lock(user_id, album_id):
-            album = self._read_album_unlocked(user_id, album_id)
-            if not album:
+            album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
+            if album_dir_fd is None:
                 return None
-            if self._is_album_finalized(album):
-                raise AlbumFinalizedError("Cannot refresh entries of a finalized album.")
+            try:
+                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True)
+                if not loaded:
+                    return None
+                album, _, _ = loaded
+                if self._is_album_finalized(album):
+                    raise AlbumFinalizedError("Cannot refresh entries of a finalized album.")
+                if int(expected_revision) != int(album.revision):
+                    raise AlbumRevisionConflictError(
+                        f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+                    )
 
-            entry = next((t for t in album.tracks if t.id == entry_id), None)
-            if not entry:
-                raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
-            if entry.is_placeholder or not entry.take_id:
-                raise ProjectValidationError("Cannot refresh a placeholder entry with no selected take.")
+                matches = [t for t in album.tracks if t.id == entry_id]
+                if not matches:
+                    raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
+                if len(matches) > 1:
+                    raise AlbumManifestCorruptError(f"Ambiguous album entry identifier '{entry_id}'.")
+                entry = matches[0]
+                if entry.is_placeholder or not entry.take_id:
+                    raise ProjectValidationError("Cannot refresh a placeholder entry with no selected take.")
 
-            raise AlbumReplacementDisabledError(
-                "Refreshing existing album-owned audio from a source take is temporarily disabled while audio-replacement safety upgrades are in progress."
-            )
+                raise AlbumReplacementDisabledError(
+                    "Refreshing existing album-owned audio from a source take is temporarily disabled while audio-replacement safety upgrades are in progress."
+                )
+            finally:
+                try:
+                    os.close(album_dir_fd)
+                except OSError:
+                    pass
 
     @staticmethod
     def _snapshots_semantically_equal(a: AlbumEntrySnapshot, b: AlbumEntrySnapshot) -> bool:

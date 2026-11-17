@@ -868,6 +868,7 @@
 
   // --- Album Detail / Sequencer Modal ---
   async function openAlbumDetailModal(albumId) {
+    closeRefreshModal();
     try {
       const res = await fetch(`/api/projects/albums/${albumId}`);
       if (!res.ok) {
@@ -1429,9 +1430,42 @@
     }
   }
 
+  let refreshPreviewRequestSeq = 0;
+
+  function invalidateRefreshContext() {
+    refreshPreviewRequestSeq += 1;
+    state.pendingRefreshPreview = null;
+    if (dom.btnConfirmRefreshAlbumEntry) {
+      dom.btnConfirmRefreshAlbumEntry.disabled = true;
+    }
+  }
+
+  function closeRefreshModal() {
+    invalidateRefreshContext();
+    if (dom.modalRefreshAlbumEntry) {
+      dom.modalRefreshAlbumEntry.classList.add('hidden');
+    }
+  }
+
   async function openRefreshEntryModal(albumId, entryId) {
     if (!dom.modalRefreshAlbumEntry) return;
-    state.pendingRefreshPreview = null;
+    const activeAlbum = state.activeAlbum;
+    if (!activeAlbum || activeAlbum.id !== albumId || !Number.isInteger(activeAlbum.revision) || activeAlbum.revision < 1) {
+      invalidateRefreshContext();
+      showToast('Album context changed; reload album before refreshing.', 'error');
+      return;
+    }
+
+    const capturedAlbumId = activeAlbum.id;
+    const capturedRevision = activeAlbum.revision;
+    const capturedEntryId = entryId;
+    invalidateRefreshContext();
+    const requestSeq = refreshPreviewRequestSeq;
+    const isCurrentContext = () =>
+      requestSeq === refreshPreviewRequestSeq &&
+      Boolean(state.activeAlbum) &&
+      state.activeAlbum.id === capturedAlbumId &&
+      state.activeAlbum.revision === capturedRevision;
 
     if (dom.refreshStatusNotice) {
       dom.refreshStatusNotice.textContent = '';
@@ -1442,13 +1476,16 @@
     if (dom.btnConfirmRefreshAlbumEntry) dom.btnConfirmRefreshAlbumEntry.disabled = true;
 
     try {
-      const res = await fetch(`/api/projects/albums/${albumId}/entries/${entryId}/refresh-preview`);
+      const res = await fetch(`/api/projects/albums/${capturedAlbumId}/entries/${capturedEntryId}/refresh-preview`);
+      if (!isCurrentContext()) return;
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
+        if (!isCurrentContext()) return;
         showToast(err.detail || 'Failed to load refresh comparison', 'error');
         return;
       }
       const preview = await res.json();
+      if (!isCurrentContext()) return;
 
       if (dom.refreshEntrySubtitle) {
         const trackTitle = (preview.album_snapshot && preview.album_snapshot.source_track_title) || preview.track_id;
@@ -1523,18 +1560,21 @@
         dom.refreshStatusNotice.classList.remove('hidden');
       }
 
-      state.pendingRefreshPreview = {
-        albumId,
-        entryId,
+      state.pendingRefreshPreview = Object.freeze({
+        albumId: capturedAlbumId,
+        entryId: capturedEntryId,
+        expected_revision: capturedRevision,
         expected_source_revision: preview.expected_source_revision,
         expected_source_audio_sha256: preview.expected_source_audio_sha256,
         expected_source_updated_at: preview.expected_source_updated_at,
-      };
+        requestSeq,
+      });
       if (dom.btnConfirmRefreshAlbumEntry) {
         dom.btnConfirmRefreshAlbumEntry.disabled = false;
       }
       dom.modalRefreshAlbumEntry.classList.remove('hidden');
     } catch (e) {
+      if (!isCurrentContext()) return;
       showToast('Network error loading refresh preview', 'error');
     }
   }
@@ -1543,12 +1583,26 @@
     const pending = state.pendingRefreshPreview;
     if (!pending) return;
 
+    if (
+      pending.requestSeq !== refreshPreviewRequestSeq ||
+      !state.activeAlbum ||
+      state.activeAlbum.id !== pending.albumId ||
+      state.activeAlbum.revision !== pending.expected_revision ||
+      !Number.isInteger(pending.expected_revision) ||
+      pending.expected_revision < 1
+    ) {
+      closeRefreshModal();
+      showToast('Album changed since refresh preview was opened; reload and try again.', 'error', 5000);
+      return;
+    }
+
     if (dom.btnConfirmRefreshAlbumEntry) dom.btnConfirmRefreshAlbumEntry.disabled = true;
     try {
       const res = await fetch(`/api/projects/albums/${pending.albumId}/entries/${pending.entryId}/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          expected_revision: pending.expected_revision,
           expected_source_revision: pending.expected_source_revision,
           expected_source_audio_sha256: pending.expected_source_audio_sha256,
           expected_source_updated_at: pending.expected_source_updated_at,
@@ -3067,6 +3121,13 @@
           closePickTrackModal();
           return;
         }
+        if (modalId === 'modalRefreshAlbumEntry') {
+          closeRefreshModal();
+          return;
+        }
+        if (modalId === 'modalAlbumDetail') {
+          closeRefreshModal();
+        }
         const modal = document.getElementById(modalId);
         if (modal) modal.classList.add('hidden');
       });
@@ -3076,6 +3137,12 @@
       if (e.key === 'Escape') {
         if (dom.modalPickTrackForAlbum && !dom.modalPickTrackForAlbum.classList.contains('hidden')) {
           closePickTrackModal();
+        }
+        if (dom.modalRefreshAlbumEntry && !dom.modalRefreshAlbumEntry.classList.contains('hidden')) {
+          closeRefreshModal();
+        }
+        if (dom.modalAlbumDetail && !dom.modalAlbumDetail.classList.contains('hidden')) {
+          closeRefreshModal();
         }
         [
           dom.modalNewTrack,

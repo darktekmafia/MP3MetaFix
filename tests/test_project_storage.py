@@ -1051,6 +1051,7 @@ def test_album_entry_refresh_preview_confirm_and_conflict(custom_storage):
             expected_source_revision=preview.expected_source_revision,
             expected_source_audio_sha256=preview.expected_source_audio_sha256,
             expected_source_updated_at=preview.expected_source_updated_at,
+            expected_revision=album.revision,
         )
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v1
     assert custom_storage.get_album(user_id, album.id).tracks[0].snapshot.embedded_lyrics == "Line one\nLine two"
@@ -1139,7 +1140,7 @@ def test_album_finalization_validation_locking_and_completion(custom_storage):
     with pytest.raises(AlbumFinalizedError):
         custom_storage.preview_album_entry_refresh(user_id, album.id, r_id)
     with pytest.raises(AlbumFinalizedError):
-        custom_storage.confirm_album_entry_refresh(user_id, album.id, r_id, 1, "sha")
+        custom_storage.confirm_album_entry_refresh(user_id, album.id, r_id, 1, "sha", expected_revision=finalized.revision)
     with pytest.raises(AlbumFinalizedError):
         custom_storage.save_album_cover(
             user_id, album.id, b"\xff\xd8\xff\xe0", expected_revision=finalized.revision, extension=".jpg"
@@ -3283,6 +3284,128 @@ def test_phase1b_stage1_1_no_journal_markers_tokens_conflicts_and_phase1a_dir_fs
     # Cover and updated manifest are both preserved on UNCERTAIN post-replace dir fsync failure
     assert (alb_dir / "cover.jpg").is_file()
     assert custom_storage.get_album(user_id, alb.id).has_cover is True
+
+
+def test_phase1b_stage1_2_refresh_confirm_lock_revision_and_safety(custom_storage: ProjectStorageManager, monkeypatch):
+    """Phase 1B Stage 1.2: confirm_album_entry_refresh enforces lock, strict expected_revision, dir_fd read, and entry safety."""
+    import io
+    import json
+    import wave
+    from backend.project_storage import (
+        AlbumFinalizedError,
+        AlbumManifestCorruptError,
+        AlbumReplacementDisabledError,
+        AlbumRevisionConflictError,
+    )
+
+    user_id = "u_1b_s1_2_refresh"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 800)
+    wav_ok = buf.getvalue()
+
+    trk = custom_storage.create_track(user_id=user_id, title="Stage 1.2 Track")
+    take = custom_storage.create_take(
+        user_id=user_id, track_id=trk.id, audio_bytes=wav_ok, original_filename="s12.wav", extension=".wav"
+    )
+    alb = custom_storage.create_album(user_id=user_id, title="Stage 1.2 LP")
+    # Duplicate Track references with distinct entry IDs + one placeholder
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=take.id)
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=take.id)
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=None)
+    entry_a, entry_b, placeholder_c = alb.tracks[0].id, alb.tracks[1].id, alb.tracks[2].id
+    assert entry_a != entry_b
+
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    manifest_path = alb_dir / "album.json"
+    raw_before = manifest_path.read_bytes()
+
+    # 1. Invalid expected_revision types/values rejected without touching disk or lock
+    for bad_rev in (None, 0, -1, True, False, "1", 1.5):
+        with pytest.raises(ProjectValidationError):
+            custom_storage.confirm_album_entry_refresh(
+                user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=bad_rev
+            )
+    assert manifest_path.read_bytes() == raw_before
+
+    # 2. Stale revision rejected with AlbumRevisionConflictError
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=alb.revision - 1
+        )
+    assert manifest_path.read_bytes() == raw_before
+
+    # 3. Missing or invalid entry IDs rejected cleanly
+    with pytest.raises(ProjectValidationError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, "not_an_entry_id", 1, "a" * 64, expected_revision=alb.revision
+        )
+    with pytest.raises(ProjectValidationError, match="not found"):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, "ale_0000000000000000", 1, "a" * 64, expected_revision=alb.revision
+        )
+    with pytest.raises(ProjectValidationError, match="placeholder"):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, placeholder_c, 1, "a" * 64, expected_revision=alb.revision
+        )
+
+    # 4. Lock coverage: authoritative read occurs inside _album_lock via _read_album_from_dir_fd (never _read_album_unlocked)
+    events = []
+    orig_lock = custom_storage._album_lock
+    orig_read_fd = custom_storage._read_album_from_dir_fd
+
+    from contextlib import contextmanager
+    @contextmanager
+    def tracked_lock(uid, aid):
+        events.append("lock_enter")
+        try:
+            with orig_lock(uid, aid) as lp:
+                yield lp
+        finally:
+            events.append("lock_exit")
+
+    def tracked_read_fd(*args, **kwargs):
+        events.append("read_fd")
+        return orig_read_fd(*args, **kwargs)
+
+    monkeypatch.setattr(custom_storage, "_album_lock", tracked_lock)
+    monkeypatch.setattr(custom_storage, "_read_album_from_dir_fd", tracked_read_fd)
+    monkeypatch.setattr(
+        custom_storage,
+        "_read_album_unlocked",
+        lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError("_read_album_unlocked must not be called")),
+    )
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=alb.revision
+        )
+    monkeypatch.undo()
+    assert events == ["lock_enter", "read_fd", "lock_exit"]
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, entry_a).read_bytes() == wav_ok
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, entry_b).read_bytes() == wav_ok
+    assert manifest_path.read_bytes() == raw_before
+
+    # 5. Ambiguous duplicate entry ID in manifest fails closed with AlbumManifestCorruptError
+    dup_raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    dup_raw["tracks"][1]["id"] = entry_a
+    manifest_path.write_text(json.dumps(dup_raw, indent=2), encoding="utf-8")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=alb.revision
+        )
+    manifest_path.write_bytes(raw_before)
+
+    # 6. Finalized Album rejection
+    alb_clean = custom_storage.remove_album_entry(user_id, alb.id, placeholder_c, expected_revision=alb.revision)
+    fin = custom_storage.finalize_album(user_id, alb.id, expected_revision=alb_clean.revision)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.confirm_album_entry_refresh(
+            user_id, alb.id, entry_a, 1, "a" * 64, expected_revision=fin.revision
+        )
+
 
 
 

@@ -352,6 +352,7 @@ class AlbumEntryRefreshPreviewResponse(BaseModel):
 
 
 class AlbumEntryRefreshConfirmRequest(BaseModel):
+    expected_revision: StrictInt = Field(..., ge=1)
     expected_source_revision: int = Field(..., ge=1)
     expected_source_audio_sha256: str = Field(..., min_length=64, max_length=64)
     expected_source_updated_at: Optional[float] = Field(default=None)
