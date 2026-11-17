@@ -1137,8 +1137,9 @@ def test_album_finalization_validation_locking_and_completion(custom_storage):
         custom_storage.preview_album_entry_refresh(user_id, album.id, r_id)
     with pytest.raises(AlbumFinalizedError):
         custom_storage.finalize_album(user_id, album.id, expected_revision=finalized.revision)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.add_album_entry(user_id, album.id, trk_ok.id, expected_revision=finalized.revision, take_id=t_ok.id)
     for unenrolled_call in (
-        lambda: custom_storage.add_album_entry(user_id, album.id, trk_ok.id, expected_revision=finalized.revision, take_id=t_ok.id),
         lambda: custom_storage.update_album_entry(user_id, album.id, r_id, expected_revision=finalized.revision, clear_take_to_placeholder=True),
         lambda: custom_storage.remove_album_entry(user_id, album.id, r_id, expected_revision=finalized.revision),
         lambda: custom_storage.confirm_album_entry_refresh(user_id, album.id, r_id, 1, "sha", expected_revision=finalized.revision),
@@ -5046,8 +5047,7 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1),
     )
 
-    def _run_6_unenrolled_writers(rev: int):
-        yield lambda: custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=rev, take_id=None)
+    def _run_5_unenrolled_writers(rev: int):
         yield lambda: custom_storage.update_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev, custom_title="X")
         yield lambda: custom_storage.remove_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev)
         yield lambda: custom_storage.confirm_album_entry_refresh(user_id, alb.id, entry_rec.id, 1, "a" * 64, expected_revision=rev)
@@ -5057,7 +5057,8 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
     def _run_all_8_writers(rev: int):
         yield lambda: custom_storage.update_album(user_id, alb.id, {"title": "Nope", "expected_revision": rev})
         yield lambda: custom_storage.finalize_album(user_id, alb.id, expected_revision=rev)
-        yield from _run_6_unenrolled_writers(rev)
+        yield lambda: custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=rev, take_id=None)
+        yield from _run_5_unenrolled_writers(rev)
 
     # 2. Idle v2 Album -> AlbumMutationNotEnrolledError on all 6 unenrolled writers, zero writes, guarded once
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id)
@@ -5073,7 +5074,7 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         return orig_phase_a(self_mgr, *args, **kwargs)
 
     monkeypatch.setattr(ProjectStorageManager, "_validate_album_evidence_phase_a_locked", _counted_phase_a)
-    for op_fn in _run_6_unenrolled_writers(alb.revision):
+    for op_fn in _run_5_unenrolled_writers(alb.revision):
         phase_a_calls["n"] = 0
         with pytest.raises(AlbumMutationNotEnrolledError):
             op_fn()
@@ -6608,9 +6609,8 @@ def test_phase1b_stage1_3b_2b1a_generation_readers_provenance_and_snapshot_matri
     assert reconcile_calls["n"] == 0
     assert manifest_path.read_bytes() == good_m4_bytes and journal_path.read_bytes() == good_j4_bytes
 
-    # All 6 unenrolled writers remain blocked
+    # All 5 remaining unenrolled writers remain blocked
     for blocked in (
-        lambda: custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=4, take_id=None),
         lambda: custom_storage.update_album_entry(user_id, alb.id, eid, expected_revision=4, custom_title="X"),
         lambda: custom_storage.remove_album_entry(user_id, alb.id, eid, expected_revision=4),
         lambda: custom_storage.confirm_album_entry_refresh(user_id, alb.id, eid, 1, wav_sha, expected_revision=4),
@@ -7008,3 +7008,172 @@ def test_phase1b_stage1_3b_2b1a_generation_readers_provenance_and_snapshot_matri
                 with pytest.raises(AlbumDurabilityUncertainError):
                     custom_storage.open_album_entry_audio_for_read(user_id, alb.id, eid)
         assert live_fds_ent == set()
+
+
+def test_feature1_add_album_entry_v2_and_multi_take(custom_storage: ProjectStorageManager, monkeypatch):
+    """Feature 1: add_album_entry works on fresh and v2-journaled albums, including multiple takes from one track."""
+    import io
+    import os
+    import wave
+    from backend.project_storage import (
+        AlbumFinalizedError,
+        AlbumRevisionConflictError,
+        ProjectStorageError,
+    )
+
+    def _make_wav(sample_byte: bytes, frames: int = 300) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(sample_byte * frames)
+        return buf.getvalue()
+
+    wav_a = _make_wav(b"\x01\x02")
+    wav_b = _make_wav(b"\x05\x06")
+    wav_updated = _make_wav(b"\x09\x0a")
+
+    user_id = "u_feature1_add_entry"
+    trk = custom_storage.create_track(user_id=user_id, title="Feature 1 Track")
+    tk_a = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_a, original_filename="tk_a.wav", extension=".wav")
+    tk_b = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_b, original_filename="tk_b.wav", extension=".wav")
+
+    # 1. Add Take A to a fresh draft Album (no journal yet)
+    alb = custom_storage.create_album(user_id=user_id, title="Feature 1 Album")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk_a.id)
+    assert len(alb.tracks) == 1
+    entry_a = alb.tracks[0]
+
+    # 2. Metadata update creates v2 journal.json
+    alb = custom_storage.update_album(user_id, alb.id, {"title": "Feature 1 Album v2", "expected_revision": alb.revision})
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    assert (alb_dir / "journal.json").exists()
+
+    # 3. Add Take B (same Track) to the v2-journaled Album
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk_b.id)
+    assert len(alb.tracks) == 2
+    entry_b = alb.tracks[1]
+    assert entry_a.id != entry_b.id
+    assert entry_b.active_generation == 1
+    assert entry_b.active_audio_filename == "audio_g1.wav"
+    assert entry_b.active_snapshot_filename == "snapshot_g1.json"
+
+    # 4. Independent playback of both Album-owned recordings
+    _, _, fd_a, _ = custom_storage.open_album_entry_audio_for_read(user_id, alb.id, entry_a.id)
+    with os.fdopen(fd_a, "rb") as fa:
+        assert fa.read() == wav_a
+    _, path_b, fd_b, _ = custom_storage.open_album_entry_audio_for_read(user_id, alb.id, entry_b.id)
+    assert path_b.name == "audio_g1.wav"
+    with os.fdopen(fd_b, "rb") as fb:
+        assert fb.read() == wav_b
+
+    # 5. Updating Take A audio and deleting Take B do not affect either Album recording
+    custom_storage.update_take_audio(user_id, trk.id, tk_a.id, audio_bytes=wav_updated, extension=".wav")
+    assert custom_storage.delete_take(user_id, trk.id, tk_b.id) is True
+
+    _, _, fd_a2, _ = custom_storage.open_album_entry_audio_for_read(user_id, alb.id, entry_a.id)
+    with os.fdopen(fd_a2, "rb") as fa2:
+        assert fa2.read() == wav_a
+    _, _, fd_b2, _ = custom_storage.open_album_entry_audio_for_read(user_id, alb.id, entry_b.id)
+    with os.fdopen(fd_b2, "rb") as fb2:
+        assert fb2.read() == wav_b
+
+    # 6. Stale expected_revision is rejected
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision - 1, take_id=tk_a.id)
+
+    # 7. Failed staging preserves existing Album contents
+    before_manifest = (alb_dir / "album.json").read_bytes()
+    before_journal = (alb_dir / "journal.json").read_bytes()
+    with monkeypatch.context() as mp:
+        def _fail_stage(*_a, **_kw):
+            raise ProjectStorageError("Simulated staging failure")
+        mp.setattr(ProjectStorageManager, "_stage_entry_audio_copy", _fail_stage)
+        with pytest.raises(ProjectStorageError, match="Simulated staging failure"):
+            custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk_a.id)
+    assert (alb_dir / "album.json").read_bytes() == before_manifest
+    assert (alb_dir / "journal.json").read_bytes() == before_journal
+
+    # 8. Finalized Albums reject new entries
+    fin = custom_storage.finalize_album(user_id, alb.id, expected_revision=alb.revision)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.add_album_entry(user_id, fin.id, trk.id, expected_revision=fin.revision, take_id=tk_a.id)
+
+
+def test_feature1_promotion_dir_sync_fault_injection(custom_storage: ProjectStorageManager, monkeypatch):
+    """Feature 1: entry_dir and entries/ fsync failures raise AlbumDurabilityUncertainError without publishing or unlinking."""
+    import errno
+    import io
+    import json
+    import os
+    import wave
+    import backend.project_storage as ps_mod
+    from backend.project_models import AlbumJournal, JournalTxState
+    from backend.project_storage import AlbumDurabilityUncertainError
+    from backend.security import get_album_entry_dir_name
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x07\x08" * 300)
+    wav_ok = buf.getvalue()
+
+    user_id = "u_feature1_dirsync_fault"
+    trk = custom_storage.create_track(user_id=user_id, title="Sync Fault Track")
+    tk = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_ok, original_filename="sync.wav", extension=".wav")
+
+    for fail_on_call in (1, 2):
+        # fail_on_call == 1 -> entry_dir _fsync_dir_fd; fail_on_call == 2 -> entries/ parent _fsync_dir_fd
+        alb = custom_storage.create_album(user_id=user_id, title=f"Sync Fault LP {fail_on_call}")
+        alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk.id)
+        existing_entry_id = alb.tracks[0].id
+        alb = custom_storage.update_album(user_id, alb.id, {"title": f"Sync Fault LP {fail_on_call} v2", "expected_revision": alb.revision})
+
+        alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+        before_manifest = (alb_dir / "album.json").read_bytes()
+        before_rev = alb.revision
+        existing_entries = set(os.listdir(alb_dir / "entries"))
+
+        alb_st = os.stat(alb_dir)
+        alb_dir_id = (int(alb_st.st_dev), int(alb_st.st_ino))
+
+        orig_fsync_dir = ps_mod._fsync_dir_fd
+        sync_calls = {"n": 0}
+
+        def _faulty_fsync_dir(dir_fd: int) -> None:
+            st = os.fstat(dir_fd)
+            if (int(st.st_dev), int(st.st_ino)) != alb_dir_id:
+                sync_calls["n"] += 1
+                if sync_calls["n"] == fail_on_call:
+                    raise OSError(errno.EIO, f"Simulated dir fsync EIO on call {fail_on_call}")
+            return orig_fsync_dir(dir_fd)
+
+        with monkeypatch.context() as mp:
+            mp.setattr(ps_mod, "_fsync_dir_fd", _faulty_fsync_dir)
+            with pytest.raises(AlbumDurabilityUncertainError):
+                custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=before_rev, take_id=tk.id)
+
+        assert sync_calls["n"] == fail_on_call
+        # Manifest did not advance
+        assert (alb_dir / "album.json").read_bytes() == before_manifest
+        # Journal has PUBLISH_INTENT active_tx and no COMMITTED receipt for it
+        j_after = AlbumJournal(**json.loads((alb_dir / "journal.json").read_text(encoding="utf-8")))
+        assert j_after.active_tx is not None
+        assert j_after.active_tx.state == JournalTxState.PUBLISH_INTENT
+        assert not any(r.tx_id == j_after.active_tx.tx_id and r.outcome == JournalTxState.COMMITTED for r in j_after.tx_receipts)
+
+        # Existing Album recording remains intact and readable
+        _, _, fd_old, _ = custom_storage.open_album_entry_audio_for_read(user_id, alb.id, existing_entry_id)
+        with os.fdopen(fd_old, "rb") as f_old:
+            assert f_old.read() == wav_ok
+
+        # Potentially promoted artifacts in the new entry directory were NOT destructively unlinked
+        new_entry_dirs = set(os.listdir(alb_dir / "entries")) - existing_entries
+        assert len(new_entry_dirs) == 1
+        new_dir = alb_dir / "entries" / next(iter(new_entry_dirs))
+        assert (new_dir / "audio_g1.wav").is_file()
+        assert (new_dir / "snapshot_g1.json").is_file()
+        assert new_dir.name != get_album_entry_dir_name(existing_entry_id)

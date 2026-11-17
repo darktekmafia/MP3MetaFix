@@ -3750,10 +3750,9 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
     alb_dir = papi_mod.project_storage_manager._get_album_dir(user_id, alb["id"])
     journal_path = alb_dir / "journal.json"
 
-    def _call_6_unenrolled_routes(rev: int):
+    def _call_5_unenrolled_routes(rev: int):
         return [
             ("delete_album", client.delete(f"/api/projects/albums/{alb['id']}?expected_revision={rev}", cookies=auth_cookies)),
-            ("add_entry", client.post(f"/api/projects/albums/{alb['id']}/entries", json={"track_id": trk["id"], "expected_revision": rev}, cookies=auth_cookies)),
             ("patch_entry", client.patch(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}", json={"custom_title": "Y", "expected_revision": rev}, cookies=auth_cookies)),
             ("del_entry", client.delete(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}?expected_revision={rev}", cookies=auth_cookies)),
             ("refresh", client.post(f"/api/projects/albums/{alb['id']}/entries/{entry_rec['id']}/refresh", json={"expected_revision": rev, "expected_source_revision": 1, "expected_source_audio_sha256": entry_rec["snapshot"]["audio_sha256"]}, cookies=auth_cookies)),
@@ -3764,13 +3763,14 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
         return [
             ("patch_album", client.patch(f"/api/projects/albums/{alb['id']}", json={"title": "X", "expected_revision": rev}, cookies=auth_cookies)),
             ("finalize", client.post(f"/api/projects/albums/{alb['id']}/finalize?expected_revision={rev}", cookies=auth_cookies)),
-            *_call_6_unenrolled_routes(rev),
+            ("add_entry", client.post(f"/api/projects/albums/{alb['id']}/entries", json={"track_id": trk["id"], "expected_revision": rev}, cookies=auth_cookies)),
+            *_call_5_unenrolled_routes(rev),
         ]
 
-    # 1. Idle v2 journal -> 409 mutation_not_enrolled on the 6 unenrolled routes (and no reconciliation recommended)
+    # 1. Idle v2 journal -> 409 mutation_not_enrolled on the 5 remaining unenrolled routes (and no reconciliation recommended)
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb["id"])
     journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
-    for name, res in _call_6_unenrolled_routes(alb["revision"]):
+    for name, res in _call_5_unenrolled_routes(alb["revision"]):
         assert res.status_code == 409, f"{name} expected 409, got {res.status_code}: {res.text}"
         assert res.headers.get("X-Error-Code") == "mutation_not_enrolled"
         body = res.json()["detail"]
@@ -3856,9 +3856,9 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
     journal_path.write_text(json.dumps(raw_j.model_dump(mode="json")), encoding="utf-8")
     raw_m_bytes = manifest_path.read_bytes()
     raw_j_bytes = journal_path.read_bytes()
-    raw_res = client.post(
-        f"/api/projects/albums/{alb['id']}/entries",
-        json={"track_id": trk["id"], "expected_revision": persisted_data["revision"]},
+    raw_res = client.patch(
+        f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}",
+        json={"custom_title": "Y", "expected_revision": persisted_data["revision"]},
         cookies=auth_cookies,
     )
     assert raw_res.status_code == 409
@@ -4409,3 +4409,97 @@ def test_phase1b_stage1_3b_2b1a_api_generation_readers_errors_and_webp(client, a
         assert b"FOREIGN!" not in r_sub.content
 
 
+
+
+def test_feature1_api_add_album_entry_v2_and_multi_take(client, auth_cookies):
+    """Feature 1 API: add multiple Takes from one Track to fresh & v2-journaled Albums and stream both."""
+    import io
+    import wave
+
+    def _make_wav(sample_byte: bytes, frames: int = 300) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(sample_byte * frames)
+        return buf.getvalue()
+
+    wav_a = _make_wav(b"\x11\x12")
+    wav_b = _make_wav(b"\x21\x22")
+
+    trk = client.post("/api/projects/tracks", json={"title": "API Feature 1 Track"}, cookies=auth_cookies).json()
+    tk_a = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        files={"file": ("take_a.wav", wav_a, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    tk_b = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        files={"file": ("take_b.wav", wav_b, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    # 1. Fresh draft Album + first Take
+    alb = client.post("/api/projects/albums", json={"title": "API Feature 1 Album"}, cookies=auth_cookies).json()
+    r1 = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk_a["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    )
+    assert r1.status_code == 201
+    alb = r1.json()
+    entry_a = alb["tracks"][0]
+
+    # 2. Metadata PATCH initializes v2 journal
+    r_patch = client.patch(
+        f"/api/projects/albums/{alb['id']}",
+        json={"title": "API Feature 1 Album v2", "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    )
+    assert r_patch.status_code == 200
+    alb = r_patch.json()
+
+    # 3. Add second Take from the same Track after v2 journal exists
+    r2 = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk_b["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    )
+    assert r2.status_code == 201
+    alb = r2.json()
+    assert len(alb["tracks"]) == 2
+    entry_b = alb["tracks"][1]
+
+    # 4. Stream both independent Album-owned recordings
+    s1 = client.get(f"/api/projects/albums/{alb['id']}/entries/{entry_a['id']}/stream", cookies=auth_cookies)
+    assert s1.status_code == 200 and s1.content == wav_a
+    s2 = client.get(f"/api/projects/albums/{alb['id']}/entries/{entry_b['id']}/stream", cookies=auth_cookies)
+    assert s2.status_code == 200 and s2.content == wav_b
+
+    # 5. Delete source Take B; Album recording B still streams
+    assert client.delete(f"/api/projects/tracks/{trk['id']}/takes/{tk_b['id']}", cookies=auth_cookies).status_code == 200
+    s2_after = client.get(f"/api/projects/albums/{alb['id']}/entries/{entry_b['id']}/stream", cookies=auth_cookies)
+    assert s2_after.status_code == 200 and s2_after.content == wav_b
+
+    # 6. Stale expected_revision -> 409
+    r_stale = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk_a["id"], "expected_revision": alb["revision"] - 1},
+        cookies=auth_cookies,
+    )
+    assert r_stale.status_code == 409
+
+    # 7. Finalized Album rejects new entries -> 409
+    r_fin = client.post(
+        f"/api/projects/albums/{alb['id']}/finalize?expected_revision={alb['revision']}",
+        cookies=auth_cookies,
+    )
+    assert r_fin.status_code == 200, r_fin.text
+    fin_alb = r_fin.json()
+    r_fin_add = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk_a["id"], "expected_revision": fin_alb["revision"]},
+        cookies=auth_cookies,
+    )
+    assert r_fin_add.status_code == 409

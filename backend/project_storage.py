@@ -2860,6 +2860,8 @@ class ProjectStorageManager:
         take_id: str,
         *,
         album_dir_fd: int,
+        generation: Optional[int] = None,
+        staged_refs_out: Optional[List[ArtifactRefRecord]] = None,
     ) -> Tuple[AlbumEntrySnapshot, Callable[[], None], Callable[[], None], Callable[[bool], None]]:
         """Stage and promote an independent audio copy and snapshot strictly via retained dir_fds."""
         track = self.get_track(user_id, track_id)
@@ -2962,8 +2964,12 @@ class ProjectStorageManager:
             stage_token = uuid.uuid4().hex[:12]
             staging_audio_name = f".staging_{stage_token}_audio{ext}"
             staging_snap_name = f".staging_{stage_token}_snapshot.json"
-            dest_audio_name = f"audio{ext}"
-            dest_snap_name = "snapshot.json"
+            if generation is not None:
+                dest_audio_name = f"audio_g{generation}{ext}"
+                dest_snap_name = f"snapshot_g{generation}.json"
+            else:
+                dest_audio_name = f"audio{ext}"
+                dest_snap_name = "snapshot.json"
 
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
             audio_fd = os.open(staging_audio_name, flags, 0o600, dir_fd=entry_dir_fd)
@@ -3012,7 +3018,7 @@ class ProjectStorageManager:
                 try:
                     sst_init = os.fstat(snap_fd)
                     staging_snap_id = (sst_init.st_dev, sst_init.st_ino)
-                    sf = os.fdopen(snap_fd, "w", encoding="utf-8")
+                    sf = os.fdopen(snap_fd, "wb")
                 except BaseException:
                     try:
                         os.close(snap_fd)
@@ -3020,13 +3026,37 @@ class ProjectStorageManager:
                         pass
                     raise
 
+                import io
+                sbuf = io.StringIO()
+                json.dump(snapshot.model_dump(), sbuf, indent=2)
+                snap_bytes = sbuf.getvalue().encode("utf-8")
                 with sf:
-                    json.dump(snapshot.model_dump(), sf, indent=2)
+                    sf.write(snap_bytes)
                     sf.flush()
                     os.fsync(sf.fileno())
                     os.fchmod(sf.fileno(), 0o600)
                     sst = os.fstat(sf.fileno())
                     staging_snap_id = (sst.st_dev, sst.st_ino)
+
+                if staged_refs_out is not None and generation is not None:
+                    staged_refs_out.extend([
+                        ArtifactRefRecord(
+                            rel_path=f"entries/{entry_dir_hash}/{dest_audio_name}",
+                            role=ArtifactRole.ENTRY_AUDIO,
+                            sha256=snapshot.audio_sha256,
+                            size_bytes=snapshot.size_bytes,
+                            entry_id=entry_id,
+                            generation=generation,
+                        ),
+                        ArtifactRefRecord(
+                            rel_path=f"entries/{entry_dir_hash}/{dest_snap_name}",
+                            role=ArtifactRole.ENTRY_SNAPSHOT,
+                            sha256=hashlib.sha256(snap_bytes).hexdigest(),
+                            size_bytes=len(snap_bytes),
+                            entry_id=entry_id,
+                            generation=generation,
+                        ),
+                    ])
             except Exception:
                 for sname, expected_id in ((staging_audio_name, staging_audio_id), (staging_snap_name, staging_snap_id)):
                     if expected_id is not None:
@@ -3054,6 +3084,37 @@ class ProjectStorageManager:
                     raise ProjectStorageError("Entry directory descriptor closed before promotion.")
                 _promote_one(staging_audio_name, dest_audio_name, staging_audio_id)
                 _promote_one(staging_snap_name, dest_snap_name, staging_snap_id)
+                try:
+                    _fsync_dir_fd(entry_dir_fd)
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Entry directory synchronization failed after artifact promotion for '{entry_id}': {exc}"
+                    ) from exc
+                dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+                try:
+                    cur_entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Cannot open album 'entries' directory for synchronization after artifact promotion for '{entry_id}': {exc}"
+                    ) from exc
+                try:
+                    cur_est = os.fstat(cur_entries_fd)
+                    if (cur_est.st_dev, cur_est.st_ino) != entries_dir_id:
+                        raise AlbumDurabilityUncertainError(
+                            f"Album 'entries' directory identity changed during artifact promotion for '{entry_id}'."
+                        )
+                    _fsync_dir_fd(cur_entries_fd)
+                except AlbumDurabilityUncertainError:
+                    raise
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Album 'entries' directory synchronization failed after artifact promotion for '{entry_id}': {exc}"
+                    ) from exc
+                finally:
+                    try:
+                        os.close(cur_entries_fd)
+                    except OSError:
+                        pass
 
             def cleanup_backups() -> None:
                 _close_entry_fd()
@@ -3818,6 +3879,8 @@ class ProjectStorageManager:
         payload_sha256: str,
         idempotency_key: Optional[str],
         pre_manifest_publish_check: Optional[Callable[[bool], None]] = None,
+        new_refs: Optional[List[ArtifactRefRecord]] = None,
+        superseded_refs: Optional[List[ArtifactRefRecord]] = None,
     ) -> AlbumMetadata:
         """Execute PREPARED -> PUBLISH_INTENT -> manifest -> COMMITTED receipt under _album_lock."""
         tx_id = f"tx_{secrets.token_hex(12)}"
@@ -3880,8 +3943,8 @@ class ProjectStorageManager:
             intended_manifest_sha256=intended_manifest_sha256,
             idempotency_key=idempotency_key,
             staging_refs=[],
-            new_refs=[],
-            superseded_refs=[],
+            new_refs=list(new_refs or []),
+            superseded_refs=list(superseded_refs or []),
         )
         prep_idem = list(existing_idem)
         if idempotency_key is not None:
@@ -4031,8 +4094,8 @@ class ProjectStorageManager:
             result_revision=target_revision,
             payload_sha256=payload_sha256,
             intended_manifest_sha256=intended_manifest_sha256,
-            new_refs=[],
-            superseded_refs=[],
+            new_refs=list(new_refs or []),
+            superseded_refs=list(superseded_refs or []),
             idempotency_key=idempotency_key,
         )
         final_journal = self._build_reconciled_journal(intent_journal, receipt, add_retained=False)
@@ -4539,12 +4602,17 @@ class ProjectStorageManager:
                 loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
                 if not loaded:
                     return None
-                album, norm_data, _ = loaded
+                album, norm_data, manifest_st = loaded
+                evidence: Dict[str, Any] = {}
                 _, journal, consistency = self._validate_album_evidence_phase_a_locked(
-                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
+                    album_id,
+                    album_dir_fd,
+                    raw_album_data=raw_holder[0],
+                    raw_album_identity=(manifest_st.st_dev, manifest_st.st_ino),
+                    evidence_out=evidence,
                 )
                 self._check_album_mutation_eligibility_phase_b_locked(
-                    album_id, journal, consistency, is_enrolled=False
+                    album_id, journal, consistency, is_enrolled=True
                 )
                 if self._is_album_finalized(album):
                     raise AlbumFinalizedError("Cannot add tracks to a finalized album.")
@@ -4553,31 +4621,157 @@ class ProjectStorageManager:
                         f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
                     )
 
-                new_entry_id = generate_album_entry_id()
-                new_entry = {
-                    "id": new_entry_id,
-                    "disc_number": disc_number,
-                    "track_id": track_id,
-                    "take_id": take_id,
-                    "custom_title": custom_title,
-                }
-                tracks = [t.model_dump() for t in album.tracks]
-                if track_number is not None and 1 <= track_number <= len(tracks) + 1:
-                    tracks.insert(track_number - 1, new_entry)
-                else:
-                    tracks.append(new_entry)
+                if not track_id or not is_valid_project_id(track_id, expected_prefix="trk"):
+                    raise ProjectValidationError(f"Invalid track identifier '{track_id}'.")
+                if take_id is not None and not is_valid_project_id(take_id, expected_prefix="tak"):
+                    raise ProjectValidationError(f"Invalid take identifier '{take_id}'.")
 
-                summary = f"Added track entry ({'placeholder' if take_id is None else take_id})"
-                return self._update_album_locked_with_fd(
-                    album_dir_fd=album_dir_fd,
-                    user_id=user_id,
-                    album_id=album_id,
-                    album=album,
-                    data=norm_data,
-                    updates={"tracks": tracks},
-                    change_summary=summary,
-                    allow_new_entry_id=new_entry_id,
-                )
+                new_entry_id = generate_album_entry_id()
+                if journal is None:
+                    new_entry = {
+                        "id": new_entry_id,
+                        "disc_number": disc_number,
+                        "track_id": track_id,
+                        "take_id": take_id,
+                        "custom_title": custom_title,
+                    }
+                    tracks = [t.model_dump() for t in album.tracks]
+                    if track_number is not None and 1 <= track_number <= len(tracks) + 1:
+                        tracks.insert(track_number - 1, new_entry)
+                    else:
+                        tracks.append(new_entry)
+
+                    summary = f"Added track entry ({'placeholder' if take_id is None else take_id})"
+                    return self._update_album_locked_with_fd(
+                        album_dir_fd=album_dir_fd,
+                        user_id=user_id,
+                        album_id=album_id,
+                        album=album,
+                        data=norm_data,
+                        updates={"tracks": tracks},
+                        change_summary=summary,
+                        allow_new_entry_id=new_entry_id,
+                    )
+
+                # Enrolled v2 path: stage generation-1 audio + snapshot (if take_id) and publish via _execute_v2_album_tx_locked
+                new_refs: List[ArtifactRefRecord] = []
+                commit_fn: Optional[Callable[[], None]] = None
+                cleanup_fn: Optional[Callable[[], None]] = None
+                rollback_fn: Optional[Callable[[bool], None]] = None
+                promoted = False
+
+                if take_id is None:
+                    track = self.get_track(user_id, track_id)
+                    if not track:
+                        raise ProjectValidationError(f"Track workspace '{track_id}' not found.")
+                    new_entry_dict: Dict[str, Any] = {
+                        "id": new_entry_id,
+                        "track_number": 1,
+                        "disc_number": int(disc_number or 1),
+                        "track_id": track_id,
+                        "take_id": None,
+                        "custom_title": custom_title,
+                        "is_placeholder": True,
+                        "has_owned_audio": False,
+                        "snapshot": None,
+                        "active_generation": None,
+                        "active_audio_filename": None,
+                        "active_snapshot_filename": None,
+                    }
+                else:
+                    snap, commit_fn, cleanup_fn, rollback_fn = self._stage_entry_audio_copy(
+                        user_id,
+                        album_id,
+                        new_entry_id,
+                        track_id,
+                        take_id,
+                        album_dir_fd=album_dir_fd,
+                        generation=1,
+                        staged_refs_out=new_refs,
+                    )
+                    new_entry_dict = {
+                        "id": new_entry_id,
+                        "track_number": 1,
+                        "disc_number": int(disc_number or 1),
+                        "track_id": track_id,
+                        "take_id": take_id,
+                        "custom_title": custom_title,
+                        "is_placeholder": False,
+                        "has_owned_audio": True,
+                        "snapshot": snap.model_dump(),
+                        "active_generation": 1,
+                        "active_audio_filename": f"audio_g1.{snap.format}",
+                        "active_snapshot_filename": "snapshot_g1.json",
+                    }
+
+                try:
+                    target_data = dict(norm_data)
+                    tracks_list = [dict(t) if isinstance(t, dict) else t.model_dump() for t in (target_data.get("tracks") or [])]
+                    if track_number is not None and 1 <= track_number <= len(tracks_list) + 1:
+                        tracks_list.insert(track_number - 1, new_entry_dict)
+                    else:
+                        tracks_list.append(new_entry_dict)
+                    for idx, t_item in enumerate(tracks_list):
+                        t_item["track_number"] = idx + 1
+
+                    new_rev = int(target_data.get("revision", 1)) + 1
+                    summary = f"Added track entry ({'placeholder' if take_id is None else take_id})"
+                    revs = list(target_data.get("revisions") or [])
+                    revs.append({
+                        "revision": new_rev,
+                        "timestamp": time.time(),
+                        "change_summary": summary,
+                        "changed_fields": ["tracks"],
+                    })
+                    target_data["tracks"] = tracks_list
+                    target_data["track_ids"] = [t["track_id"] for t in tracks_list if t.get("track_id")]
+                    target_data["revision"] = new_rev
+                    target_data["revisions"] = revs
+                    target_data["updated_at"] = time.time()
+
+                    payload_sha256 = self._compute_update_album_payload_sha256(
+                        "add_album_entry",
+                        expected_revision,
+                        {
+                            "track_id": track_id,
+                            "take_id": take_id,
+                            "disc_number": disc_number,
+                            "track_number": track_number,
+                            "custom_title": custom_title,
+                        },
+                    )
+
+                    def _promote_post_intent(is_post_intent: bool) -> None:
+                        nonlocal promoted
+                        if is_post_intent and commit_fn is not None and not promoted:
+                            commit_fn()
+                            promoted = True
+
+                    published = self._execute_v2_album_tx_locked(
+                        album_id=album_id,
+                        album_dir_fd=album_dir_fd,
+                        evidence=evidence,
+                        target_data=target_data,
+                        op="add_album_entry",
+                        expected_revision=expected_revision,
+                        payload_sha256=payload_sha256,
+                        idempotency_key=None,
+                        pre_manifest_publish_check=_promote_post_intent,
+                        new_refs=new_refs,
+                        superseded_refs=[],
+                    )
+                except Exception as exc:
+                    if rollback_fn is not None:
+                        allow_unlink = not isinstance(exc, AlbumDurabilityUncertainError)
+                        try:
+                            rollback_fn(allow_promoted_unlink=allow_unlink)
+                        except Exception:
+                            pass
+                    raise
+
+                if cleanup_fn is not None:
+                    cleanup_fn()
+                return published
             finally:
                 try:
                     os.close(album_dir_fd)
@@ -5058,20 +5252,25 @@ class ProjectStorageManager:
                     edir_st = os.fstat(entry_fd)
                     entry_dir_id = (int(edir_st.st_dev), int(edir_st.st_ino))
 
-                    audio_name: Optional[str] = None
-                    for ext in AUDIO_FORMATS:
-                        cand = f"audio{ext}"
-                        try:
-                            cst = os.lstat(cand, dir_fd=entry_fd)
-                            if stat.S_ISREG(cst.st_mode):
-                                audio_name = cand
-                                break
-                        except FileNotFoundError:
-                            continue
+                    if entry.active_generation is not None:
+                        audio_name = entry.active_audio_filename
+                        snap_name = entry.active_snapshot_filename or "snapshot.json"
+                    else:
+                        audio_name = None
+                        for ext in AUDIO_FORMATS:
+                            cand = f"audio{ext}"
+                            try:
+                                cst = os.lstat(cand, dir_fd=entry_fd)
+                                if stat.S_ISREG(cst.st_mode):
+                                    audio_name = cand
+                                    break
+                            except FileNotFoundError:
+                                continue
+                        snap_name = "snapshot.json"
                     if not audio_name:
                         raise ValueError("Album-owned audio file is missing or not a regular file.")
 
-                    expected_entry_files = {"snapshot.json", audio_name}
+                    expected_entry_files = {snap_name, audio_name}
                     for cname in os.listdir(entry_fd):
                         if cname.startswith((".staging_", ".tmp_", ".backup_")):
                             raise ValueError("Incomplete recording transfer files present in entry directory.")
@@ -5132,30 +5331,30 @@ class ProjectStorageManager:
                     finally:
                         os.close(afd)
 
-                    sfd = os.open("snapshot.json", file_flags, dir_fd=entry_fd)
+                    sfd = os.open(snap_name, file_flags, dir_fd=entry_fd)
                     try:
                         pre_sst = os.fstat(sfd)
                         if not stat.S_ISREG(pre_sst.st_mode):
-                            raise AlbumManifestCorruptError("Entry snapshot.json is not a regular file.")
+                            raise AlbumManifestCorruptError(f"Entry {snap_name} is not a regular file.")
                         with os.fdopen(os.dup(sfd), "rb") as sf:
                             snap_bytes = sf.read()
                         snap_sha = hashlib.sha256(snap_bytes).hexdigest()
                         try:
                             disk_snap = AlbumEntrySnapshot(**json.loads(snap_bytes.decode("utf-8")))
                         except Exception as se:
-                            raise ValueError(f"Standalone snapshot.json is missing or invalid: {se}") from se
+                            raise ValueError(f"Standalone {snap_name} is missing or invalid: {se}") from se
                         if (
                             disk_snap.entry_id != entry.id
                             or disk_snap.source_track_id != entry.track_id
                             or disk_snap.source_take_id != entry.take_id
                         ):
-                            raise ValueError("Standalone snapshot.json entry/track/take identity mismatch.")
+                            raise ValueError(f"Standalone {snap_name} entry/track/take identity mismatch.")
                         if not self._snapshots_semantically_equal(disk_snap, entry.snapshot):
-                            raise ValueError("Standalone snapshot.json does not match committed manifest snapshot.")
+                            raise ValueError(f"Standalone {snap_name} does not match committed manifest snapshot.")
                         try:
                             _fsync_file_fd(sfd)
                             post_sst = os.fstat(sfd)
-                            dir_sst = os.lstat("snapshot.json", dir_fd=entry_fd)
+                            dir_sst = os.lstat(snap_name, dir_fd=entry_fd)
                         except OSError as exc:
                             raise AlbumDurabilityUncertainError(
                                 f"Snapshot sealing synchronization failed for entry '{entry.id}': {exc}"
@@ -5163,7 +5362,7 @@ class ProjectStorageManager:
                         pre_s_tup = self._seal_stat_tuple(pre_sst)
                         if self._seal_stat_tuple(post_sst) != pre_s_tup or self._seal_stat_tuple(dir_sst) != pre_s_tup:
                             raise AlbumManifestCorruptError(
-                                f"Entry snapshot.json changed or was substituted during finalization sealing for '{entry.id}'."
+                                f"Entry {snap_name} changed or was substituted during finalization sealing for '{entry.id}'."
                             )
                     finally:
                         os.close(sfd)
@@ -5178,7 +5377,7 @@ class ProjectStorageManager:
                     if (int(post_edir_st.st_dev), int(post_edir_st.st_ino)) != entry_dir_id:
                         raise AlbumManifestCorruptError(f"Entry directory identity changed during sealing for '{entry.id}'.")
 
-                    sealed_entries.append((entry.id, ehash, entry_dir_id, audio_name, pre_a_tup, audio_sha, pre_s_tup, snap_sha))
+                    sealed_entries.append((entry.id, ehash, entry_dir_id, audio_name, pre_a_tup, audio_sha, snap_name, pre_s_tup, snap_sha))
                 except (AlbumDurabilityUncertainError, AlbumManifestCorruptError):
                     raise
                 except FileNotFoundError as exc:
@@ -5407,7 +5606,7 @@ class ProjectStorageManager:
                 if (int(ent_st.st_dev), int(ent_st.st_ino)) != sealed["entries_dir_id"]:
                     raise AlbumManifestCorruptError("Album entries directory identity changed before publication.")
 
-            for entry_id, ehash, entry_dir_id, audio_name, audio_stat, _audio_sha, snap_stat, snap_sha in sealed["entries"]:
+            for entry_id, ehash, entry_dir_id, audio_name, audio_stat, _audio_sha, snap_name, snap_stat, snap_sha in sealed["entries"]:
                 entry_fd: Optional[int] = None
                 try:
                     try:
@@ -5447,22 +5646,22 @@ class ProjectStorageManager:
                             pass
 
                     try:
-                        sfd = os.open("snapshot.json", file_flags, dir_fd=entry_fd)
+                        sfd = os.open(snap_name, file_flags, dir_fd=entry_fd)
                     except FileNotFoundError as exc:
-                        _handle_missing_or_io(f"Entry snapshot.json missing for '{entry_id}'", exc, is_missing=True)
+                        _handle_missing_or_io(f"Entry {snap_name} missing for '{entry_id}'", exc, is_missing=True)
                         return
                     except OSError as exc:
-                        _handle_missing_or_io(f"Cannot open entry snapshot.json for '{entry_id}'", exc, is_missing=False)
+                        _handle_missing_or_io(f"Cannot open entry {snap_name} for '{entry_id}'", exc, is_missing=False)
                         return
                     try:
                         try:
                             sst = os.fstat(sfd)
                         except OSError as exc:
-                            _handle_missing_or_io(f"Cannot stat entry snapshot.json for '{entry_id}'", exc, is_missing=False)
+                            _handle_missing_or_io(f"Cannot stat entry {snap_name} for '{entry_id}'", exc, is_missing=False)
                             return
                         if not stat.S_ISREG(sst.st_mode) or self._seal_stat_tuple(sst) != snap_stat:
                             raise AlbumManifestCorruptError(
-                                f"Entry snapshot.json was substituted or modified before publication for '{entry_id}'."
+                                f"Entry {snap_name} was substituted or modified before publication for '{entry_id}'."
                             )
                         try:
                             with os.fdopen(os.dup(sfd), "rb") as sf:
