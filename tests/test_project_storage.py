@@ -2779,6 +2779,515 @@ def test_phase1a8_verified_directory_ownership_cleanup(custom_storage: ProjectSt
         os.close(parent_fd)
 
 
+def test_phase1b_stage1_1_journal_recovery_and_fsync(custom_storage: ProjectStorageManager, tmp_path: Path, monkeypatch):
+    """Phase 1B Stage 1.1: Durable journal, dir fsync UNCERTAIN semantics, recovery classification, and verified staging cleanup."""
+    import hashlib
+    import json
+    import backend.project_storage as ps_mod
+    from backend.project_models import (
+        ActiveTxRecord,
+        AlbumJournal,
+        JournalTxState,
+        RecoveryConsistency,
+        StagedArtifactRef,
+    )
+    from backend.project_storage import (
+        AlbumManifestCorruptError,
+        ManifestPublishError,
+        ManifestPublishState,
+    )
+
+    user_id = "u_1b_stage1_1"
+    alb = custom_storage.create_album(user_id=user_id, title="Stage 1.1 Foundation LP")
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    manifest_path = alb_dir / "album.json"
+    raw_manifest_before = manifest_path.read_bytes()
+
+    # 1. GET / list_albums must never create journal.json or mutate album.json
+    assert custom_storage.get_album(user_id, alb.id).id == alb.id
+    assert any(a.id == alb.id for a in custom_storage.list_albums(user_id))
+    assert not (alb_dir / "journal.json").exists()
+    assert manifest_path.read_bytes() == raw_manifest_before
+
+    album_dir_fd = os.open(alb_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        assert ProjectStorageManager._read_album_journal_from_dir_fd(album_dir_fd) is None
+
+        # 2. _fsync_dir_fd failure after os.replace keeps publish_state == UNCERTAIN (never infers non-publication)
+        orig_fsync_dir = ps_mod._fsync_dir_fd
+
+        def fail_dir_fsync(dfd):
+            raise OSError("Simulated EIO on directory fsync")
+
+        monkeypatch.setattr(ps_mod, "_fsync_dir_fd", fail_dir_fsync)
+        manifest_obj = json.loads(raw_manifest_before.decode("utf-8"))
+        manifest_obj["last_tx_id"] = "tx_dir_fsync_test"
+        with pytest.raises(ManifestPublishError) as mpe:
+            ps_mod._publish_manifest_atomic_in_dir(album_dir_fd, "album.json", manifest_obj)
+        monkeypatch.undo()
+        assert mpe.value.publish_state == ManifestPublishState.UNCERTAIN
+        # Verify actual post-replace manifest content on disk before restoring
+        assert json.loads(manifest_path.read_text(encoding="utf-8"))["last_tx_id"] == "tx_dir_fsync_test"
+        ps_mod._publish_manifest_atomic_in_dir(album_dir_fd, "album.json", json.loads(raw_manifest_before.decode("utf-8")))
+
+        # 3. Journal write/read round-trip and corrupt/symlink fail-closed checks
+        staged_file = alb_dir / ".staging_tx1_audio.wav"
+        staged_file.write_bytes(b"STAGED_AUDIO")
+        st_s = os.stat(staged_file)
+        staged_ref = StagedArtifactRef(
+            rel_path=".staging_tx1_audio.wav",
+            st_dev=st_s.st_dev,
+            st_ino=st_s.st_ino,
+            sha256=hashlib.sha256(b"STAGED_AUDIO").hexdigest(),
+        )
+        tx = ActiveTxRecord(
+            tx_id="tx_001",
+            op="replace_entry_audio",
+            state=JournalTxState.PREPARED,
+            expected_revision=1,
+            target_revision=2,
+            payload_sha256="a" * 64,
+            idempotency_key="idem_001",
+            staging_refs=[staged_ref],
+            new_refs=["entries/e1/audio_g2.wav"],
+            superseded_refs=["entries/e1/audio_g1.wav"],
+        )
+        journal = AlbumJournal(album_id=alb.id, active_tx=tx)
+        ProjectStorageManager._write_album_journal_atomic_in_dir(album_dir_fd, journal)
+        loaded_j = ProjectStorageManager._read_album_journal_from_dir_fd(album_dir_fd)
+        assert loaded_j is not None and loaded_j.active_tx.tx_id == "tx_001"
+
+        # 4. Recovery classification matrix (strictly read-only, zero cleanup)
+        base_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        # 4a. PREPARED + tx_id absent + rev == expected_revision -> PROVISIONAL_ABORT_CANDIDATE (staged file untouched)
+        assert ProjectStorageManager._classify_album_consistency(base_data, loaded_j) == RecoveryConsistency.PROVISIONAL_ABORT_CANDIDATE
+        assert staged_file.is_file()
+
+        # 4b. PREPARED + tx_id in manifest -> CORRUPT
+        corrupt_prep_data = dict(base_data, last_tx_id="tx_001")
+        assert ProjectStorageManager._classify_album_consistency(corrupt_prep_data, loaded_j) == RecoveryConsistency.CORRUPT
+
+        # 4c. PUBLISH_INTENT + tx_id absent (even when rev == expected_revision!) -> UNCERTAIN
+        intent_j = loaded_j.model_copy(update={"active_tx": tx.model_copy(update={"state": JournalTxState.PUBLISH_INTENT})})
+        assert ProjectStorageManager._classify_album_consistency(base_data, intent_j) == RecoveryConsistency.UNCERTAIN
+
+        # 4d. PUBLISH_INTENT + tx_id in last_tx_id or tx_history -> PROVISIONAL_COMMIT_CANDIDATE (never authoritative COMMITTED)
+        committed_data = dict(base_data, revision=2, last_tx_id="tx_001")
+        assert ProjectStorageManager._classify_album_consistency(committed_data, intent_j) == RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+        hist_data = dict(base_data, revision=3, last_tx_id="tx_002", tx_history=["tx_001", "tx_002"])
+        assert ProjectStorageManager._classify_album_consistency(hist_data, intent_j) == RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+
+        # 4e. UNCERTAIN state transitions
+        unc_j = loaded_j.model_copy(update={"active_tx": tx.model_copy(update={"state": JournalTxState.UNCERTAIN})})
+        assert ProjectStorageManager._classify_album_consistency(base_data, unc_j) == RecoveryConsistency.UNCERTAIN
+        assert ProjectStorageManager._classify_album_consistency(committed_data, unc_j) == RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+
+        # 4f. Missing manifest -> CORRUPT
+        assert ProjectStorageManager._classify_album_consistency(None, intent_j) == RecoveryConsistency.CORRUPT
+
+        # 5. Physical staging cleanup is disabled in Stage 1.1: preserves ALL files regardless of supplied refs
+        staged_keep_2 = alb_dir / ".staging_tx1_keep2.wav"
+        staged_keep_2.write_bytes(b"STAGED_KEEP_2")
+        sk2_st = os.stat(staged_keep_2)
+        valid_staged_ref_2 = StagedArtifactRef(
+            rel_path=".staging_tx1_keep2.wav",
+            st_dev=sk2_st.st_dev,
+            st_ino=sk2_st.st_ino,
+            sha256=hashlib.sha256(b"STAGED_KEEP_2").hexdigest(),
+        )
+        cleaned = ProjectStorageManager._cleanup_verified_staging_refs(
+            album_dir_fd, [staged_ref, valid_staged_ref_2]
+        )
+        assert cleaned == []
+        assert staged_file.read_bytes() == b"STAGED_AUDIO"
+        assert staged_keep_2.read_bytes() == b"STAGED_KEEP_2"
+
+        # 6. Corrupt or symlinked journal.json fails closed without deleting files
+        (alb_dir / "journal.json").write_text("{not valid json", encoding="utf-8")
+        with pytest.raises(AlbumManifestCorruptError, match="failed validation"):
+            ProjectStorageManager._read_album_journal_from_dir_fd(album_dir_fd)
+        assert staged_file.is_file()
+
+        ext_journal = tmp_path / "external_journal.json"
+        ext_journal.write_text("{}", encoding="utf-8")
+        (alb_dir / "journal.json").unlink()
+        (alb_dir / "journal.json").symlink_to(ext_journal)
+        with pytest.raises(AlbumManifestCorruptError, match="inaccessible or a symlink"):
+            ProjectStorageManager._read_album_journal_from_dir_fd(album_dir_fd)
+        assert staged_file.is_file()
+    finally:
+        os.close(album_dir_fd)
+
+
+def test_phase1b_stage1_1_adversarial_schema_and_recovery(custom_storage: ProjectStorageManager):
+    """Phase 1B Stage 1.1: Adversarial schema validation, cross-album mismatches, strict types, and recovery rules."""
+    import json
+    from pydantic import ValidationError
+    from backend.project_models import (
+        ActiveTxRecord,
+        AlbumJournal,
+        AlbumMetadata,
+        AlbumTrackEntry,
+        IdempotencyRecord,
+        JournalTxState,
+        RecoveryConsistency,
+        RetainedArtifactRecord,
+        StagedArtifactRef,
+    )
+    from backend.project_storage import AlbumManifestCorruptError
+
+    user_id = "u_1b_stage1_1_adv"
+    alb = custom_storage.create_album(user_id=user_id, title="Adversarial Stage 1.1 LP")
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    base_data = json.loads((alb_dir / "album.json").read_text(encoding="utf-8"))
+
+    # 1. Cross-album journal/manifest mismatch -> CORRUPT and read-time rejection
+    other_tx = ActiveTxRecord(
+        tx_id="tx_cross_01",
+        op="replace_entry_audio",
+        state=JournalTxState.PUBLISH_INTENT,
+        expected_revision=1,
+        target_revision=2,
+        payload_sha256="a" * 64,
+    )
+    other_journal = AlbumJournal(album_id="alb_0000000000000000", active_tx=other_tx)
+    assert ProjectStorageManager._classify_album_consistency(base_data, other_journal) == RecoveryConsistency.CORRUPT
+
+    album_dir_fd = os.open(alb_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        ProjectStorageManager._write_album_journal_atomic_in_dir(album_dir_fd, other_journal)
+        with pytest.raises(AlbumManifestCorruptError, match="identity mismatch"):
+            ProjectStorageManager._read_album_journal_from_dir_fd(album_dir_fd, expected_album_id=alb.id)
+    finally:
+        os.close(album_dir_fd)
+
+    # 2. Contradictory markers & revisions -> CORRUPT (never COMMITTED or ABORTED)
+    own_tx = other_tx
+    own_journal = AlbumJournal(album_id=alb.id, active_tx=own_tx)
+
+    # 2a. tx_id present in manifest but manifest_rev < target_revision
+    bad_rev_data = dict(base_data, revision=1, last_tx_id="tx_cross_01")
+    assert ProjectStorageManager._classify_album_consistency(bad_rev_data, own_journal) == RecoveryConsistency.CORRUPT
+
+    # 2b. PUBLISH_INTENT with tx_id absent but revision advanced unexpectedly
+    moved_no_tx = dict(base_data, revision=2)
+    assert ProjectStorageManager._classify_album_consistency(moved_no_tx, own_journal) == RecoveryConsistency.CORRUPT
+
+    # 2c. delete_album committed marker missing is_deleted / delete_tx_id
+    del_tx = own_tx.model_copy(update={"op": "delete_album", "state": JournalTxState.COMMITTED})
+    del_journal = AlbumJournal(album_id=alb.id, active_tx=del_tx)
+    del_bad_data = dict(base_data, revision=2, last_tx_id="tx_cross_01", is_deleted=False)
+    assert ProjectStorageManager._classify_album_consistency(del_bad_data, del_journal) == RecoveryConsistency.CORRUPT
+
+    # 2d. Terminal COMMITTED without tx_id, and ABORTED with tx_id
+    comm_j = AlbumJournal(album_id=alb.id, active_tx=own_tx.model_copy(update={"state": JournalTxState.COMMITTED}))
+    assert ProjectStorageManager._classify_album_consistency(dict(base_data, revision=2), comm_j) == RecoveryConsistency.CORRUPT
+    abort_j = AlbumJournal(album_id=alb.id, active_tx=own_tx.model_copy(update={"state": JournalTxState.ABORTED}))
+    assert ProjectStorageManager._classify_album_consistency(dict(base_data, revision=1, last_tx_id="tx_cross_01"), abort_j) == RecoveryConsistency.CORRUPT
+
+    # 3. Boolean and string revision values in manifest -> CORRUPT
+    for bad_rev in (True, False, "1", "2", 1.5, 0):
+        assert ProjectStorageManager._classify_album_consistency(dict(base_data, revision=bad_rev), own_journal) == RecoveryConsistency.CORRUPT
+        assert ProjectStorageManager._classify_album_consistency(dict(base_data, revision=bad_rev), None) == RecoveryConsistency.CORRUPT
+
+    # 4. Schema validation: strict types, SHA-256, path traversal, unsafe basenames, ref conflicts, idempotency
+    for bad_int in (True, "2"):
+        with pytest.raises(ValidationError):
+            ActiveTxRecord(
+                tx_id="tx_1", op="replace_entry_audio", state=JournalTxState.PREPARED,
+                expected_revision=bad_int, target_revision=3, payload_sha256="a" * 64,
+            )
+        with pytest.raises(ValidationError):
+            AlbumTrackEntry(track_number=1, track_id="trk_1234567890abcdef", active_generation=bad_int)
+
+    with pytest.raises(ValidationError):
+        ActiveTxRecord(
+            tx_id="tx_1", op="replace_entry_audio", state=JournalTxState.PREPARED,
+            expected_revision=2, target_revision=2, payload_sha256="a" * 64,
+        )
+
+    for bad_sha in ("z" * 64, "a" * 63):
+        with pytest.raises(ValidationError):
+            RetainedArtifactRecord(
+                rel_path="entries/e1/audio_g1.wav", sha256=bad_sha, kind="audio",
+                superseded_by_tx_id="tx_1", superseded_at_rev=2,
+            )
+
+    for bad_path in ("../escape.wav", "/abs/path.wav", "entries/../bad.wav", "entries\\win.wav"):
+        with pytest.raises(ValidationError):
+            RetainedArtifactRecord(
+                rel_path=bad_path, sha256="a" * 64, kind="audio",
+                superseded_by_tx_id="tx_1", superseded_at_rev=2,
+            )
+
+    for bad_staged in (".staging_../evil.wav", "entries/not_staging.wav"):
+        with pytest.raises(ValidationError):
+            StagedArtifactRef(rel_path=bad_staged, st_dev=1, st_ino=2, sha256="a" * 64)
+
+    for bad_active_name in ("../cover.jpg", "sub/cover.jpg", ".hidden.jpg", ".."):
+        with pytest.raises(ValidationError):
+            AlbumMetadata(id=alb.id, title="Test", active_cover_filename=bad_active_name)
+        with pytest.raises(ValidationError):
+            AlbumTrackEntry(track_number=1, track_id="trk_1234567890abcdef", active_audio_filename=bad_active_name)
+
+    with pytest.raises(ValidationError):
+        ActiveTxRecord(
+            tx_id="tx_1", op="replace_entry_audio", state=JournalTxState.PREPARED,
+            expected_revision=1, target_revision=2, payload_sha256="a" * 64,
+            new_refs=["entries/e1/audio_g2.wav"], superseded_refs=["entries/e1/audio_g2.wav"],
+        )
+
+    with pytest.raises(ValidationError):
+        IdempotencyRecord(
+            key="k1", op="replace_entry_audio", expected_revision=1,
+            payload_sha256="a" * 64, result_revision=None, tx_id="tx_1",
+            outcome=JournalTxState.COMMITTED,
+        )
+
+    # 5. Legacy manifest without optional Phase 1B fields still loads cleanly
+    legacy_meta = AlbumMetadata(id=alb.id, title="Legacy Clean", tracks=[AlbumTrackEntry(track_number=1, track_id="trk_1234567890abcdef")])
+    assert legacy_meta.last_tx_id is None
+    assert legacy_meta.tracks[0].active_generation is None
+
+
+@pytest.mark.parametrize(
+    "manifest_patch,expected_verdict",
+    [
+        # Valid historical X (target_rev=2) followed by Y (rev=3) -> PROVISIONAL_COMMIT_CANDIDATE
+        ({"revision": 3, "last_tx_id": "tx_y", "tx_history": ["tx_x", "tx_y"]}, "provisional_commit_candidate"),
+        # Contradictory X/Y marker ordering at same revision (rev=2 < 2 + 1) -> CORRUPT
+        ({"revision": 2, "last_tx_id": "tx_y", "tx_history": ["tx_x", "tx_y"]}, "corrupt"),
+        # Contradictory last_tx_id != tx_history[-1] -> CORRUPT
+        ({"revision": 3, "last_tx_id": "tx_x", "tx_history": ["tx_x", "tx_y"]}, "corrupt"),
+        # Non-journaled Phase 1A revision advancement after tx_x (rev=4 >= 2) -> PROVISIONAL_COMMIT_CANDIDATE
+        ({"revision": 4, "last_tx_id": "tx_x", "tx_history": ["tx_x"]}, "provisional_commit_candidate"),
+        # Duplicate tx_history -> CORRUPT
+        ({"revision": 3, "last_tx_id": "tx_x", "tx_history": ["tx_x", "tx_x"]}, "corrupt"),
+        # Non-deletion tx_x appearing only as delete_tx_id -> CORRUPT
+        ({"revision": 2, "is_deleted": True, "delete_tx_id": "tx_x"}, "corrupt"),
+        # is_deleted=False with populated delete_tx_id -> CORRUPT
+        ({"revision": 2, "last_tx_id": "tx_x", "is_deleted": False, "delete_tx_id": "tx_x"}, "corrupt"),
+    ],
+)
+def test_phase1b_stage1_1_marker_provenance_matrix(
+    custom_storage: ProjectStorageManager, manifest_patch, expected_verdict
+):
+    """Phase 1B Stage 1.1: Explicit current vs. historical marker provenance and deletion marker checks."""
+    import json
+    from backend.project_models import ActiveTxRecord, AlbumJournal, JournalTxState, RecoveryConsistency
+
+    user_id = "u_1b_s1_1_matrix"
+    alb = custom_storage.create_album(user_id=user_id, title="Provenance Matrix LP")
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    base_data = json.loads((alb_dir / "album.json").read_text(encoding="utf-8"))
+
+    tx_x = ActiveTxRecord(
+        tx_id="tx_x",
+        op="replace_entry_audio",
+        state=JournalTxState.PUBLISH_INTENT,
+        expected_revision=1,
+        target_revision=2,
+        payload_sha256="a" * 64,
+    )
+    journal = AlbumJournal(album_id=alb.id, active_tx=tx_x)
+    patched = dict(base_data, **manifest_patch)
+    verdict = ProjectStorageManager._classify_album_consistency(patched, journal)
+    assert verdict == RecoveryConsistency(expected_verdict)
+
+
+def test_phase1b_stage1_1_no_journal_markers_tokens_conflicts_and_phase1a_dir_fsync(
+    custom_storage: ProjectStorageManager, monkeypatch
+):
+    """Phase 1B Stage 1.1: No-journal validation, journal conflicts, fullmatch tokens, and Phase 1A dir fsync."""
+    import json
+    from pydantic import ValidationError
+    import backend.project_storage as ps_mod
+    from backend.project_models import (
+        ActiveTxRecord,
+        AlbumJournal,
+        IdempotencyRecord,
+        JournalTxState,
+        RecoveryConsistency,
+        RetainedArtifactRecord,
+        StagedArtifactRef,
+    )
+    from backend.project_storage import ManifestPublishError, ManifestPublishState
+
+    user_id = "u_1b_s1_1_extra"
+    alb = custom_storage.create_album(user_id=user_id, title="Extra Invariants LP")
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    base_data = json.loads((alb_dir / "album.json").read_text(encoding="utf-8"))
+
+    # 1. Missing journal: legacy manifest (both tracks=[] and absent tracks) -> CONSISTENT_IDLE
+    assert ProjectStorageManager._classify_album_consistency(base_data, None) == RecoveryConsistency.CONSISTENT_IDLE
+    legacy_only = dict(base_data)
+    legacy_only.pop("last_tx_id", None)
+    legacy_only.pop("tx_history", None)
+    legacy_only.pop("is_deleted", None)
+    legacy_only.pop("delete_tx_id", None)
+    legacy_only.pop("tracks", None)
+    legacy_only["track_ids"] = ["trk_1234567890abcdef"]
+    assert ProjectStorageManager._classify_album_consistency(legacy_only, None) == RecoveryConsistency.CONSISTENT_IDLE
+
+    valid_tx = ActiveTxRecord(
+        tx_id="tx_malformed_chk", op="replace_entry_audio", state=JournalTxState.PREPARED,
+        expected_revision=1, target_revision=2, payload_sha256="a" * 64,
+    )
+    valid_journal = AlbumJournal(album_id=alb.id, active_tx=valid_tx)
+    assert ProjectStorageManager._classify_album_consistency(
+        legacy_only, valid_journal
+    ) == RecoveryConsistency.PROVISIONAL_ABORT_CANDIDATE
+
+    for bad_manifest in (
+        dict(base_data, is_deleted=False, delete_tx_id="tx_orphan"),
+        dict(base_data, tx_history=["tx_a", "tx_a"], last_tx_id="tx_a"),
+        dict(base_data, tx_history=["tx_a"], last_tx_id=None),
+        dict(base_data, tx_history=["tx_a", "tx_b"], last_tx_id="tx_a"),
+        dict(base_data, last_tx_id="tx_bad\n"),
+        dict(base_data, title=""),  # Malformed AlbumMetadata structure
+        dict(base_data, tracks="not_a_list"),  # Non-list tracks
+        dict(base_data, tracks={"0": {"track_id": "trk_1234567890abcdef"}}),  # Non-list tracks dict
+        dict(base_data, tracks=["non_dict_entry"]),  # Non-object track entry
+        dict(base_data, tracks=[123]),  # Non-object track entry int
+        dict(base_data, tracks=[{  # Contradictory placeholder + snapshot/has_owned_audio
+            "track_id": "trk_1234567890abcdef",
+            "take_id": None,
+            "snapshot": {"entry_id": "ale_1"},
+            "has_owned_audio": True,
+        }]),
+    ):
+        assert ProjectStorageManager._classify_album_consistency(bad_manifest, None) == RecoveryConsistency.CORRUPT
+        assert ProjectStorageManager._classify_album_consistency(bad_manifest, valid_journal) == RecoveryConsistency.CORRUPT
+
+    # 1c. Historical deletion without restoration evidence -> CORRUPT
+    hist_del_tx = ActiveTxRecord(
+        tx_id="tx_del_hist", op="delete_album", state=JournalTxState.COMMITTED,
+        expected_revision=1, target_revision=2, payload_sha256="a" * 64,
+    )
+    assert ProjectStorageManager._classify_album_consistency(
+        dict(base_data, revision=3, last_tx_id="tx_later", tx_history=["tx_del_hist", "tx_later"], is_deleted=False),
+        AlbumJournal(album_id=alb.id, active_tx=hist_del_tx),
+    ) == RecoveryConsistency.CORRUPT
+
+    # 2. Trailing-newline identifiers rejected by fullmatch()
+    with pytest.raises(ValidationError):
+        ActiveTxRecord(
+            tx_id="tx_nl\n", op="replace_entry_audio", state=JournalTxState.PREPARED,
+            expected_revision=1, target_revision=2, payload_sha256="a" * 64,
+        )
+    with pytest.raises(ValidationError):
+        ActiveTxRecord(
+            tx_id="tx_ok", op="replace_entry_audio", state=JournalTxState.PREPARED,
+            expected_revision=1, target_revision=2, payload_sha256=("a" * 63) + "a\n",
+        )
+    with pytest.raises(ValidationError):
+        IdempotencyRecord(
+            key="idem_nl\n", op="replace_entry_audio", expected_revision=1,
+            payload_sha256="a" * 64, result_revision=2, tx_id="tx_1",
+            outcome=JournalTxState.COMMITTED,
+        )
+
+    # 3. Duplicate staging paths with conflicting inode/digest rejected
+    with pytest.raises(ValidationError):
+        ActiveTxRecord(
+            tx_id="tx_dup_stg", op="replace_entry_audio", state=JournalTxState.PREPARED,
+            expected_revision=1, target_revision=2, payload_sha256="a" * 64,
+            staging_refs=[
+                StagedArtifactRef(rel_path=".staging_same.wav", st_dev=1, st_ino=10, sha256="a" * 64),
+                StagedArtifactRef(rel_path=".staging_same.wav", st_dev=1, st_ino=11, sha256="b" * 64),
+            ],
+        )
+
+    # 4. Duplicate idempotency keys, outcome contradictions, result_revision mismatch, & retained/active overlap rejected
+    with pytest.raises(ValidationError):
+        AlbumJournal(
+            album_id=alb.id,
+            idempotency_records=[
+                IdempotencyRecord(
+                    key="k_dup", op="replace_entry_audio", expected_revision=1,
+                    payload_sha256="a" * 64, result_revision=2, tx_id="tx_1", outcome=JournalTxState.COMMITTED,
+                ),
+                IdempotencyRecord(
+                    key="k_dup", op="replace_entry_audio", expected_revision=1,
+                    payload_sha256="b" * 64, result_revision=2, tx_id="tx_2", outcome=JournalTxState.COMMITTED,
+                ),
+            ],
+        )
+    with pytest.raises(ValidationError):
+        AlbumJournal(
+            album_id=alb.id,
+            active_tx=ActiveTxRecord(
+                tx_id="tx_1", op="replace_entry_audio", state=JournalTxState.PUBLISH_INTENT,
+                expected_revision=1, target_revision=2, payload_sha256="a" * 64, idempotency_key="k_1",
+            ),
+            idempotency_records=[
+                IdempotencyRecord(
+                    key="k_1", op="replace_entry_audio", expected_revision=1,
+                    payload_sha256="a" * 64, result_revision=2, tx_id="tx_1", outcome=JournalTxState.COMMITTED,
+                ),
+            ],
+        )
+    with pytest.raises(ValidationError):
+        AlbumJournal(
+            album_id=alb.id,
+            active_tx=ActiveTxRecord(
+                tx_id="tx_1", op="replace_entry_audio", state=JournalTxState.COMMITTED,
+                expected_revision=1, target_revision=2, payload_sha256="a" * 64, idempotency_key="k_1",
+            ),
+            idempotency_records=[
+                IdempotencyRecord(
+                    key="k_1", op="replace_entry_audio", expected_revision=1,
+                    payload_sha256="a" * 64, result_revision=3, tx_id="tx_1", outcome=JournalTxState.COMMITTED,
+                ),
+            ],
+        )
+    with pytest.raises(ValidationError):
+        AlbumJournal(
+            album_id=alb.id,
+            active_tx=ActiveTxRecord(
+                tx_id="tx_1", op="replace_entry_audio", state=JournalTxState.PREPARED,
+                expected_revision=1, target_revision=2, payload_sha256="a" * 64,
+                new_refs=["entries/e1/audio_g2.wav"],
+            ),
+            retained_artifacts=[
+                RetainedArtifactRecord(
+                    rel_path="entries/e1/audio_g2.wav", sha256="a" * 64, kind="audio",
+                    superseded_by_tx_id="tx_0", superseded_at_rev=1,
+                ),
+            ],
+        )
+
+    # 5. Directory fsync failure through Phase 1A mutation callers: visible marker yields PROVISIONAL_COMMIT_CANDIDATE only
+    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", lambda _dfd: (_ for _ in ()).throw(OSError("Simulated Phase 1A dir fsync EIO")))
+    with pytest.raises(OSError, match="Simulated Phase 1A dir fsync EIO"):
+        custom_storage.update_album(user_id, alb.id, {"expected_revision": alb.revision, "title": "After Dir Fsync Fail"})
+    monkeypatch.undo()
+    updated_alb = custom_storage.get_album(user_id, alb.id)
+    assert updated_alb.title == "After Dir Fsync Fail"
+
+    post_fsync_data = json.loads((alb_dir / "album.json").read_text(encoding="utf-8"))
+    post_fsync_data["last_tx_id"] = "tx_vis_after_fsync_fail"
+    vis_tx = ActiveTxRecord(
+        tx_id="tx_vis_after_fsync_fail", op="replace_entry_audio", state=JournalTxState.PUBLISH_INTENT,
+        expected_revision=1, target_revision=2, payload_sha256="a" * 64,
+    )
+    assert ProjectStorageManager._classify_album_consistency(
+        post_fsync_data, AlbumJournal(album_id=alb.id, active_tx=vis_tx)
+    ) == RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+
+    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", lambda _dfd: (_ for _ in ()).throw(OSError("Simulated cover dir fsync EIO")))
+    with pytest.raises(OSError, match="Simulated cover dir fsync EIO"):
+        custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=updated_alb.revision, extension=".jpg")
+    monkeypatch.undo()
+    # Cover and updated manifest are both preserved on UNCERTAIN post-replace dir fsync failure
+    assert (alb_dir / "cover.jpg").is_file()
+    assert custom_storage.get_album(user_id, alb.id).has_cover is True
+
+
+
+
+
 
 
 

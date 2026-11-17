@@ -58,6 +58,13 @@ from backend.project_models import (
     AlbumMetadata,
     AlbumEntryRefreshPreviewResponse,
     StorageQuotaStats,
+    JournalTxState,
+    RecoveryConsistency,
+    StagedArtifactRef,
+    ActiveTxRecord,
+    RetainedArtifactRecord,
+    IdempotencyRecord,
+    AlbumJournal,
 )
 from backend.audio_formats import AUDIO_FORMATS, matches_audio_header, validate_audio_container
 
@@ -149,6 +156,11 @@ class ManifestPublishError(ProjectStorageError):
         self.cause = cause
 
 
+def _fsync_dir_fd(dir_fd: int) -> None:
+    """Synchronize directory entries on Linux POSIX filesystems without swallowing I/O errors."""
+    os.fsync(dir_fd)
+
+
 def _publish_manifest_atomic_in_dir(dir_fd: int, filename: str, data: Dict[str, Any]) -> None:
     """Write and atomically replace a manifest JSON file strictly inside a validated dir_fd."""
     publish_state = ManifestPublishState.NOT_PUBLISHED
@@ -176,6 +188,7 @@ def _publish_manifest_atomic_in_dir(dir_fd: int, filename: str, data: Dict[str, 
         publish_state = ManifestPublishState.UNCERTAIN
         os.replace(tmp_name, filename, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
         tmp_created = False
+        _fsync_dir_fd(dir_fd)
         publish_state = ManifestPublishState.PUBLISHED
     except ManifestPublishError:
         raise
@@ -1601,7 +1614,8 @@ class ProjectStorageManager:
             finally:
                 held.pop(key, None)
 
-    def _inspect_raw_album_manifest(self, raw_data: Any, album_id: str, *, protect_finalized: bool = False) -> None:
+    @staticmethod
+    def _inspect_raw_album_manifest(raw_data: Any, album_id: str, *, protect_finalized: bool = False) -> None:
         """Inspect raw album.json before normalization to preserve finalized protections and reject contradictory state."""
         if not isinstance(raw_data, dict):
             raise AlbumManifestCorruptError(
@@ -3641,6 +3655,216 @@ class ProjectStorageManager:
             if cover_path.is_file() and not cover_path.is_symlink():
                 return cover_path
         return None
+
+    # --- Phase 1B Stage 1.1: Durable Journal, Recovery Classification & Verified Staging Cleanup ---
+
+    @staticmethod
+    def _read_album_journal_from_dir_fd(
+        album_dir_fd: int,
+        expected_album_id: Optional[str] = None,
+    ) -> Optional[AlbumJournal]:
+        """Read and validate journal.json strictly through album_dir_fd without creating or mutating files."""
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            jfd = os.open("journal.json", file_flags, dir_fd=album_dir_fd)
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            raise AlbumManifestCorruptError(f"Album journal is inaccessible or a symlink: {e}") from e
+
+        try:
+            jst = os.fstat(jfd)
+            if not stat.S_ISREG(jst.st_mode):
+                raise AlbumManifestCorruptError("Album journal is not a regular file.")
+            with os.fdopen(jfd, "r", encoding="utf-8") as f:
+                jfd = -1
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                raise AlbumManifestCorruptError("Album journal root must be a JSON object.")
+            journal = AlbumJournal(**raw)
+            if expected_album_id is not None and journal.album_id != expected_album_id:
+                raise AlbumManifestCorruptError(
+                    f"Album journal identity mismatch (expected '{expected_album_id}', found '{journal.album_id}')."
+                )
+            return journal
+        except AlbumManifestCorruptError:
+            raise
+        except Exception as e:
+            raise AlbumManifestCorruptError(f"Album journal failed validation; preserving all artifacts: {e}") from e
+        finally:
+            if jfd >= 0:
+                try:
+                    os.close(jfd)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _write_album_journal_atomic_in_dir(album_dir_fd: int, journal: AlbumJournal) -> None:
+        """Atomically publish and directory-sync journal.json inside a validated album_dir_fd."""
+        _publish_manifest_atomic_in_dir(album_dir_fd, "journal.json", journal.model_dump(mode="json"))
+
+    @classmethod
+    def _classify_album_consistency(
+        cls,
+        album_data: Optional[Dict[str, Any]],
+        journal: Optional[AlbumJournal],
+    ) -> RecoveryConsistency:
+        """Pure provisional consistency classifier over manifest & journal data (read-only, zero cleanup)."""
+        if not isinstance(album_data, dict):
+            return RecoveryConsistency.CORRUPT
+
+        album_id = album_data.get("id")
+        if not isinstance(album_id, str) or not is_valid_project_id(album_id, expected_prefix="alb"):
+            return RecoveryConsistency.CORRUPT
+
+        # Enforce strict raw revision type before Pydantic coercion
+        manifest_rev = album_data.get("revision")
+        if type(manifest_rev) is not int or manifest_rev < 1:
+            return RecoveryConsistency.CORRUPT
+
+        last_tx_id = album_data.get("last_tx_id")
+        if last_tx_id is not None:
+            if not isinstance(last_tx_id, str) or not last_tx_id or last_tx_id != last_tx_id.strip():
+                return RecoveryConsistency.CORRUPT
+            if not all(c.isalnum() or c in "_.-" for c in last_tx_id) or last_tx_id in (".", ".."):
+                return RecoveryConsistency.CORRUPT
+
+        tx_history = album_data.get("tx_history")
+        if tx_history is not None:
+            if not isinstance(tx_history, list):
+                return RecoveryConsistency.CORRUPT
+            seen_hist: set[str] = set()
+            for item in tx_history:
+                if not isinstance(item, str) or not item or item != item.strip():
+                    return RecoveryConsistency.CORRUPT
+                if not all(c.isalnum() or c in "_.-" for c in item) or item in (".", ".."):
+                    return RecoveryConsistency.CORRUPT
+                if item in seen_hist:
+                    return RecoveryConsistency.CORRUPT
+                seen_hist.add(item)
+            if tx_history:
+                if last_tx_id is None or tx_history[-1] != last_tx_id:
+                    return RecoveryConsistency.CORRUPT
+
+        is_deleted = album_data.get("is_deleted")
+        if is_deleted is not None and type(is_deleted) is not bool:
+            return RecoveryConsistency.CORRUPT
+
+        delete_tx_id = album_data.get("delete_tx_id")
+        if delete_tx_id is not None:
+            if not isinstance(delete_tx_id, str) or not delete_tx_id or delete_tx_id != delete_tx_id.strip():
+                return RecoveryConsistency.CORRUPT
+            if not all(c.isalnum() or c in "_.-" for c in delete_tx_id) or delete_tx_id in (".", ".."):
+                return RecoveryConsistency.CORRUPT
+
+        if is_deleted is True:
+            if not delete_tx_id:
+                return RecoveryConsistency.CORRUPT
+            if last_tx_id is not None and delete_tx_id != last_tx_id:
+                return RecoveryConsistency.CORRUPT
+        elif delete_tx_id is not None:
+            return RecoveryConsistency.CORRUPT
+
+        # Validate raw manifest structure before normalization, then run full legacy-compatible AlbumMetadata validation
+        try:
+            cls._inspect_raw_album_manifest(album_data, album_id, protect_finalized=False)
+            norm_data = dict(album_data)
+            norm_tracks = cls._normalize_album_entries_shared(album_id, norm_data)
+            norm_data["tracks"] = norm_tracks
+            norm_data["track_ids"] = [t["track_id"] for t in norm_tracks if t.get("track_id")]
+            AlbumMetadata(**norm_data)
+        except Exception:
+            return RecoveryConsistency.CORRUPT
+
+        if journal is None:
+            return RecoveryConsistency.CONSISTENT_IDLE
+
+        if journal.album_id != album_id:
+            return RecoveryConsistency.CORRUPT
+
+        if journal.active_tx is None:
+            return RecoveryConsistency.CONSISTENT_IDLE
+
+        tx = journal.active_tx
+        if type(tx.expected_revision) is not int or type(tx.target_revision) is not int:
+            return RecoveryConsistency.CORRUPT
+        if tx.expected_revision < 1 or tx.target_revision <= tx.expected_revision:
+            return RecoveryConsistency.CORRUPT
+
+        hist_list = tx_history if isinstance(tx_history, list) else []
+
+        if tx.op == "delete_album":
+            in_delete_marker = (is_deleted is True and delete_tx_id == tx.tx_id)
+            in_other_markers = (last_tx_id == tx.tx_id) or (tx.tx_id in hist_list)
+            if in_delete_marker:
+                if tx.state in (JournalTxState.PREPARED, JournalTxState.ABORTED):
+                    return RecoveryConsistency.CORRUPT
+                if manifest_rev == tx.target_revision:
+                    return RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+                return RecoveryConsistency.CORRUPT
+            if in_other_markers:
+                return RecoveryConsistency.CORRUPT
+            if tx.state in (JournalTxState.PREPARED, JournalTxState.ABORTED):
+                return (
+                    RecoveryConsistency.PROVISIONAL_ABORT_CANDIDATE
+                    if manifest_rev == tx.expected_revision
+                    else RecoveryConsistency.CORRUPT
+                )
+            if tx.state in (JournalTxState.PUBLISH_INTENT, JournalTxState.UNCERTAIN):
+                return (
+                    RecoveryConsistency.UNCERTAIN
+                    if manifest_rev == tx.expected_revision
+                    else RecoveryConsistency.CORRUPT
+                )
+            return RecoveryConsistency.CORRUPT
+
+        # Non-deletion transaction: appearing as delete_tx_id is always contradictory
+        if delete_tx_id == tx.tx_id:
+            return RecoveryConsistency.CORRUPT
+
+        if last_tx_id == tx.tx_id:
+            if tx.state in (JournalTxState.PREPARED, JournalTxState.ABORTED):
+                return RecoveryConsistency.CORRUPT
+            if manifest_rev >= tx.target_revision:
+                return RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+            return RecoveryConsistency.CORRUPT
+
+        if tx.tx_id in hist_list:
+            if tx.state in (JournalTxState.PREPARED, JournalTxState.ABORTED):
+                return RecoveryConsistency.CORRUPT
+            idx = hist_list.index(tx.tx_id)
+            trailing_journal_ops = len(hist_list) - 1 - idx
+            if trailing_journal_ops < 1:
+                return RecoveryConsistency.CORRUPT
+            if manifest_rev >= tx.target_revision + trailing_journal_ops:
+                return RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
+            return RecoveryConsistency.CORRUPT
+
+        # tx.tx_id is absent from manifest markers
+        if tx.state in (JournalTxState.PREPARED, JournalTxState.ABORTED):
+            return (
+                RecoveryConsistency.PROVISIONAL_ABORT_CANDIDATE
+                if manifest_rev == tx.expected_revision
+                else RecoveryConsistency.CORRUPT
+            )
+        if tx.state in (JournalTxState.PUBLISH_INTENT, JournalTxState.UNCERTAIN):
+            return (
+                RecoveryConsistency.UNCERTAIN
+                if manifest_rev == tx.expected_revision
+                else RecoveryConsistency.CORRUPT
+            )
+        if tx.state == JournalTxState.COMMITTED:
+            return RecoveryConsistency.CORRUPT
+
+        return RecoveryConsistency.CORRUPT
+
+    @staticmethod
+    def _cleanup_verified_staging_refs(
+        album_dir_fd: int,
+        staging_refs: List[StagedArtifactRef],
+    ) -> List[str]:
+        """Physical staging cleanup is intentionally deferred from Stage 1.1; preserve all staging evidence."""
+        return []
 
 
 # Global singleton instance

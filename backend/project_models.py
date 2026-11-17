@@ -1,9 +1,50 @@
 """Data schemas and Pydantic models for the persistent File & Project Storage System."""
 
+import re
 import time
 from enum import Enum
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, StrictInt, field_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _validate_safe_rel_path(value: str) -> str:
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value or value.startswith("/"):
+        raise ValueError("Unsafe or non-relative artifact path.")
+    parts = value.split("/")
+    if any(not p or p in (".", "..") for p in parts):
+        raise ValueError("Path traversal or empty segment is not permitted.")
+    return value
+
+
+def _validate_safe_active_basename(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or not value
+        or "/" in value
+        or "\\" in value
+        or "\x00" in value
+        or value in (".", "..")
+        or value.startswith(".")
+    ):
+        raise ValueError("Unsafe active artifact filename.")
+    return value
+
+
+def _validate_sha256_hex(value: str) -> str:
+    if not isinstance(value, str) or not _SHA256_HEX_RE.fullmatch(value):
+        raise ValueError("Expected a 64-character hexadecimal SHA-256 digest.")
+    return value.lower()
+
+
+def _validate_safe_token(value: str) -> str:
+    if not isinstance(value, str) or not value or not _SAFE_TOKEN_RE.fullmatch(value) or value in (".", ".."):
+        raise ValueError("Identifier contains unsafe characters.")
+    return value
 
 
 class WorkspaceStatus(str, Enum):
@@ -182,6 +223,14 @@ class AlbumTrackEntry(BaseModel):
     is_placeholder: bool = Field(default=False)
     has_owned_audio: bool = Field(default=False)
     snapshot: Optional[AlbumEntrySnapshot] = Field(default=None)
+    active_generation: Optional[StrictInt] = Field(default=None, ge=1)
+    active_audio_filename: Optional[str] = Field(default=None, max_length=255)
+    active_snapshot_filename: Optional[str] = Field(default=None, max_length=255)
+
+    @field_validator("active_audio_filename", "active_snapshot_filename")
+    @classmethod
+    def _check_active_filenames(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_safe_active_basename(v)
 
     def model_post_init(self, __context: Any) -> None:
         if self.take_id is None:
@@ -203,6 +252,28 @@ class AlbumMetadata(BaseModel):
     revision: int = Field(default=1, ge=1)
     revisions: List[RevisionEntry] = Field(default_factory=list)
     has_cover: bool = Field(default=False)
+    cover_generation: Optional[StrictInt] = Field(default=None, ge=1)
+    active_cover_filename: Optional[str] = Field(default=None, max_length=255)
+    last_tx_id: Optional[str] = Field(default=None, max_length=64)
+    tx_history: List[str] = Field(default_factory=list)
+    is_deleted: bool = Field(default=False)
+    deleted_at: Optional[float] = Field(default=None)
+    delete_tx_id: Optional[str] = Field(default=None, max_length=64)
+
+    @field_validator("active_cover_filename")
+    @classmethod
+    def _check_active_cover_filename(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_safe_active_basename(v)
+
+    @field_validator("last_tx_id", "delete_tx_id")
+    @classmethod
+    def _check_tx_tokens(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_safe_token(v) if v is not None else None
+
+    @field_validator("tx_history")
+    @classmethod
+    def _check_tx_history(cls, v: List[str]) -> List[str]:
+        return [_validate_safe_token(item) for item in v]
     tracks: List[AlbumTrackEntry] = Field(default_factory=list)
     track_ids: List[str] = Field(default_factory=list)
     created_at: float = Field(default_factory=time.time)
@@ -300,3 +371,209 @@ class StorageQuotaStats(BaseModel):
     tracks_count: int = Field(default=0, ge=0)
     takes_count: int = Field(default=0, ge=0)
     albums_count: int = Field(default=0, ge=0)
+
+
+# --- Phase 1B Transaction Journal & Recovery Models ---
+
+class JournalTxState(str, Enum):
+    PREPARED = "prepared"
+    PUBLISH_INTENT = "publish_intent"
+    UNCERTAIN = "uncertain"
+    COMMITTED = "committed"
+    ABORTED = "aborted"
+
+
+class RecoveryConsistency(str, Enum):
+    CONSISTENT_IDLE = "consistent_idle"
+    PROVISIONAL_COMMIT_CANDIDATE = "provisional_commit_candidate"
+    PROVISIONAL_ABORT_CANDIDATE = "provisional_abort_candidate"
+    UNCERTAIN = "uncertain"
+    CORRUPT = "corrupt"
+
+
+class StagedArtifactRef(BaseModel):
+    rel_path: str = Field(..., min_length=1, max_length=512)
+    st_dev: StrictInt = Field(..., ge=0)
+    st_ino: StrictInt = Field(..., ge=0)
+    sha256: str = Field(..., min_length=64, max_length=64)
+
+    @field_validator("rel_path")
+    @classmethod
+    def _check_staging_rel_path(cls, v: str) -> str:
+        rel = _validate_safe_rel_path(v)
+        if not rel.split("/")[-1].startswith(".staging_"):
+            raise ValueError("Staged artifact basename must start with '.staging_'.")
+        return rel
+
+    @field_validator("sha256")
+    @classmethod
+    def _check_sha256(cls, v: str) -> str:
+        return _validate_sha256_hex(v)
+
+
+class ActiveTxRecord(BaseModel):
+    tx_id: str = Field(..., min_length=1, max_length=64)
+    op: str = Field(..., min_length=1, max_length=64)
+    state: JournalTxState
+    expected_revision: StrictInt = Field(..., ge=1)
+    target_revision: StrictInt = Field(..., ge=1)
+    payload_sha256: str = Field(..., min_length=64, max_length=64)
+    idempotency_key: Optional[str] = Field(default=None, max_length=128)
+    staging_refs: List[StagedArtifactRef] = Field(default_factory=list)
+    new_refs: List[str] = Field(default_factory=list)
+    superseded_refs: List[str] = Field(default_factory=list)
+    created_at: float = Field(default_factory=time.time)
+
+    @field_validator("tx_id", "op")
+    @classmethod
+    def _check_tokens(cls, v: str) -> str:
+        return _validate_safe_token(v)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def _check_idem_key(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_safe_token(v) if v is not None else None
+
+    @field_validator("payload_sha256")
+    @classmethod
+    def _check_payload_sha(cls, v: str) -> str:
+        return _validate_sha256_hex(v)
+
+    @field_validator("new_refs", "superseded_refs")
+    @classmethod
+    def _check_rel_refs(cls, v: List[str]) -> List[str]:
+        return [_validate_safe_rel_path(item) for item in v]
+
+    @model_validator(mode="after")
+    def _check_tx_consistency(self) -> "ActiveTxRecord":
+        if self.target_revision <= self.expected_revision:
+            raise ValueError("target_revision must be strictly greater than expected_revision.")
+        stg_paths = [r.rel_path for r in self.staging_refs]
+        stg_set = set(stg_paths)
+        if len(stg_set) != len(stg_paths):
+            raise ValueError("staging_refs must not contain duplicate rel_path entries.")
+        new_set = set(self.new_refs)
+        if len(new_set) != len(self.new_refs):
+            raise ValueError("new_refs must not contain duplicate entries.")
+        sup_set = set(self.superseded_refs)
+        if len(sup_set) != len(self.superseded_refs):
+            raise ValueError("superseded_refs must not contain duplicate entries.")
+        if new_set & sup_set:
+            raise ValueError("new_refs and superseded_refs must not overlap.")
+        if stg_set & (new_set | sup_set):
+            raise ValueError("staging_refs must not overlap new_refs or superseded_refs.")
+        return self
+
+
+class RetainedArtifactRecord(BaseModel):
+    rel_path: str = Field(..., min_length=1, max_length=512)
+    sha256: str = Field(..., min_length=64, max_length=64)
+    kind: str = Field(..., min_length=1, max_length=32)
+    generation: Optional[StrictInt] = Field(default=None, ge=1)
+    superseded_by_tx_id: str = Field(..., min_length=1, max_length=64)
+    superseded_at_rev: StrictInt = Field(..., ge=1)
+    superseded_at: float = Field(default_factory=time.time)
+
+    @field_validator("rel_path")
+    @classmethod
+    def _check_rel_path(cls, v: str) -> str:
+        return _validate_safe_rel_path(v)
+
+    @field_validator("sha256")
+    @classmethod
+    def _check_sha(cls, v: str) -> str:
+        return _validate_sha256_hex(v)
+
+    @field_validator("superseded_by_tx_id", "kind")
+    @classmethod
+    def _check_tokens(cls, v: str) -> str:
+        return _validate_safe_token(v)
+
+
+class IdempotencyRecord(BaseModel):
+    key: str = Field(..., min_length=1, max_length=128)
+    op: str = Field(..., min_length=1, max_length=64)
+    expected_revision: StrictInt = Field(..., ge=1)
+    payload_sha256: str = Field(..., min_length=64, max_length=64)
+    result_revision: Optional[StrictInt] = Field(default=None, ge=1)
+    tx_id: str = Field(..., min_length=1, max_length=64)
+    outcome: JournalTxState
+    created_at: float = Field(default_factory=time.time)
+
+    @field_validator("key", "op", "tx_id")
+    @classmethod
+    def _check_tokens(cls, v: str) -> str:
+        return _validate_safe_token(v)
+
+    @field_validator("payload_sha256")
+    @classmethod
+    def _check_sha(cls, v: str) -> str:
+        return _validate_sha256_hex(v)
+
+    @model_validator(mode="after")
+    def _check_outcome_consistency(self) -> "IdempotencyRecord":
+        if self.outcome == JournalTxState.COMMITTED:
+            if self.result_revision is None or self.result_revision <= self.expected_revision:
+                raise ValueError("Committed idempotency record requires result_revision > expected_revision.")
+        elif self.outcome == JournalTxState.ABORTED and self.result_revision is not None:
+            raise ValueError("Aborted idempotency record must not set result_revision.")
+        return self
+
+
+class AlbumJournal(BaseModel):
+    schema_version: StrictInt = Field(default=1, ge=1, le=1)
+    album_id: str = Field(..., min_length=4, max_length=40)
+    active_tx: Optional[ActiveTxRecord] = Field(default=None)
+    retained_artifacts: List[RetainedArtifactRecord] = Field(default_factory=list)
+    idempotency_records: List[IdempotencyRecord] = Field(default_factory=list)
+
+    @field_validator("album_id")
+    @classmethod
+    def _check_album_id(cls, v: str) -> str:
+        return _validate_safe_token(v)
+
+    @model_validator(mode="after")
+    def _check_journal_consistency(self) -> "AlbumJournal":
+        seen_keys: set[str] = set()
+        seen_tx_ids: set[str] = set()
+        for rec in self.idempotency_records:
+            if rec.key in seen_keys:
+                raise ValueError(f"Duplicate idempotency key '{rec.key}' in album journal.")
+            seen_keys.add(rec.key)
+            if rec.tx_id in seen_tx_ids:
+                raise ValueError(f"Duplicate idempotency transaction id '{rec.tx_id}' in album journal.")
+            seen_tx_ids.add(rec.tx_id)
+
+        seen_retained: set[str] = set()
+        for ret in self.retained_artifacts:
+            if ret.rel_path in seen_retained:
+                raise ValueError(f"Duplicate retained artifact path '{ret.rel_path}' in album journal.")
+            seen_retained.add(ret.rel_path)
+
+        if self.active_tx is not None:
+            tx = self.active_tx
+            active_paths = set(tx.new_refs) | {r.rel_path for r in tx.staging_refs}
+            if seen_retained & active_paths:
+                raise ValueError("Retained artifacts must not overlap active staging or new references.")
+            for rec in self.idempotency_records:
+                if tx.idempotency_key is not None and rec.key == tx.idempotency_key:
+                    if (
+                        rec.tx_id != tx.tx_id
+                        or rec.op != tx.op
+                        or rec.expected_revision != tx.expected_revision
+                        or rec.payload_sha256 != tx.payload_sha256
+                    ):
+                        raise ValueError("Active transaction conflicts with existing idempotency record.")
+                if rec.tx_id == tx.tx_id:
+                    if (
+                        rec.key != tx.idempotency_key
+                        or rec.op != tx.op
+                        or rec.expected_revision != tx.expected_revision
+                        or rec.payload_sha256 != tx.payload_sha256
+                    ):
+                        raise ValueError("Active transaction id conflicts with existing idempotency record.")
+                    if rec.outcome in (JournalTxState.COMMITTED, JournalTxState.ABORTED) and tx.state != rec.outcome:
+                        raise ValueError("Active transaction state contradicts terminal idempotency outcome.")
+                    if rec.outcome == JournalTxState.COMMITTED and rec.result_revision != tx.target_revision:
+                        raise ValueError("Committed idempotency result_revision must match active_tx target_revision.")
+        return self
