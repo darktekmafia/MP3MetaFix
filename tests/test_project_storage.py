@@ -312,19 +312,10 @@ def test_album_workspace_management(custom_storage):
     album = custom_storage.add_album_entry(
         user_id, album.id, t2.id, expected_revision=album.revision, take_id=take2.id
     )
-    updated_album = custom_storage.update_album(
-        user_id,
-        album.id,
-        {"expected_revision": album.revision, "title": "Debut EP (Mastered)"},
-    )
-    assert len(updated_album.tracks) == 2
-    assert updated_album.tracks[0].track_number == 1
-    assert updated_album.tracks[0].custom_title == "Track One (Remix)"
-
-    # Save cover art
+    # Save cover art (on journal-less Album before v2 enrollment via update_album)
     dummy_cover = b"\xff\xd8\xff\xe0\x00\x10JFIF_DUMMY_JPEG"
     custom_storage.save_album_cover(
-        user_id, album.id, dummy_cover, expected_revision=updated_album.revision, extension=".jpg"
+        user_id, album.id, dummy_cover, expected_revision=album.revision, extension=".jpg"
     )
     
     cover_path = custom_storage.get_album_cover_path(user_id, album.id)
@@ -340,6 +331,16 @@ def test_album_workspace_management(custom_storage):
     with pytest.raises(AlbumReplacementDisabledError):
         custom_storage.delete_album(user_id, album.id, expected_revision=album_with_cover.revision)
     assert custom_storage.get_album(user_id, album.id) is not None
+
+    # Update album metadata (enrolls into v2 journal)
+    updated_album = custom_storage.update_album(
+        user_id,
+        album.id,
+        {"expected_revision": album_with_cover.revision, "title": "Debut EP (Mastered)"},
+    )
+    assert len(updated_album.tracks) == 2
+    assert updated_album.tracks[0].track_number == 1
+    assert updated_album.tracks[0].custom_title == "Track One (Remix)"
 
     # Empty draft album deletion succeeds with matching expected_revision
     empty_album = custom_storage.create_album(user_id=user_id, title="Empty Draft")
@@ -466,26 +467,27 @@ def test_album_revision_tracking(custom_storage):
     assert album.revision == 1
     assert len(album.revisions) == 1
 
-    # Update album metadata
+    # Upload cover art bumps revision (on journal-less album before v2 enrollment)
+    custom_storage.save_album_cover(
+        user_id, album.id, b"FAKE_JPEG_IMAGE_BYTES", expected_revision=album.revision, extension=".jpg"
+    )
+    after_cover = custom_storage.get_album(user_id, album.id)
+    assert after_cover.revision == 2
+    assert len(after_cover.revisions) == 2
+    assert after_cover.revisions[1].change_summary == "Updated album cover artwork"
+    assert after_cover.revisions[1].changed_fields == ["cover_art"]
+
+    # Update album metadata bumps revision
     updated_album = custom_storage.update_album(
         user_id,
         album.id,
-        {"expected_revision": album.revision, "year": 2026, "genre": "Electronic"},
+        {"year": 2026, "genre": "Electronic"},
+        expected_revision=after_cover.revision,
         change_summary="Added release year and genre",
     )
-    assert updated_album.revision == 2
-    assert len(updated_album.revisions) == 2
-    assert updated_album.revisions[1].change_summary == "Added release year and genre"
-
-    # Upload cover art bumps revision
-    custom_storage.save_album_cover(
-        user_id, album.id, b"FAKE_JPEG_IMAGE_BYTES", expected_revision=updated_album.revision, extension=".jpg"
-    )
-    refetched = custom_storage.get_album(user_id, album.id)
-    assert refetched.revision == 3
-    assert len(refetched.revisions) == 3
-    assert refetched.revisions[2].change_summary == "Updated album cover artwork"
-    assert refetched.revisions[2].changed_fields == ["cover_art"]
+    assert updated_album.revision == 3
+    assert len(updated_album.revisions) == 3
+    assert updated_album.revisions[2].change_summary == "Added release year and genre"
 
 
 def test_first_take_auto_master_and_single_track_revision(custom_storage):
@@ -816,32 +818,32 @@ def test_album_owned_audio_independence_multi_entry_and_identity(custom_storage)
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id).read_bytes() == wav_2
 
-    # Reordering keeps same ale_ entry IDs and owned audio paths
-    reordered = custom_storage.update_album(
-        user_id,
-        album.id,
-        {"expected_revision": album.revision, "tracks": [e3.model_dump(), e1.model_dump(), e2.model_dump()]},
-    )
-    assert [t.id for t in reordered.tracks] == [e3.id, e1.id, e2.id]
-    assert [t.track_number for t in reordered.tracks] == [1, 2, 3]
-    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
-
     # Phase 1A blocks clearing or removing a recorded entry, preserving e3's owned audio
     with pytest.raises(AlbumReplacementDisabledError):
         custom_storage.update_album_entry(
-            user_id, album.id, e3.id, expected_revision=reordered.revision, clear_take_to_placeholder=True
+            user_id, album.id, e3.id, expected_revision=album.revision, clear_take_to_placeholder=True
         )
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id).read_bytes() == wav_2
 
     with pytest.raises(AlbumReplacementDisabledError):
-        custom_storage.remove_album_entry(user_id, album.id, e3.id, expected_revision=reordered.revision)
+        custom_storage.remove_album_entry(user_id, album.id, e3.id, expected_revision=album.revision)
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id).read_bytes() == wav_2
 
     # Placeholder entries can still be added and removed cleanly without affecting e1/e2/e3
-    with_ph = custom_storage.add_album_entry(user_id, album.id, trk.id, expected_revision=reordered.revision, take_id=None)
+    with_ph = custom_storage.add_album_entry(user_id, album.id, trk.id, expected_revision=album.revision, take_id=None)
     p_id = with_ph.tracks[-1].id
     after_remove = custom_storage.remove_album_entry(user_id, album.id, p_id, expected_revision=with_ph.revision)
-    assert [t.id for t in after_remove.tracks] == [e3.id, e1.id, e2.id]
+    assert [t.id for t in after_remove.tracks] == [e1.id, e2.id, e3.id]
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
+
+    # Reordering keeps same ale_ entry IDs and owned audio paths (enrolls into v2 journal)
+    reordered = custom_storage.update_album(
+        user_id,
+        album.id,
+        {"expected_revision": after_remove.revision, "tracks": [e3.model_dump(), e1.model_dump(), e2.model_dump()]},
+    )
+    assert [t.id for t in reordered.tracks] == [e3.id, e1.id, e2.id]
+    assert [t.track_number for t in reordered.tracks] == [1, 2, 3]
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
 
 
@@ -1192,7 +1194,7 @@ def test_phase1a_legacy_track_ids_and_unknown_entry_ids(custom_storage):
 
     # 3. Unknown explicit ale_ entry ID is rejected and never hijacks/deletes existing owned audio
     unknown_id = generate_album_entry_id()
-    with pytest.raises(ProjectValidationError, match="Unknown album entry identifier"):
+    with pytest.raises(ProjectValidationError, match="Unknown album entry identifier|not found"):
         custom_storage.update_album(
             user_id,
             album.id,
@@ -1270,6 +1272,18 @@ def _mp_worker_finalize(root_dir_str: str, user_id: str, album_id: str, expected
         queue.put(("finalize", "revision_conflict"))
 
 
+def _mp_worker_update_entry_title(root_dir_str: str, user_id: str, album_id: str, entry_id: str, new_title: str, expected_revision: int, barrier, queue) -> None:
+    mgr = ProjectStorageManager(root_dir=Path(root_dir_str))
+    barrier.wait(timeout=10)
+    try:
+        res = mgr.update_album_entry(user_id, album_id, entry_id, expected_revision=expected_revision, custom_title=new_title)
+        queue.put(("update", "updated" if res else "missing"))
+    except AlbumFinalizedError:
+        queue.put(("update", "blocked_finalized"))
+    except AlbumRevisionConflictError:
+        queue.put(("update", "revision_conflict"))
+
+
 def _mp_worker_update_title(root_dir_str: str, user_id: str, album_id: str, new_title: str, expected_revision: int, barrier, queue) -> None:
     mgr = ProjectStorageManager(root_dir=Path(root_dir_str))
     barrier.wait(timeout=10)
@@ -1283,6 +1297,8 @@ def _mp_worker_update_title(root_dir_str: str, user_id: str, album_id: str, new_
 
 
 def _mp_worker_delete_album(root_dir_str: str, user_id: str, album_id: str, expected_revision: int, barrier, queue) -> None:
+    from backend.project_storage import AlbumMutationNotEnrolledError
+
     mgr = ProjectStorageManager(root_dir=Path(root_dir_str))
     barrier.wait(timeout=10)
     try:
@@ -1294,6 +1310,8 @@ def _mp_worker_delete_album(root_dir_str: str, user_id: str, album_id: str, expe
         queue.put(("delete", "blocked_non_empty"))
     except AlbumRevisionConflictError:
         queue.put(("delete", "revision_conflict"))
+    except AlbumMutationNotEnrolledError:
+        queue.put(("delete", "not_enrolled"))
 
 
 def test_phase1a_cross_process_album_locking_and_deletion_race(tmp_path):
@@ -1332,11 +1350,11 @@ def test_phase1a_cross_process_album_locking_and_deletion_race(tmp_path):
     for entry in after_add.tracks:
         assert mgr.get_album_entry_audio_path(user_id, album.id, entry.id).read_bytes() == wav_bytes
 
-    # 2. Concurrent finalize + update_album across processes -> assert exact worker outcomes
+    # 2. Concurrent finalize + update_album_entry across processes -> assert exact worker outcomes
     barrier_race = ctx.Barrier(2)
     q_race = ctx.Queue()
     p_fin = ctx.Process(target=_mp_worker_finalize, args=(str(root_dir), user_id, album.id, after_add.revision, barrier_race, q_race))
-    p_upd = ctx.Process(target=_mp_worker_update_title, args=(str(root_dir), user_id, album.id, "Raced Title", after_add.revision, barrier_race, q_race))
+    p_upd = ctx.Process(target=_mp_worker_update_entry_title, args=(str(root_dir), user_id, album.id, after_add.tracks[0].id, "Raced Title", after_add.revision, barrier_race, q_race))
     p_fin.start()
     p_upd.start()
     p_fin.join(timeout=15)
@@ -1389,17 +1407,19 @@ def test_phase1a_cross_process_album_locking_and_deletion_race(tmp_path):
     assert p_del.exitcode == 0 and p_upd2.exitcode == 0
 
     del_outcomes = dict(q_del.get(timeout=5) for _ in range(2))
-    assert del_outcomes["delete"] in ("deleted", "revision_conflict")
+    assert del_outcomes["delete"] in ("deleted", "revision_conflict", "not_enrolled")
     if del_outcomes["delete"] == "deleted":
         assert del_outcomes["update"] == "missing"
         assert mgr.get_album(user_id, draft_album.id) is None
         assert not mgr._get_album_dir(user_id, draft_album.id).exists()
     else:
+        from backend.project_storage import AlbumMutationNotEnrolledError
+
         assert del_outcomes["update"] == "updated"
         updated_draft = mgr.get_album(user_id, draft_album.id)
         assert updated_draft is not None
-        assert mgr.delete_album(user_id, draft_album.id, expected_revision=updated_draft.revision) is True
-        assert mgr.get_album(user_id, draft_album.id) is None
+        with pytest.raises(AlbumMutationNotEnrolledError):
+            mgr.delete_album(user_id, draft_album.id, expected_revision=updated_draft.revision)
     assert mgr._get_album_lock_path(user_id, draft_album.id).is_file()
 
 
@@ -1443,7 +1463,7 @@ def test_phase1a1_implicit_deletion_and_allow_new_entry_id_blocked(custom_storag
 
     # 3. Untrusted _allow_new_entry_id flag in update dict is ignored -> unknown ale_ ID rejected
     forged_id = generate_album_entry_id()
-    with pytest.raises(ProjectValidationError, match="Unknown album entry identifier"):
+    with pytest.raises(ProjectValidationError, match="Unknown album entry identifier|not found"):
         custom_storage.update_album(
             user_id,
             album.id,
@@ -1730,7 +1750,7 @@ def test_phase1a2_artwork_safety_containment_finalization_and_concurrency(custom
     ph_alb = custom_storage.create_album(user_id=user_id, title="Bulk Placeholder LP")
     ph_alb = custom_storage.add_album_entry(user_id, ph_alb.id, trk.id, expected_revision=ph_alb.revision, take_id=None)
     ph_entry = ph_alb.tracks[0]
-    with pytest.raises(ProjectValidationError, match="Track/Take assignment"):
+    with pytest.raises(ProjectValidationError, match="Assigning a take via bulk album update is not allowed|Track/Take assignment"):
         custom_storage.update_album(
             user_id,
             ph_alb.id,
@@ -1856,8 +1876,9 @@ def test_phase1a3_post_pub_artwork_non_finite_snapshots_and_dir_fd_containment(c
     orig_publish_in_dir = ps_mod._publish_manifest_atomic_in_dir
 
     def swap_path_before_publish(dir_fd, filename, data):
-        cont_dir.rename(backup_dir)
-        cont_dir.symlink_to(external_dir)
+        if filename == "album.json" and not backup_dir.exists():
+            cont_dir.rename(backup_dir)
+            cont_dir.symlink_to(external_dir)
         return orig_publish_in_dir(dir_fd, filename, data)
 
     monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", swap_path_before_publish)
@@ -2605,37 +2626,39 @@ def test_phase1a7_deterministic_legacy_album_entry_identity(custom_storage: Proj
     assert assigned.tracks[0].snapshot is not None
     assert custom_storage.get_album_entry_audio_path(user_id, alb.id, ids1[0]).read_bytes() == wav_ok
 
-    # 4. Entry metadata change + reordering/sequencing preserves unrelated entries and existing recording
-    reordered = custom_storage.update_album(
-        user_id,
-        alb.id,
-        {
-            "expected_revision": assigned.revision,
-            "tracks": [
-                {"id": ids1[2], "track_id": trk2.id, "take_id": None, "track_number": 1, "disc_number": 1, "custom_title": "Renamed Intro"},
-                {"id": ids1[0], "track_id": trk1.id, "take_id": take1.id, "track_number": 2, "disc_number": 1},
-                {"id": ids1[1], "track_id": trk1.id, "take_id": None, "track_number": 3, "disc_number": 1},
-            ],
-        },
-    )
-    assert [e.id for e in reordered.tracks] == [ids1[2], ids1[0], ids1[1]]
-    assert reordered.tracks[0].custom_title == "Renamed Intro"
-    assert reordered.tracks[1].has_owned_audio is True
+    # 4. Placeholder removal preserves unrelated entries and existing recording
+    removed = custom_storage.remove_album_entry(user_id, alb.id, ids1[1], expected_revision=assigned.revision)
+    assert [e.id for e in removed.tracks] == [ids1[0], ids1[2]]
     assert custom_storage.get_album_entry_audio_path(user_id, alb.id, ids1[0]).read_bytes() == wav_ok
 
-    # 5. Placeholder removal preserves unrelated entries and existing recording
-    removed = custom_storage.remove_album_entry(user_id, alb.id, ids1[1], expected_revision=reordered.revision)
-    assert [e.id for e in removed.tracks] == [ids1[2], ids1[0]]
-    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, ids1[0]).read_bytes() == wav_ok
-
-    # 6. Adding a new entry to the legacy Album preserves existing entries and recordings
+    # 5. Adding a new entry to the legacy Album preserves existing entries and recordings
     added = custom_storage.add_album_entry(
         user_id, alb.id, trk2.id, expected_revision=removed.revision, take_id=take2.id
     )
     assert len(added.tracks) == 3
-    assert added.tracks[0].id == ids1[2]
-    assert added.tracks[1].id == ids1[0]
+    assert added.tracks[0].id == ids1[0]
+    assert added.tracks[1].id == ids1[2]
     assert added.tracks[2].id not in set(ids1)
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, ids1[0]).read_bytes() == wav_ok
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, added.tracks[2].id).read_bytes() == wav_ok
+
+    # 6. Entry metadata change + reordering/sequencing preserves unrelated entries and existing recordings (enrolls v2)
+    reordered = custom_storage.update_album(
+        user_id,
+        alb.id,
+        {
+            "expected_revision": added.revision,
+            "tracks": [
+                {"id": ids1[2], "track_id": trk2.id, "take_id": None, "track_number": 1, "disc_number": 1, "custom_title": "Renamed Intro"},
+                {"id": ids1[0], "track_id": trk1.id, "take_id": take1.id, "track_number": 2, "disc_number": 1},
+                {"id": added.tracks[2].id, "track_id": trk2.id, "take_id": take2.id, "track_number": 3, "disc_number": 1},
+            ],
+        },
+    )
+    assert [e.id for e in reordered.tracks] == [ids1[2], ids1[0], added.tracks[2].id]
+    assert reordered.tracks[0].custom_title == "Renamed Intro"
+    assert reordered.tracks[1].has_owned_audio is True
+    assert reordered.tracks[2].has_owned_audio is True
     assert custom_storage.get_album_entry_audio_path(user_id, alb.id, ids1[0]).read_bytes() == wav_ok
     assert custom_storage.get_album_entry_audio_path(user_id, alb.id, added.tracks[2].id).read_bytes() == wav_ok
 
@@ -3259,13 +3282,15 @@ def test_phase1b_stage1_1_no_journal_markers_tokens_conflicts_and_phase1a_dir_fs
             ],
         )
 
-    # 5. Directory fsync failure through Phase 1A mutation callers: visible marker yields PROVISIONAL_COMMIT_CANDIDATE only
-    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", lambda _dfd: (_ for _ in ()).throw(OSError("Simulated Phase 1A dir fsync EIO")))
-    with pytest.raises(OSError, match="Simulated Phase 1A dir fsync EIO"):
-        custom_storage.update_album(user_id, alb.id, {"expected_revision": alb.revision, "title": "After Dir Fsync Fail"})
+    # 5. Directory fsync failure through Phase 1A cover writer & v2 update_album: visible marker yields PROVISIONAL_COMMIT_CANDIDATE only
+    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", lambda _dfd: (_ for _ in ()).throw(OSError("Simulated cover dir fsync EIO")))
+    with pytest.raises(OSError, match="Simulated cover dir fsync EIO"):
+        custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=alb.revision, extension=".jpg")
     monkeypatch.undo()
+    # Cover and updated manifest are both preserved on UNCERTAIN post-replace dir fsync failure
+    assert (alb_dir / "cover.jpg").is_file()
     updated_alb = custom_storage.get_album(user_id, alb.id)
-    assert updated_alb.title == "After Dir Fsync Fail"
+    assert updated_alb.has_cover is True
 
     post_fsync_data = json.loads((alb_dir / "album.json").read_text(encoding="utf-8"))
     post_fsync_data["last_tx_id"] = "tx_vis_after_fsync_fail"
@@ -3277,13 +3302,12 @@ def test_phase1b_stage1_1_no_journal_markers_tokens_conflicts_and_phase1a_dir_fs
         post_fsync_data, AlbumJournal(album_id=alb.id, active_tx=vis_tx)
     ) == RecoveryConsistency.PROVISIONAL_COMMIT_CANDIDATE
 
-    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", lambda _dfd: (_ for _ in ()).throw(OSError("Simulated cover dir fsync EIO")))
-    with pytest.raises(OSError, match="Simulated cover dir fsync EIO"):
-        custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=updated_alb.revision, extension=".jpg")
+    from backend.project_storage import AlbumDurabilityUncertainError
+
+    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", lambda _dfd: (_ for _ in ()).throw(OSError("Simulated Phase 1A dir fsync EIO")))
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.update_album(user_id, alb.id, {"expected_revision": updated_alb.revision, "title": "After Dir Fsync Fail"})
     monkeypatch.undo()
-    # Cover and updated manifest are both preserved on UNCERTAIN post-replace dir fsync failure
-    assert (alb_dir / "cover.jpg").is_file()
-    assert custom_storage.get_album(user_id, alb.id).has_cover is True
 
 
 def test_phase1b_stage1_2_refresh_confirm_lock_revision_and_safety(custom_storage: ProjectStorageManager, monkeypatch):
@@ -4962,9 +4986,9 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
     manifest_path = alb_dir / "album.json"
     journal_path = alb_dir / "journal.json"
 
-    # 1. Journal-less Album retains Phase 1A behavior
-    alb = custom_storage.update_album(user_id, alb.id, {"title": "2A1 Updated", "expected_revision": alb.revision})
-    assert alb is not None and alb.title == "2A1 Updated"
+    # 1. Journal-less Album retains Phase 1A behavior for unenrolled writers
+    alb = custom_storage.update_album_entry(user_id, alb.id, entry_ph.id, expected_revision=alb.revision, custom_title="2A1 Updated")
+    assert alb is not None and alb.tracks[1].custom_title == "2A1 Updated"
     assert not journal_path.exists()
 
     # Never invoke durability reconciliation during guards
@@ -4975,8 +4999,7 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1),
     )
 
-    def _run_all_8_writers(rev: int):
-        yield lambda: custom_storage.update_album(user_id, alb.id, {"title": "Nope", "expected_revision": rev})
+    def _run_7_unenrolled_writers(rev: int):
         yield lambda: custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=rev, take_id=None)
         yield lambda: custom_storage.update_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev, custom_title="X")
         yield lambda: custom_storage.remove_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev)
@@ -4985,7 +5008,11 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         yield lambda: custom_storage.finalize_album(user_id, alb.id, expected_revision=rev)
         yield lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=rev)
 
-    # 2. Idle v2 Album -> AlbumMutationNotEnrolledError on all 8 writers, zero writes, guarded once
+    def _run_all_8_writers(rev: int):
+        yield lambda: custom_storage.update_album(user_id, alb.id, {"title": "Nope", "expected_revision": rev})
+        yield from _run_7_unenrolled_writers(rev)
+
+    # 2. Idle v2 Album -> AlbumMutationNotEnrolledError on all 7 unenrolled writers, zero writes, guarded once
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id)
     journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
     raw_m = manifest_path.read_bytes()
@@ -4999,7 +5026,7 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         return orig_phase_a(self_mgr, *args, **kwargs)
 
     monkeypatch.setattr(ProjectStorageManager, "_validate_album_evidence_phase_a_locked", _counted_phase_a)
-    for op_fn in _run_all_8_writers(alb.revision):
+    for op_fn in _run_7_unenrolled_writers(alb.revision):
         phase_a_calls["n"] = 0
         with pytest.raises(AlbumMutationNotEnrolledError):
             op_fn()
@@ -5012,6 +5039,11 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         "reconcile_album_durability",
         lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1),
     )
+
+    # update_album is enrolled on idle v2 Album and succeeds with a committed receipt
+    alb = custom_storage.update_album(user_id, alb.id, {"title": "Enrolled v2 Title", "expected_revision": alb.revision})
+    assert alb.title == "Enrolled v2 Title"
+    raw_m = manifest_path.read_bytes()
 
     # 3. Active (PUBLISH_INTENT) & v1 journals -> AlbumDurabilityUncertainError, and Phase A itself permits active/uncertain for replay
     active_v2 = AlbumJournal(
@@ -5174,7 +5206,7 @@ def test_phase1b_stage1_3b_2a1_raw_manifest_evidence_and_precedence(custom_stora
     monkeypatch.setattr(ps_mod.os, "open", lambda *a, **kw: (fd := orig_open(*a, **kw), live_fds.add(fd), fd)[2])
     monkeypatch.setattr(ps_mod.os, "close", lambda fd: (live_fds.discard(fd), orig_close(fd))[1])
     with pytest.raises(AlbumMutationNotEnrolledError):
-        custom_storage.update_album(user_id, alb.id, {"title": "Changed", "expected_revision": alb.revision})
+        custom_storage.update_album_entry(user_id, alb.id, entry.id, expected_revision=alb.revision, custom_title="Changed")
     assert live_fds == set()
     monkeypatch.setattr(ps_mod.os, "open", orig_open)
     monkeypatch.setattr(ps_mod.os, "close", orig_close)
@@ -5195,6 +5227,533 @@ def test_phase1b_stage1_3b_2a1_raw_manifest_evidence_and_precedence(custom_stora
         custom_storage.update_album(user_id, alb.id, {"title": "Stale Fin", "expected_revision": fin.revision - 1})
 
     assert reconcile_calls["n"] == 0
+
+
+def test_phase1b_stage1_3b_2a2a_v2_writer_replay_and_fault_matrix(custom_storage: ProjectStorageManager, monkeypatch):
+    """Phase 1B Stage 1.3B-2A-2A: enrolled update_album v2 writer, reorder/track_ids/omitted-take, replay, and crash matrix."""
+    import io
+    import json
+    import os
+    import wave
+    import backend.project_storage as ps_mod
+    from backend.project_models import (
+        ActiveTxRecord,
+        AlbumJournal,
+        ArtifactRefRecord,
+        ArtifactRole,
+        JournalProtocol,
+        JournalTxState,
+        RetainedArtifactRecord,
+        TerminalTxReceipt,
+    )
+    from backend.project_storage import (
+        AlbumDurabilityUncertainError,
+        AlbumFinalizedError,
+        AlbumIdempotencyConflictError,
+        AlbumManifestCorruptError,
+        AlbumReplacementDisabledError,
+        AlbumRevisionConflictError,
+        AlbumTransactionAbortedError,
+        ManifestPublishError,
+        ManifestPublishState,
+        ProjectValidationError,
+    )
+    from backend.security import get_album_entry_dir_name
+
+    user_id = "u_1b_s1_3b_2a2a"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 400)
+    wav_ok = buf.getvalue()
+
+    t1 = custom_storage.create_track(user_id=user_id, title="T1")
+    tk1 = custom_storage.create_take(user_id=user_id, track_id=t1.id, audio_bytes=wav_ok, original_filename="t1.wav", extension=".wav")
+    t2 = custom_storage.create_track(user_id=user_id, title="T2")
+    tk2 = custom_storage.create_take(user_id=user_id, track_id=t2.id, audio_bytes=wav_ok, original_filename="t2.wav", extension=".wav")
+
+    alb = custom_storage.create_album(user_id=user_id, title="2A2A LP")
+    alb = custom_storage.add_album_entry(user_id, alb.id, t1.id, expected_revision=alb.revision, take_id=tk1.id)
+    alb = custom_storage.add_album_entry(user_id, alb.id, t2.id, expected_revision=alb.revision, take_id=tk2.id)
+    e1, e2 = alb.tracks[0], alb.tracks[1]
+    assert e1.id and e2.id
+
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    manifest_path = alb_dir / "album.json"
+    journal_path = alb_dir / "journal.json"
+
+    # 1. Invalid storage-boundary keys & invalid target model before PREPARED create no journal.json
+    for bad_key in ("", "bad key", "../bad", "x" * 129):
+        with pytest.raises(ProjectValidationError):
+            custom_storage.update_album(user_id, alb.id, {"title": "No", "expected_revision": alb.revision}, idempotency_key=bad_key)
+    with pytest.raises(ProjectValidationError):
+        custom_storage.update_album(user_id, alb.id, {"title": "", "expected_revision": alb.revision}, idempotency_key="k_bad_model")
+    with pytest.raises(ProjectValidationError):
+        custom_storage.update_album(user_id, alb.id, {"status": "completed", "expected_revision": alb.revision})
+    assert not journal_path.exists()
+
+    # 2. Keyed no-op does not create journal or consume key; later reuse succeeds
+    noop_res, noop_replay = custom_storage.update_album_with_replay_status(
+        user_id, alb.id, {"title": "2A2A LP", "expected_revision": alb.revision}, idempotency_key="k_reuse_1"
+    )
+    assert noop_replay is False and noop_res.revision == alb.revision
+    assert not journal_path.exists()
+
+    # 3. First meaningful update_album initializes v2 journal & consumes k_reuse_1
+    upd1, r1 = custom_storage.update_album_with_replay_status(
+        user_id, alb.id, {"title": "2A2A LP v2", "expected_revision": alb.revision}, idempotency_key="k_reuse_1"
+    )
+    assert r1 is False and upd1.title == "2A2A LP v2" and upd1.revision == alb.revision + 1
+    j1 = AlbumJournal.model_validate_json(journal_path.read_text(encoding="utf-8"))
+    assert j1.schema_version == 2 and j1.active_tx is None and len(j1.tx_receipts) == 1
+    assert j1.tx_receipts[0].outcome == JournalTxState.COMMITTED and j1.tx_receipts[0].idempotency_key == "k_reuse_1"
+
+    # 4. Exact idempotency replay + conflicting key reuse
+    rep1, is_rep1 = custom_storage.update_album_with_replay_status(
+        user_id, alb.id, {"title": "2A2A LP v2", "expected_revision": alb.revision}, idempotency_key="k_reuse_1"
+    )
+    assert is_rep1 is True and rep1.revision == upd1.revision
+    with pytest.raises(AlbumIdempotencyConflictError):
+        custom_storage.update_album_with_replay_status(
+            user_id, alb.id, {"title": "Different", "expected_revision": alb.revision}, idempotency_key="k_reuse_1"
+        )
+
+    # 5. Reorder with omitted take_id AND legacy track_ids reorder (preserving entry IDs & takes)
+    upd2 = custom_storage.update_album(
+        user_id,
+        alb.id,
+        {
+            "expected_revision": upd1.revision,
+            "tracks": [{"id": e2.id, "track_id": t2.id}, {"id": e1.id, "track_id": t1.id}],
+        },
+        idempotency_key="k_reord_omit",
+    )
+    assert [t.id for t in upd2.tracks] == [e2.id, e1.id]
+    assert [t.take_id for t in upd2.tracks] == [tk2.id, tk1.id]
+
+    upd3 = custom_storage.update_album(
+        user_id,
+        alb.id,
+        {"expected_revision": upd2.revision, "track_ids": [t1.id, t2.id]},
+        idempotency_key="k_reord_legacy",
+    )
+    assert [t.id for t in upd3.tracks] == [e1.id, e2.id]
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.update_album(
+            user_id,
+            alb.id,
+            {"expected_revision": upd3.revision, "tracks": [{"id": e1.id, "track_id": t1.id, "take_id": None}, {"id": e2.id, "track_id": t2.id}]},
+        )
+
+    # 6. Historical replay after later revisions & preservation of existing journal collections
+    rep_old, is_rep_old = custom_storage.update_album_with_replay_status(
+        user_id, alb.id, {"title": "2A2A LP v2", "expected_revision": alb.revision}, idempotency_key="k_reuse_1"
+    )
+    assert is_rep_old is True and rep_old.revision == upd3.revision
+    j3 = AlbumJournal.model_validate_json(journal_path.read_text(encoding="utf-8"))
+    assert len(j3.tx_receipts) == 3
+
+    # Inject retained artifact & ABORTED receipt, then verify preservation + ABORTED replay precedence
+    eh1 = get_album_entry_dir_name(e1.id)
+    ret_rec = RetainedArtifactRecord(
+        rel_path=f"entries/{eh1}/audio_g0.wav",
+        sha256="f" * 64,
+        kind=ArtifactRole.ENTRY_AUDIO.value,
+        generation=1,
+        superseded_by_tx_id=j3.tx_receipts[0].tx_id,
+        superseded_at_rev=j3.tx_receipts[0].result_revision,
+    )
+    ab_payload_sha = ProjectStorageManager._compute_update_album_payload_sha256(
+        "update_album", upd3.revision, {"title": "Aborted Title"}
+    )
+    ab_rcp = TerminalTxReceipt(
+        tx_id="tx_hist_ab_01",
+        op="update_album",
+        outcome=JournalTxState.ABORTED,
+        expected_revision=upd3.revision,
+        result_revision=upd3.revision,
+        payload_sha256=ab_payload_sha,
+        intended_manifest_sha256="e" * 64,
+        idempotency_key="k_hist_ab",
+    )
+    j_with_ab = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb.id,
+        tx_receipts=[*j3.tx_receipts, ab_rcp],
+        retained_artifacts=[ret_rec],
+        idempotency_records=[
+            *j3.idempotency_records,
+            ps_mod.IdempotencyRecord(
+                key="k_hist_ab",
+                op="update_album",
+                expected_revision=upd3.revision,
+                payload_sha256=ab_payload_sha,
+                tx_id="tx_hist_ab_01",
+                outcome=JournalTxState.ABORTED,
+            ),
+        ],
+    )
+    journal_path.write_text(json.dumps(j_with_ab.model_dump(mode="json")), encoding="utf-8")
+
+    with pytest.raises(AlbumTransactionAbortedError):
+        custom_storage.update_album(
+            user_id, alb.id, {"title": "Aborted Title", "expected_revision": upd3.revision}, idempotency_key="k_hist_ab"
+        )
+    # Sync failure on ABORTED replay -> AlbumDurabilityUncertainError
+    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", lambda _d: (_ for _ in ()).throw(OSError("EIO")))
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.update_album(
+            user_id, alb.id, {"title": "Aborted Title", "expected_revision": upd3.revision}, idempotency_key="k_hist_ab"
+        )
+    monkeypatch.undo()
+
+    # Subsequent transaction preserves retained_artifacts & prior receipts
+    upd4 = custom_storage.update_album(
+        user_id, alb.id, {"title": "2A2A LP v4", "expected_revision": upd3.revision}, idempotency_key="k_v4"
+    )
+    j4 = AlbumJournal.model_validate_json(journal_path.read_text(encoding="utf-8"))
+    assert len(j4.tx_receipts) == 5 and len(j4.retained_artifacts) == 1
+
+    # 7. Fault boundaries: manifest NOT_PUBLISHED, direct os.replace exception, dir_fsync failure, best-effort UNCERTAIN fail
+    orig_pub = ps_mod._publish_manifest_atomic_in_dir
+    orig_replace = os.replace
+
+    # 7a. Manifest NOT_PUBLISHED after durable PUBLISH_INTENT
+    def _fail_before_manifest_replace(dfd, fname, data):
+        if fname == "album.json":
+            raise ManifestPublishError("Simulated pre-replace failure", ManifestPublishState.NOT_PUBLISHED)
+        return orig_pub(dfd, fname, data)
+
+    monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", _fail_before_manifest_replace)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.update_album(user_id, alb.id, {"title": "PreReplaceFail", "expected_revision": upd4.revision})
+    monkeypatch.undo()
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["revision"] == upd4.revision
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["active_tx"]["state"] == "uncertain"
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.reconcile_album_durability(user_id, alb.id)
+
+    # Reset to clean idle j4 for next fault test
+    journal_path.write_text(json.dumps(j4.model_dump(mode="json")), encoding="utf-8")
+
+    # 7b. Direct os.replace("album.json") exception after durable PUBLISH_INTENT -> UNCERTAIN, no fabricated receipt
+    def _fail_os_replace_manifest(src, dst, *args, **kwargs):
+        if dst == "album.json":
+            raise OSError(5, "Simulated os.replace failure")
+        return orig_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.os, "replace", _fail_os_replace_manifest)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.update_album(user_id, alb.id, {"title": "ReplaceRaise", "expected_revision": upd4.revision})
+    monkeypatch.undo()
+    j_after_rep = AlbumJournal.model_validate_json(journal_path.read_text(encoding="utf-8"))
+    assert j_after_rep.active_tx is not None and j_after_rep.active_tx.state == JournalTxState.UNCERTAIN
+    assert len(j_after_rep.tx_receipts) == 5
+
+    # 7c. Real _fsync_dir_fd failure AFTER real os.replace("album.json") succeeds -> UNCERTAIN, and reconcile_album_durability establishes COMMITTED
+    journal_path.write_text(json.dumps(j4.model_dump(mode="json")), encoding="utf-8")
+    manifest_replaced = {"done": False, "armed": True}
+
+    def _track_replace_manifest(src, dst, *args, **kwargs):
+        res = orig_replace(src, dst, *args, **kwargs)
+        if dst == "album.json":
+            manifest_replaced["done"] = True
+        return res
+
+    orig_fsync_dir = ps_mod._fsync_dir_fd
+
+    def _fail_fsync_after_manifest_replace(dfd):
+        if manifest_replaced["done"] and manifest_replaced["armed"]:
+            manifest_replaced["armed"] = False
+            raise OSError(5, "Simulated post-replace album.json dir_fsync EIO")
+        return orig_fsync_dir(dfd)
+
+    monkeypatch.setattr(ps_mod.os, "replace", _track_replace_manifest)
+    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", _fail_fsync_after_manifest_replace)
+    with pytest.raises(AlbumDurabilityUncertainError, match="Manifest publication uncertain"):
+        custom_storage.update_album(user_id, alb.id, {"title": "PostReplaceFsyncUncertain", "expected_revision": upd4.revision})
+    monkeypatch.undo()
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["title"] == "PostReplaceFsyncUncertain"
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["active_tx"]["state"] == "uncertain"
+    rec_1 = custom_storage.reconcile_album_durability(user_id, alb.id)
+    assert rec_1["outcome"] == "committed"
+    alb_rec1 = custom_storage.get_album(user_id, alb.id)
+    assert alb_rec1.title == "PostReplaceFsyncUncertain"
+    j_rec1 = AlbumJournal.model_validate_json(journal_path.read_text(encoding="utf-8"))
+    assert j_rec1.active_tx is None and j_rec1.tx_receipts[-1].outcome == JournalTxState.COMMITTED
+
+    # 7d. Real _fsync_dir_fd failure after real os.replace("album.json") + failed best-effort UNCERTAIN write -> publish_intent preserved & reconciles
+    manifest_replaced = {"done": False, "armed": True}
+    def _fail_best_effort_after_manifest_fsync(dfd, fname, data):
+        if manifest_replaced["done"] and fname == "journal.json":
+            raise ManifestPublishError("Simulated best-effort UNCERTAIN write failure", ManifestPublishState.NOT_PUBLISHED)
+        return orig_pub(dfd, fname, data)
+
+    monkeypatch.setattr(ps_mod.os, "replace", _track_replace_manifest)
+    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", _fail_fsync_after_manifest_replace)
+    monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", _fail_best_effort_after_manifest_fsync)
+    with pytest.raises(AlbumDurabilityUncertainError, match="Manifest publication uncertain"):
+        custom_storage.update_album(user_id, alb.id, {"title": "BestEffortFailReal", "expected_revision": alb_rec1.revision})
+    monkeypatch.undo()
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["active_tx"]["state"] == "publish_intent"
+    rec_2 = custom_storage.reconcile_album_durability(user_id, alb.id)
+    assert rec_2["outcome"] == "committed"
+    alb_rec2 = custom_storage.get_album(user_id, alb.id)
+    assert alb_rec2.title == "BestEffortFailReal"
+    j_rec2 = AlbumJournal.model_validate_json(journal_path.read_text(encoding="utf-8"))
+    assert j_rec2.active_tx is None and j_rec2.tx_receipts[-1].outcome == JournalTxState.COMMITTED
+
+    # 7d2. Post-replacement best-effort UNCERTAIN journal.json dir_fsync failure -> UNCERTAIN observable, manifest uncertainty reported, safe explicit reconciliation
+    replaces_seen: list[str] = []
+    manifest_fsync_state = {"armed": True}
+    journal_fsync_state = {"armed": True}
+    reconcile_spy = {"n": 0}
+    orig_reconcile = custom_storage.reconcile_album_durability
+
+    def _track_all_replaces(src, dst, *args, **kwargs):
+        res = orig_replace(src, dst, *args, **kwargs)
+        replaces_seen.append(str(dst))
+        return res
+
+    def _fail_manifest_then_best_effort_journal_fsync(dfd):
+        if replaces_seen and replaces_seen[-1] == "album.json" and manifest_fsync_state["armed"]:
+            manifest_fsync_state["armed"] = False
+            raise OSError(5, "Simulated post-replace album.json dir_fsync EIO")
+        if (
+            replaces_seen
+            and replaces_seen[-1] == "journal.json"
+            and replaces_seen.count("journal.json") == 3
+            and journal_fsync_state["armed"]
+        ):
+            journal_fsync_state["armed"] = False
+            raise OSError(5, "Simulated post-replace best-effort UNCERTAIN journal.json dir_fsync EIO")
+        return orig_fsync_dir(dfd)
+
+    def _spy_reconcile(*args, **kwargs):
+        reconcile_spy["n"] += 1
+        return orig_reconcile(*args, **kwargs)
+
+    receipt_count_before = len(j_rec2.tx_receipts)
+    monkeypatch.setattr(ps_mod.os, "replace", _track_all_replaces)
+    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", _fail_manifest_then_best_effort_journal_fsync)
+    monkeypatch.setattr(custom_storage, "reconcile_album_durability", _spy_reconcile)
+    with pytest.raises(AlbumDurabilityUncertainError, match="Manifest publication uncertain"):
+        custom_storage.update_album(
+            user_id, alb.id, {"title": "BestEffortPostReplaceFsyncFail", "expected_revision": alb_rec2.revision}
+        )
+    monkeypatch.undo()
+
+    # Actual journal replacement occurred (PREPARED, PUBLISH_INTENT, UNCERTAIN) before the injected journal dir_fsync failure
+    assert replaces_seen.count("journal.json") == 3
+    assert manifest_fsync_state["armed"] is False and journal_fsync_state["armed"] is False
+    assert reconcile_spy["n"] == 0
+    assert manifest_path.is_file() and journal_path.is_file()
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["title"] == "BestEffortPostReplaceFsyncFail"
+    j_obs_uncertain = AlbumJournal.model_validate_json(journal_path.read_text(encoding="utf-8"))
+    assert j_obs_uncertain.active_tx is not None and j_obs_uncertain.active_tx.state == JournalTxState.UNCERTAIN
+    assert len(j_obs_uncertain.tx_receipts) == receipt_count_before
+
+    # Explicit reconciliation establishes evidence-supported COMMITTED outcome; repeated call is safe and idempotent
+    rec_2b_1 = custom_storage.reconcile_album_durability(user_id, alb.id)
+    assert rec_2b_1["outcome"] == "committed"
+    j_rec2_after_1 = AlbumJournal.model_validate_json(journal_path.read_text(encoding="utf-8"))
+    assert j_rec2_after_1.active_tx is None
+    assert len(j_rec2_after_1.tx_receipts) == receipt_count_before + 1
+    assert j_rec2_after_1.tx_receipts[-1].outcome == JournalTxState.COMMITTED
+
+    rec_2b_2 = custom_storage.reconcile_album_durability(user_id, alb.id)
+    assert rec_2b_2["outcome"] in ("committed", "consistent_idle")
+    alb_rec2 = custom_storage.get_album(user_id, alb.id)
+    assert alb_rec2.title == "BestEffortPostReplaceFsyncFail"
+    j_rec2 = AlbumJournal.model_validate_json(journal_path.read_text(encoding="utf-8"))
+    assert j_rec2.active_tx is None
+    assert len(j_rec2.tx_receipts) == receipt_count_before + 1
+    assert j_rec2.tx_receipts[-1].outcome == JournalTxState.COMMITTED
+
+    # 7e. PREPARED publication failures: NOT_PUBLISHED (before replace) & UNCERTAIN (dir_fsync after replace)
+    raw_j_rec2 = journal_path.read_bytes()
+    def _fail_prepared_not_published(dfd, fname, data):
+        if fname == "journal.json":
+            raise ManifestPublishError("Simulated PREPARED pre-replace", ManifestPublishState.NOT_PUBLISHED)
+        return orig_pub(dfd, fname, data)
+
+    monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", _fail_prepared_not_published)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.update_album(user_id, alb.id, {"title": "PrepNotPub", "expected_revision": alb_rec2.revision})
+    monkeypatch.undo()
+    assert journal_path.read_bytes() == raw_j_rec2
+
+    prep_fsync = {"armed": True}
+    def _fail_prepared_fsync(dfd):
+        if prep_fsync["armed"]:
+            prep_fsync["armed"] = False
+            raise OSError(5, "Simulated PREPARED dir_fsync EIO")
+        return orig_fsync_dir(dfd)
+    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", _fail_prepared_fsync)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.update_album(user_id, alb.id, {"title": "PrepUncertain", "expected_revision": alb_rec2.revision})
+    monkeypatch.undo()
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["active_tx"]["state"] == "prepared"
+
+    # 7f. PUBLISH_INTENT publication failures: NOT_PUBLISHED & UNCERTAIN
+    journal_path.write_bytes(raw_j_rec2)
+    j_pub_calls = {"n": 0}
+    def _fail_intent_not_published(dfd, fname, data):
+        if fname == "journal.json":
+            j_pub_calls["n"] += 1
+            if j_pub_calls["n"] == 2:
+                raise ManifestPublishError("Simulated PUBLISH_INTENT pre-replace", ManifestPublishState.NOT_PUBLISHED)
+        return orig_pub(dfd, fname, data)
+    monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", _fail_intent_not_published)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.update_album(user_id, alb.id, {"title": "IntentNotPub", "expected_revision": alb_rec2.revision})
+    monkeypatch.undo()
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["active_tx"]["state"] == "prepared"
+
+    journal_path.write_bytes(raw_j_rec2)
+    j_replaces = {"n": 0, "armed": True}
+
+    def _track_replace_journal_intent(src, dst, *args, **kwargs):
+        res = orig_replace(src, dst, *args, **kwargs)
+        if dst == "journal.json":
+            j_replaces["n"] += 1
+        return res
+
+    def _fail_intent_fsync(dfd):
+        if j_replaces["n"] >= 2 and j_replaces["armed"]:
+            j_replaces["armed"] = False
+            raise OSError(5, "Simulated PUBLISH_INTENT dir_fsync EIO")
+        return orig_fsync_dir(dfd)
+
+    monkeypatch.setattr(ps_mod.os, "replace", _track_replace_journal_intent)
+    monkeypatch.setattr(ps_mod, "_fsync_dir_fd", _fail_intent_fsync)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.update_album(user_id, alb.id, {"title": "IntentUncertain", "expected_revision": alb_rec2.revision})
+    monkeypatch.undo()
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["active_tx"]["state"] == "publish_intent"
+
+    # 7g. Terminal-receipt publication failure + repeated reconcile_album_durability recovery
+    journal_path.write_bytes(raw_j_rec2)
+    term_pub_calls = {"n": 0}
+    def _fail_terminal_receipt_pub(dfd, fname, data):
+        if fname == "journal.json":
+            term_pub_calls["n"] += 1
+            if term_pub_calls["n"] == 3:
+                raise ManifestPublishError("Simulated terminal receipt publish fail", ManifestPublishState.NOT_PUBLISHED)
+        return orig_pub(dfd, fname, data)
+    monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", _fail_terminal_receipt_pub)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.update_album(user_id, alb.id, {"title": "TermFailTitle", "expected_revision": alb_rec2.revision})
+    monkeypatch.undo()
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["active_tx"]["state"] == "publish_intent"
+    custom_storage.reconcile_album_durability(user_id, alb.id)
+    custom_storage.reconcile_album_durability(user_id, alb.id)
+    alb_after_term = custom_storage.get_album(user_id, alb.id)
+    assert alb_after_term.title == "TermFailTitle"
+    j_after_term = AlbumJournal.model_validate_json(journal_path.read_text(encoding="utf-8"))
+    assert j_after_term.active_tx is None and j_after_term.tx_receipts[-1].outcome == JournalTxState.COMMITTED
+
+    # 7h. Historical replay succeeds even while a LATER transaction remains unresolved (active_tx present)
+    j_with_later_active = j_after_term.model_copy(
+        update={
+            "active_tx": ActiveTxRecord(
+                tx_id="tx_later_unresolved",
+                op="update_album",
+                state=JournalTxState.PUBLISH_INTENT,
+                expected_revision=alb_after_term.revision,
+                target_revision=alb_after_term.revision + 1,
+                payload_sha256="f" * 64,
+                intended_manifest_sha256="e" * 64,
+            )
+        }
+    )
+    journal_path.write_text(json.dumps(j_with_later_active.model_dump(mode="json")), encoding="utf-8")
+    hist_while_active, hist_replay = custom_storage.update_album_with_replay_status(
+        user_id, alb.id, {"title": "2A2A LP v4", "expected_revision": upd3.revision}, idempotency_key="k_v4"
+    )
+    assert hist_replay is True and hist_while_active.title == "TermFailTitle" and hist_while_active.revision == alb_after_term.revision
+
+    # 7i. Proven CORRUPT precedence over ABORTED replay
+    journal_path.write_text(json.dumps(j_with_ab.model_dump(mode="json")), encoding="utf-8")
+    orig_manifest_bytes = manifest_path.read_bytes()
+    corrupt_m = json.loads(orig_manifest_bytes)
+    corrupt_m["last_tx_id"] = "tx_unknown_corrupt"
+    manifest_path.write_text(json.dumps(corrupt_m), encoding="utf-8")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.update_album(
+            user_id, alb.id, {"title": "Aborted Title", "expected_revision": upd3.revision}, idempotency_key="k_hist_ab"
+        )
+    manifest_path.write_bytes(orig_manifest_bytes)
+    journal_path.write_text(json.dumps(j_after_term.model_dump(mode="json")), encoding="utf-8")
+
+    # 7j. Identical-content inode substitution on album.json before terminal verification -> AlbumManifestCorruptError
+    def _swap_identical_manifest_inode(dfd, fname, data):
+        res = orig_pub(dfd, fname, data)
+        if fname == "album.json":
+            raw_b = manifest_path.read_bytes()
+            tmp_same = alb_dir / ".same_bytes_swap.json"
+            tmp_same.write_bytes(raw_b)
+            orig_replace(tmp_same, manifest_path)
+        return res
+
+    monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", _swap_identical_manifest_inode)
+    with pytest.raises(AlbumManifestCorruptError, match="replaced between validation and synchronization|identity"):
+        custom_storage.update_album(user_id, alb.id, {"title": "InodeSwapTest", "expected_revision": alb_after_term.revision})
+    monkeypatch.undo()
+    # Restore clean idle state for step 8
+    manifest_path.write_bytes(orig_manifest_bytes)
+    journal_path.write_text(json.dumps(j_after_term.model_dump(mode="json")), encoding="utf-8")
+
+    # 7k. Bulk placeholder-to-Take assignment -> ProjectValidationError; populated recording clearing -> AlbumReplacementDisabledError
+    alb_ph = custom_storage.create_album(user_id=user_id, title="2A2A PH Check")
+    alb_ph = custom_storage.add_album_entry(user_id, alb_ph.id, t1.id, expected_revision=alb_ph.revision, take_id=tk1.id)
+    alb_ph = custom_storage.add_album_entry(user_id, alb_ph.id, t1.id, expected_revision=alb_ph.revision, take_id=None)
+    with pytest.raises(ProjectValidationError, match="Assigning a take via bulk album update is not allowed"):
+        custom_storage.update_album(
+            user_id,
+            alb_ph.id,
+            {
+                "expected_revision": alb_ph.revision,
+                "tracks": [
+                    {"id": alb_ph.tracks[0].id, "track_id": t1.id, "take_id": tk1.id, "track_number": 1, "disc_number": 1},
+                    {"id": alb_ph.tracks[1].id, "track_id": t1.id, "take_id": tk1.id, "track_number": 2, "disc_number": 1},
+                ],
+            },
+        )
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.update_album(
+            user_id,
+            alb_ph.id,
+            {
+                "expected_revision": alb_ph.revision,
+                "tracks": [
+                    {"id": alb_ph.tracks[0].id, "track_id": t1.id, "take_id": None, "track_number": 1, "disc_number": 1},
+                    {"id": alb_ph.tracks[1].id, "track_id": t1.id, "take_id": None, "track_number": 2, "disc_number": 1},
+                ],
+            },
+        )
+
+    cur_alb = custom_storage.get_album(user_id, alb.id)
+
+    # 8. Predecessor identity replacement detection before PUBLISH_INTENT -> AlbumManifestCorruptError
+    pub_seq = {"n": 0}
+
+    def _swap_journal_after_prepared(dfd, fname, data):
+        pub_seq["n"] += 1
+        res = orig_pub(dfd, fname, data)
+        if pub_seq["n"] == 1 and fname == "journal.json":
+            tmp_sw = alb_dir / ".swap_j.json"
+            tmp_sw.write_text(json.dumps(j_after_term.model_dump(mode="json")), encoding="utf-8")
+            orig_replace(tmp_sw, journal_path)
+        return res
+
+    monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", _swap_journal_after_prepared)
+    with pytest.raises(AlbumManifestCorruptError, match="replaced between validation and synchronization|content changed"):
+        custom_storage.update_album(user_id, alb.id, {"title": "SwapPred", "expected_revision": cur_alb.revision})
+    monkeypatch.undo()
 
 
 

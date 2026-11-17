@@ -10,6 +10,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import (
     APIRouter,
     Depends,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -70,6 +71,7 @@ from backend.project_storage import (
     AlbumDurabilityUncertainError,
     AlbumMutationNotEnrolledError,
     AlbumIdempotencyConflictError,
+    AlbumTransactionAbortedError,
     AlbumRefreshConflictError,
     AlbumFinalizationError,
 )
@@ -98,6 +100,12 @@ def _raise_album_durability_or_conflict_http_error(exc: Exception) -> None:
             status_code=status.HTTP_409_CONFLICT,
             detail={"message": str(exc), "error_code": "idempotency_conflict"},
             headers={"X-Error-Code": "idempotency_conflict"},
+        )
+    if isinstance(exc, AlbumTransactionAbortedError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": str(exc), "error_code": "transaction_aborted"},
+            headers={"X-Error-Code": "transaction_aborted", "X-Idempotent-Replay": "true"},
         )
     if isinstance(exc, AlbumRevisionConflictError):
         raise HTTPException(
@@ -838,6 +846,8 @@ async def get_album(
 async def update_album(
     album_id: str,
     payload: AlbumUpdateRequest,
+    response: Response,
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Update album details or sequenced tracklist."""
@@ -845,8 +855,10 @@ async def update_album(
 
     updates = payload.model_dump(exclude_unset=True)
     try:
-        updated = project_storage_manager.update_album(user["id"], album_id, updates)
-    except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumRevisionConflictError) as e:
+        res = project_storage_manager.update_album_with_replay_status(
+            user["id"], album_id, updates, idempotency_key=idempotency_key
+        )
+    except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumTransactionAbortedError, AlbumRevisionConflictError) as e:
         _raise_album_durability_or_conflict_http_error(e)
     except (AlbumFinalizedError, AlbumReplacementDisabledError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
@@ -856,8 +868,11 @@ async def update_album(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ProjectStorageQuotaExceeded as e:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
-    if not updated:
+    if not res:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    updated, is_replay = res
+    if is_replay:
+        response.headers["X-Idempotent-Replay"] = "true"
     return updated
 
 

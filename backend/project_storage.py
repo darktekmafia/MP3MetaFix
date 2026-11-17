@@ -70,6 +70,7 @@ from backend.project_models import (
     IdempotencyRecord,
     TerminalTxReceipt,
     AlbumJournal,
+    _validate_safe_token,
 )
 from backend.audio_formats import AUDIO_FORMATS, matches_audio_header, validate_audio_container
 
@@ -161,6 +162,11 @@ class AlbumIdempotencyConflictError(ProjectStorageError):
     pass
 
 
+class AlbumTransactionAbortedError(ProjectStorageError):
+    """Raised when replaying an Idempotency-Key whose terminal receipt outcome is ABORTED."""
+    pass
+
+
 class ManifestPublishState(str, Enum):
     NOT_PUBLISHED = "not_published"
     PUBLISHED = "published"
@@ -186,8 +192,8 @@ def _fsync_dir_fd(dir_fd: int) -> None:
     os.fsync(dir_fd)
 
 
-def _publish_manifest_atomic_in_dir(dir_fd: int, filename: str, data: Dict[str, Any]) -> None:
-    """Write and atomically replace a manifest JSON file strictly inside a validated dir_fd."""
+def _publish_manifest_atomic_in_dir(dir_fd: int, filename: str, data: Dict[str, Any]) -> Tuple[int, int]:
+    """Write and atomically replace a manifest JSON file strictly inside a validated dir_fd, returning (st_dev, st_ino)."""
     publish_state = ManifestPublishState.NOT_PUBLISHED
     tmp_name = f".tmp_manifest_{secrets.token_hex(8)}.json"
     tmp_created = False
@@ -201,6 +207,8 @@ def _publish_manifest_atomic_in_dir(dir_fd: int, filename: str, data: Dict[str, 
                 f.flush()
                 os.fsync(f.fileno())
                 os.fchmod(f.fileno(), 0o600)
+                st = os.fstat(f.fileno())
+                published_identity = (st.st_dev, st.st_ino)
         except Exception:
             if tmp_created:
                 try:
@@ -215,6 +223,7 @@ def _publish_manifest_atomic_in_dir(dir_fd: int, filename: str, data: Dict[str, 
         tmp_created = False
         _fsync_dir_fd(dir_fd)
         publish_state = ManifestPublishState.PUBLISHED
+        return published_identity
     except ManifestPublishError:
         raise
     except Exception as e:
@@ -2425,6 +2434,59 @@ class ProjectStorageManager:
             raise ProjectValidationError("A valid positive integer 'expected_revision' precondition is required.")
         return expected_revision
 
+    @staticmethod
+    def _validate_idempotency_key(idempotency_key: Optional[str]) -> Optional[str]:
+        if idempotency_key is None:
+            return None
+        if not isinstance(idempotency_key, str) or not (1 <= len(idempotency_key) <= 128):
+            raise ProjectValidationError("Idempotency-Key must be a non-empty token (1..128 characters).")
+        try:
+            return _validate_safe_token(idempotency_key)
+        except ValueError as exc:
+            raise ProjectValidationError(f"Invalid Idempotency-Key: {exc}") from exc
+
+    @staticmethod
+    def _compute_update_album_payload_sha256(
+        op: str,
+        expected_revision: int,
+        updates: Dict[str, Any],
+    ) -> str:
+        """Compute deterministic canonical SHA-256 for an enrolled update_album request."""
+        canonical_params: Dict[str, Any] = {}
+        for k in sorted(updates.keys()):
+            if k == "expected_revision":
+                continue
+            v = updates[k]
+            if v is None:
+                continue
+            if isinstance(v, WorkspaceStatus):
+                canonical_params[k] = v.value
+            elif k == "tracks" and isinstance(v, list):
+                norm_items = []
+                for item in v:
+                    if isinstance(item, dict):
+                        norm_items.append(dict(item))
+                    elif hasattr(item, "model_dump"):
+                        norm_items.append(item.model_dump(mode="json"))
+                    else:
+                        norm_items.append(item)
+                canonical_params[k] = norm_items
+            else:
+                canonical_params[k] = v
+        payload = {
+            "op": op,
+            "expected_revision": int(expected_revision),
+            "params": canonical_params,
+        }
+        canonical_bytes = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(canonical_bytes).hexdigest()
+
     def update_album(
         self,
         user_id: str,
@@ -2432,23 +2494,605 @@ class ProjectStorageManager:
         updates: Dict[str, Any],
         expected_revision: Optional[int] = None,
         change_summary: Optional[str] = None,
+        *,
+        idempotency_key: Optional[str] = None,
     ) -> Optional[AlbumMetadata]:
-        """Update album details or sequenced tracklist under stable cross-process album locking."""
+        """Update album metadata or sequenced tracklist under stable cross-process album locking."""
+        res = self.update_album_with_replay_status(
+            user_id,
+            album_id,
+            updates,
+            expected_revision=expected_revision,
+            change_summary=change_summary,
+            idempotency_key=idempotency_key,
+        )
+        return res[0] if res is not None else None
+
+    def update_album_with_replay_status(
+        self,
+        user_id: str,
+        album_id: str,
+        updates: Dict[str, Any],
+        expected_revision: Optional[int] = None,
+        change_summary: Optional[str] = None,
+        *,
+        idempotency_key: Optional[str] = None,
+    ) -> Optional[Tuple[AlbumMetadata, bool]]:
+        """Enrolled v2 metadata/reorder writer returning (AlbumMetadata, is_idempotent_replay)."""
         payload = dict(updates)
         rev = expected_revision if expected_revision is not None else payload.pop("expected_revision", None)
         rev = self._validate_expected_revision(rev)
+        clean_key = self._validate_idempotency_key(idempotency_key)
         try:
             self._get_album_dir_path(user_id, album_id)
         except ValueError:
             return None
+
+        op = "update_album"
+        payload_sha256 = self._compute_update_album_payload_sha256(op, rev, payload)
+
         with self._album_lock(user_id, album_id):
-            return self._update_album_locked(
-                user_id,
-                album_id,
-                payload,
-                expected_revision=rev,
-                change_summary=change_summary,
+            album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
+            if album_dir_fd is None:
+                return None
+            try:
+                raw_holder: List[Dict[str, Any]] = []
+                loaded = self._read_album_from_dir_fd(
+                    album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder
+                )
+                if not loaded:
+                    return None
+                album, norm_data, manifest_st = loaded
+                raw_identity = (manifest_st.st_dev, manifest_st.st_ino)
+                evidence: Dict[str, Any] = {}
+                _, journal, consistency = self._validate_album_evidence_phase_a_locked(
+                    album_id,
+                    album_dir_fd,
+                    raw_album_data=raw_holder[0],
+                    raw_album_identity=raw_identity,
+                    evidence_out=evidence,
+                )
+
+                # Exact terminal idempotency replay runs between Phase A and Phase B
+                replay = self._resolve_v2_idempotency_replay_locked(
+                    album_id=album_id,
+                    album_dir_fd=album_dir_fd,
+                    current_album=album,
+                    evidence=evidence,
+                    idempotency_key=clean_key,
+                    op=op,
+                    expected_revision=rev,
+                    payload_sha256=payload_sha256,
+                )
+                if replay is not None:
+                    return replay
+
+                self._check_album_mutation_eligibility_phase_b_locked(
+                    album_id, journal, consistency, is_enrolled=True
+                )
+
+                if self._is_album_finalized(album):
+                    raise AlbumFinalizedError("Finalized albums are immutable and cannot be modified.")
+                if int(rev) != int(album.revision):
+                    raise AlbumRevisionConflictError(
+                        f"Album was modified concurrently (expected revision {rev}, current revision {album.revision}). Reload and try again."
+                    )
+                if payload.get("status") in (WorkspaceStatus.COMPLETED, WorkspaceStatus.COMPLETED.value):
+                    raise ProjectValidationError("Albums must be finalized via the dedicated finalization endpoint.")
+
+                target_data, changed = self._build_metadata_reorder_v2_candidate(
+                    user_id=user_id,
+                    album_id=album_id,
+                    album=album,
+                    raw_data=raw_holder[0],
+                    norm_data=norm_data,
+                    updates=payload,
+                    change_summary=change_summary,
+                )
+                if not changed:
+                    # No-op: do not create journal or consume unused idempotency key
+                    return album, False
+
+                published = self._execute_v2_album_tx_locked(
+                    album_id=album_id,
+                    album_dir_fd=album_dir_fd,
+                    evidence=evidence,
+                    target_data=target_data,
+                    op=op,
+                    expected_revision=rev,
+                    payload_sha256=payload_sha256,
+                    idempotency_key=clean_key,
+                )
+                return published, False
+            finally:
+                try:
+                    os.close(album_dir_fd)
+                except OSError:
+                    pass
+
+    def _resolve_v2_idempotency_replay_locked(
+        self,
+        *,
+        album_id: str,
+        album_dir_fd: int,
+        current_album: AlbumMetadata,
+        evidence: Dict[str, Any],
+        idempotency_key: Optional[str],
+        op: str,
+        expected_revision: int,
+        payload_sha256: str,
+    ) -> Optional[Tuple[AlbumMetadata, bool]]:
+        """Resolve exact terminal idempotency replay between Phase A and Phase B."""
+        journal: Optional[AlbumJournal] = evidence.get("journal")
+        if idempotency_key is None or journal is None:
+            return None
+
+        if journal.active_tx is not None and journal.active_tx.idempotency_key == idempotency_key:
+            tx = journal.active_tx
+            if (tx.op, tx.expected_revision, tx.payload_sha256) != (op, expected_revision, payload_sha256):
+                raise AlbumIdempotencyConflictError(
+                    f"Idempotency-Key '{idempotency_key}' conflicts with active transaction '{tx.tx_id}'."
+                )
+            raise AlbumDurabilityUncertainError(
+                f"Transaction '{tx.tx_id}' for Idempotency-Key '{idempotency_key}' is unresolved; run durability reconciliation before retrying."
             )
+
+        matched_rcp: Optional[TerminalTxReceipt] = None
+        for rcp in journal.tx_receipts:
+            if rcp.idempotency_key == idempotency_key:
+                matched_rcp = rcp
+                break
+
+        if matched_rcp is None:
+            for rec in journal.idempotency_records:
+                if rec.key == idempotency_key:
+                    if (rec.op, rec.expected_revision, rec.payload_sha256) != (op, expected_revision, payload_sha256):
+                        raise AlbumIdempotencyConflictError(
+                            f"Idempotency-Key '{idempotency_key}' conflicts with existing idempotency record."
+                        )
+                    raise AlbumDurabilityUncertainError(
+                        f"Idempotency-Key '{idempotency_key}' lacks a synchronized terminal receipt."
+                    )
+            return None
+
+        if (matched_rcp.op, matched_rcp.expected_revision, matched_rcp.payload_sha256) != (
+            op,
+            expected_revision,
+            payload_sha256,
+        ):
+            raise AlbumIdempotencyConflictError(
+                f"Idempotency-Key '{idempotency_key}' conflicts with recorded transaction '{matched_rcp.tx_id}'."
+            )
+
+        # Synchronize validated journal (AlbumManifestCorruptError & AlbumDurabilityUncertainError propagate unmodified)
+        self._sync_terminal_journal_in_dir(
+            album_dir_fd,
+            expected_journal_sha256=evidence["journal_sha256"],
+            expected_identity=evidence["journal_identity"],
+        )
+
+        if matched_rcp.outcome == JournalTxState.ABORTED:
+            raise AlbumTransactionAbortedError(
+                f"Transaction '{matched_rcp.tx_id}' for Idempotency-Key '{idempotency_key}' previously aborted."
+            )
+
+        album_data = evidence["album_data"]
+        if (
+            matched_rcp.tx_id == album_data.get("last_tx_id")
+            and album_data.get("revision") == matched_rcp.result_revision
+        ):
+            for ref in matched_rcp.new_refs:
+                self._verify_and_sync_live_artifact_in_dir(album_dir_fd, ref)
+            self._read_json_file_verified_in_dir(
+                album_dir_fd,
+                "album.json",
+                sync_file=True,
+                required=True,
+                expected_identity=evidence["album_identity"],
+                expected_sha256=evidence["album_sha256"],
+            )
+
+        return current_album, True
+
+    def _build_metadata_reorder_v2_candidate(
+        self,
+        *,
+        user_id: str,
+        album_id: str,
+        album: AlbumMetadata,
+        raw_data: Dict[str, Any],
+        norm_data: Dict[str, Any],
+        updates: Dict[str, Any],
+        change_summary: Optional[str],
+    ) -> Tuple[Dict[str, Any], bool]:
+        """Build and validate a metadata/reorder target manifest without legacy staging/callbacks."""
+        payload = dict(updates)
+        payload.pop("expected_revision", None)
+        summary_text = payload.pop("change_summary", None) or change_summary
+
+        target_data = copy.deepcopy(raw_data)
+        changed_fields: List[str] = []
+
+        immutable_fields = (
+            "id",
+            "created_at",
+            "has_cover",
+            "cover_generation",
+            "active_cover_filename",
+            "revisions",
+            "revision",
+            "updated_at",
+            "tracks",
+            "track_ids",
+            "is_finalized",
+            "finalized_at",
+            "last_tx_id",
+            "tx_history",
+            "is_deleted",
+            "deleted_at",
+            "delete_tx_id",
+        )
+        for k, v in payload.items():
+            if v is not None and k not in immutable_fields:
+                curr_val = norm_data.get(k)
+                norm_v = v.value if isinstance(v, WorkspaceStatus) else v
+                if curr_val != norm_v:
+                    changed_fields.append(k)
+                    target_data[k] = norm_v
+
+        raw_list: Optional[List[Dict[str, Any]]] = None
+        if "tracks" in payload and payload["tracks"] is not None:
+            raw_list = []
+            for item in payload["tracks"]:
+                if isinstance(item, dict):
+                    raw_list.append(dict(item))
+                elif hasattr(item, "model_dump"):
+                    raw_list.append(item.model_dump())
+                else:
+                    raise ProjectValidationError("Invalid track entry item in update_album.")
+        elif "track_ids" in payload and payload["track_ids"] is not None:
+            from collections import Counter
+            legacy_ids = list(payload["track_ids"])
+            existing_by_tid: Dict[str, List[AlbumTrackEntry]] = {}
+            for existing_entry in album.tracks:
+                existing_by_tid.setdefault(existing_entry.track_id, []).append(existing_entry)
+            if Counter(e.track_id for e in album.tracks) != Counter(legacy_ids):
+                raise ProjectValidationError(
+                    "Bulk legacy track_ids updates must preserve the exact existing track set; use add_album_entry or remove_album_entry."
+                )
+            raw_list = []
+            for i, tid in enumerate(legacy_ids):
+                preserved = existing_by_tid[tid].pop(0).model_dump()
+                preserved["track_number"] = i + 1
+                raw_list.append(preserved)
+
+        if raw_list is not None:
+            existing_by_id = {t.id: t for t in album.tracks if t.id}
+            unmatched_existing = list(album.tracks)
+            explicit_ids = {
+                item.get("id") for item in raw_list
+                if item.get("id") and item.get("id") in existing_by_id
+            }
+            if explicit_ids:
+                unmatched_existing = [e for e in unmatched_existing if e.id not in explicit_ids]
+            seen_entry_ids: set[str] = set()
+            reordered_tracks: List[Dict[str, Any]] = []
+
+            for i, item in enumerate(raw_list):
+                track_id = item.get("track_id")
+                has_explicit_take = "take_id" in item
+                req_take_id = item.get("take_id")
+                disc_num = item.get("disc_number", 1)
+                custom_title = item.get("custom_title")
+                req_id = item.get("id")
+
+                if req_id is not None and req_id not in existing_by_id:
+                    raise ProjectValidationError(f"Album entry '{req_id}' not found.")
+
+                matched = self._resolve_existing_entry_for_item(
+                    item, existing_by_id, unmatched_existing
+                )
+                if matched is None:
+                    raise ProjectValidationError(
+                        "Adding new entries via bulk album update is not allowed; use add_album_entry."
+                    )
+                if not matched.id:
+                    raise ProjectValidationError("Matched album entry is missing an entry identifier.")
+                entry_id = matched.id
+                if entry_id in seen_entry_ids:
+                    raise ProjectValidationError(f"Duplicate album entry ID '{entry_id}' in tracklist.")
+                seen_entry_ids.add(entry_id)
+
+                if track_id is not None and track_id != matched.track_id:
+                    raise AlbumReplacementDisabledError(
+                        "Changing an existing entry's source track via metadata/reorder update is not allowed."
+                    )
+                if has_explicit_take and req_take_id != matched.take_id:
+                    if matched.take_id is not None or matched.has_owned_audio or matched.snapshot is not None:
+                        raise AlbumReplacementDisabledError(
+                            "Replacing existing album-owned audio is temporarily disabled while audio-replacement safety upgrades are in progress."
+                        )
+                    raise ProjectValidationError(
+                        "Assigning a take via bulk album update is not allowed; use update_album_entry."
+                    )
+
+                entry_dict = matched.model_dump()
+                entry_dict["track_number"] = i + 1
+                entry_dict["disc_number"] = disc_num
+                if "custom_title" in item:
+                    entry_dict["custom_title"] = custom_title
+                reordered_tracks.append(entry_dict)
+
+            for old_entry in album.tracks:
+                if old_entry.id and old_entry.id not in seen_entry_ids:
+                    if (
+                        old_entry.has_owned_audio
+                        or old_entry.take_id is not None
+                        or old_entry.snapshot is not None
+                        or self._entry_has_filesystem_artifacts(user_id, album_id, old_entry.id)
+                    ):
+                        raise AlbumReplacementDisabledError(
+                            "Removing recorded entries is temporarily disabled in Phase 1A."
+                        )
+                    raise ProjectValidationError(
+                        "Removing entries via bulk album update is not allowed; use remove_album_entry."
+                    )
+
+            curr_norm_tracks = [t.model_dump() for t in album.tracks]
+            if curr_norm_tracks != reordered_tracks:
+                changed_fields.append("tracks")
+                target_data["tracks"] = reordered_tracks
+                target_data["track_ids"] = [t["track_id"] for t in reordered_tracks]
+
+        if not changed_fields:
+            return target_data, False
+
+        new_rev = int(norm_data.get("revision", 1)) + 1
+        target_data["revision"] = new_rev
+        summary = summary_text if summary_text else f"Updated {', '.join(changed_fields)}"
+        revs = list(target_data.get("revisions") or [])
+        revs.append({
+            "revision": new_rev,
+            "timestamp": time.time(),
+            "change_summary": summary,
+            "changed_fields": changed_fields,
+        })
+        target_data["revisions"] = revs
+        target_data["updated_at"] = time.time()
+
+        try:
+            AlbumMetadata(**target_data)
+        except Exception as exc:
+            raise ProjectValidationError(f"Invalid album manifest candidate: {exc}") from exc
+
+        return target_data, True
+
+    def _execute_v2_album_tx_locked(
+        self,
+        *,
+        album_id: str,
+        album_dir_fd: int,
+        evidence: Dict[str, Any],
+        target_data: Dict[str, Any],
+        op: str,
+        expected_revision: int,
+        payload_sha256: str,
+        idempotency_key: Optional[str],
+    ) -> AlbumMetadata:
+        """Execute PREPARED -> PUBLISH_INTENT -> manifest -> COMMITTED receipt under _album_lock."""
+        tx_id = f"tx_{secrets.token_hex(12)}"
+        target_revision = int(target_data["revision"])
+        target_data = dict(target_data)
+        target_data["last_tx_id"] = tx_id
+        tx_hist = list(target_data.get("tx_history") or [])
+        tx_hist.append(tx_id)
+        target_data["tx_history"] = tx_hist
+
+        try:
+            validated_target = AlbumMetadata(**target_data)
+        except Exception as exc:
+            raise ProjectValidationError(f"Invalid target album manifest: {exc}") from exc
+
+        intended_manifest_sha256 = self._compute_canonical_manifest_sha256(target_data)
+        prior_journal: Optional[AlbumJournal] = evidence["journal"]
+        album_identity: Tuple[int, int] = evidence["album_identity"]
+        album_sha256: str = evidence["album_sha256"]
+
+        # Predecessor check before initial PREPARED
+        if prior_journal is None:
+            try:
+                os.lstat("journal.json", dir_fd=album_dir_fd)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise AlbumDurabilityUncertainError(f"Cannot verify absence of journal.json: {exc}") from exc
+            else:
+                raise AlbumManifestCorruptError("Unexpected journal.json appeared before initial PREPARED publication.")
+        else:
+            self._read_json_file_verified_in_dir(
+                album_dir_fd,
+                "journal.json",
+                sync_file=False,
+                required=True,
+                expected_identity=evidence["journal_identity"],
+                expected_sha256=evidence["journal_sha256"],
+            )
+        self._read_json_file_verified_in_dir(
+            album_dir_fd,
+            "album.json",
+            sync_file=False,
+            required=True,
+            expected_identity=album_identity,
+            expected_sha256=album_sha256,
+        )
+
+        existing_receipts = list(prior_journal.tx_receipts) if prior_journal else []
+        existing_retained = list(prior_journal.retained_artifacts) if prior_journal else []
+        existing_idem = list(prior_journal.idempotency_records) if prior_journal else []
+
+        active_tx = ActiveTxRecord(
+            tx_id=tx_id,
+            op=op,
+            state=JournalTxState.PREPARED,
+            expected_revision=expected_revision,
+            target_revision=target_revision,
+            payload_sha256=payload_sha256,
+            intended_manifest_sha256=intended_manifest_sha256,
+            idempotency_key=idempotency_key,
+            staging_refs=[],
+            new_refs=[],
+            superseded_refs=[],
+        )
+        prep_idem = list(existing_idem)
+        if idempotency_key is not None:
+            prep_idem.append(
+                IdempotencyRecord(
+                    key=idempotency_key,
+                    op=op,
+                    expected_revision=expected_revision,
+                    payload_sha256=payload_sha256,
+                    result_revision=None,
+                    tx_id=tx_id,
+                    outcome=JournalTxState.PREPARED,
+                )
+            )
+        prep_journal = AlbumJournal(
+            schema_version=2,
+            protocol=JournalProtocol.ENFORCED_V2,
+            album_id=album_id,
+            active_tx=active_tx,
+            tx_receipts=existing_receipts,
+            retained_artifacts=existing_retained,
+            idempotency_records=prep_idem,
+        )
+        prep_sha = self._compute_canonical_manifest_sha256(prep_journal.model_dump(mode="json"))
+
+        # Step 1: Durable PREPARED
+        try:
+            self._write_album_journal_atomic_in_dir(album_dir_fd, prep_journal)
+            prep_identity = self._sync_terminal_journal_in_dir(album_dir_fd, expected_journal_sha256=prep_sha)
+        except ManifestPublishError as exc:
+            if prior_journal is None and exc.publish_state == ManifestPublishState.NOT_PUBLISHED:
+                raise
+            raise AlbumDurabilityUncertainError(f"PREPARED journal publication uncertain for '{tx_id}': {exc}") from exc
+
+        # Predecessor check before PUBLISH_INTENT
+        self._read_json_file_verified_in_dir(
+            album_dir_fd,
+            "journal.json",
+            sync_file=False,
+            required=True,
+            expected_identity=prep_identity,
+            expected_sha256=prep_sha,
+        )
+        self._read_json_file_verified_in_dir(
+            album_dir_fd, "album.json", sync_file=False, required=True, expected_identity=album_identity, expected_sha256=album_sha256
+        )
+
+        # Step 2: Durable PUBLISH_INTENT
+        intent_tx = active_tx.model_copy(update={"state": JournalTxState.PUBLISH_INTENT, "state_updated_at": time.time()})
+        intent_journal = AlbumJournal(
+            schema_version=2,
+            protocol=JournalProtocol.ENFORCED_V2,
+            album_id=album_id,
+            active_tx=intent_tx,
+            tx_receipts=existing_receipts,
+            retained_artifacts=existing_retained,
+            idempotency_records=prep_idem,
+        )
+        intent_sha = self._compute_canonical_manifest_sha256(intent_journal.model_dump(mode="json"))
+        try:
+            self._write_album_journal_atomic_in_dir(album_dir_fd, intent_journal)
+            intent_identity = self._sync_terminal_journal_in_dir(album_dir_fd, expected_journal_sha256=intent_sha)
+        except (ManifestPublishError, AlbumDurabilityUncertainError) as exc:
+            raise AlbumDurabilityUncertainError(f"PUBLISH_INTENT journal publication uncertain for '{tx_id}': {exc}") from exc
+
+        # Predecessor check before Manifest publication
+        self._read_json_file_verified_in_dir(
+            album_dir_fd,
+            "journal.json",
+            sync_file=False,
+            required=True,
+            expected_identity=intent_identity,
+            expected_sha256=intent_sha,
+        )
+        self._read_json_file_verified_in_dir(
+            album_dir_fd, "album.json", sync_file=False, required=True, expected_identity=album_identity, expected_sha256=album_sha256
+        )
+
+        # Step 3: Atomic Manifest Publication
+        try:
+            published_manifest_identity = _publish_manifest_atomic_in_dir(album_dir_fd, "album.json", target_data)
+        except ManifestPublishError as exc:
+            # Best-effort UNCERTAIN marker without masking primary uncertainty or overwriting unexpected evidence
+            self._read_json_file_verified_in_dir(
+                album_dir_fd,
+                "journal.json",
+                sync_file=False,
+                required=True,
+                expected_identity=intent_identity,
+                expected_sha256=intent_sha,
+            )
+            uncertain_tx = intent_tx.model_copy(update={"state": JournalTxState.UNCERTAIN, "state_updated_at": time.time()})
+            uncertain_journal = AlbumJournal(
+                schema_version=2,
+                protocol=JournalProtocol.ENFORCED_V2,
+                album_id=album_id,
+                active_tx=uncertain_tx,
+                tx_receipts=existing_receipts,
+                retained_artifacts=existing_retained,
+                idempotency_records=prep_idem,
+            )
+            try:
+                self._write_album_journal_atomic_in_dir(album_dir_fd, uncertain_journal)
+            except Exception:
+                pass
+            raise AlbumDurabilityUncertainError(
+                f"Manifest publication uncertain after durable PUBLISH_INTENT for '{tx_id}': {exc}"
+            ) from exc
+
+        # Predecessor check before Terminal Receipt publication (binds exact published manifest inode + digest)
+        self._read_json_file_verified_in_dir(
+            album_dir_fd,
+            "journal.json",
+            sync_file=False,
+            required=True,
+            expected_identity=intent_identity,
+            expected_sha256=intent_sha,
+        )
+        self._read_json_file_verified_in_dir(
+            album_dir_fd,
+            "album.json",
+            sync_file=True,
+            required=True,
+            expected_identity=published_manifest_identity,
+            expected_sha256=intended_manifest_sha256,
+        )
+
+        # Step 4: Terminal COMMITTED Receipt Publication & Clearance
+        receipt = TerminalTxReceipt(
+            tx_id=tx_id,
+            op=op,
+            outcome=JournalTxState.COMMITTED,
+            expected_revision=expected_revision,
+            result_revision=target_revision,
+            payload_sha256=payload_sha256,
+            intended_manifest_sha256=intended_manifest_sha256,
+            new_refs=[],
+            superseded_refs=[],
+            idempotency_key=idempotency_key,
+        )
+        final_journal = self._build_reconciled_journal(intent_journal, receipt, add_retained=False)
+        final_sha = self._compute_canonical_manifest_sha256(final_journal.model_dump(mode="json"))
+        try:
+            self._write_album_journal_atomic_in_dir(album_dir_fd, final_journal)
+            self._sync_terminal_journal_in_dir(album_dir_fd, expected_journal_sha256=final_sha)
+        except ManifestPublishError as exc:
+            raise AlbumDurabilityUncertainError(
+                f"Terminal COMMITTED receipt publication uncertain for '{tx_id}': {exc}"
+            ) from exc
+
+        return validated_target
 
     def _validate_album_evidence_phase_a_locked(
         self,
@@ -2456,20 +3100,26 @@ class ProjectStorageManager:
         album_dir_fd: int,
         *,
         raw_album_data: Optional[Dict[str, Any]] = None,
+        raw_album_identity: Optional[Tuple[int, int]] = None,
+        evidence_out: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], Optional[AlbumJournal], RecoveryConsistency]:
         """Phase A (read-only): validate manifest/journal structure and reject proven CORRUPT without blocking replayable UNCERTAIN/active_tx."""
-        if raw_album_data is None:
+        if raw_album_data is not None and raw_album_identity is not None:
+            album_data = raw_album_data
+            album_identity = raw_album_identity
+            album_sha256 = self._compute_canonical_manifest_sha256(album_data)
+        else:
             album_loaded = self._read_json_file_verified_in_dir(album_dir_fd, "album.json", sync_file=False, required=False)
             if album_loaded is None:
                 raise AlbumManifestCorruptError(f"Album manifest 'album.json' is missing for '{album_id}'.")
-            album_data = album_loaded[0]
-        else:
-            album_data = raw_album_data
+            album_data, album_identity, album_sha256 = album_loaded
 
         journal_loaded = self._read_json_file_verified_in_dir(album_dir_fd, "journal.json", sync_file=False, required=False)
         journal: Optional[AlbumJournal] = None
+        journal_identity: Optional[Tuple[int, int]] = None
+        journal_sha256: Optional[str] = None
         if journal_loaded is not None:
-            journal_raw = journal_loaded[0]
+            journal_raw, journal_identity, journal_sha256 = journal_loaded
             try:
                 journal = AlbumJournal(**journal_raw)
                 if journal.album_id != album_id:
@@ -2486,6 +3136,17 @@ class ProjectStorageManager:
         consistency = self._classify_album_consistency(album_data, journal)
         if consistency == RecoveryConsistency.CORRUPT:
             raise AlbumManifestCorruptError(f"Album '{album_id}' failed structural/consistency validation.")
+
+        if evidence_out is not None:
+            evidence_out.update({
+                "album_data": album_data,
+                "album_identity": album_identity,
+                "album_sha256": album_sha256,
+                "journal": journal,
+                "journal_identity": journal_identity,
+                "journal_sha256": journal_sha256,
+                "consistency": consistency,
+            })
         return album_data, journal, consistency
 
     @staticmethod
@@ -4527,7 +5188,7 @@ class ProjectStorageManager:
         *,
         expected_journal_sha256: str,
         expected_identity: Optional[Tuple[int, int]] = None,
-    ) -> None:
+    ) -> Tuple[int, int]:
         """Verify journal.json matches expected validated evidence and synchronize both file and album_dir_fd."""
         res = cls._read_json_file_verified_in_dir(
             album_dir_fd,
@@ -4551,6 +5212,7 @@ class ProjectStorageManager:
             raise AlbumDurabilityUncertainError(f"Failed to revalidate 'journal.json' after directory sync: {exc}") from exc
         if not stat.S_ISREG(lst.st_mode) or (lst.st_dev, lst.st_ino) != file_id:
             raise AlbumManifestCorruptError("Terminal journal 'journal.json' was replaced during synchronization.")
+        return file_id
 
     @staticmethod
     def _revalidate_live_artifact_binding_in_dir(
