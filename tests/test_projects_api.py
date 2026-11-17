@@ -1294,6 +1294,13 @@ const vm = require('vm');
 const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
 
 const elements = {};
+function findAll(root, pred, out = []) {
+  for (const c of (root.children || [])) {
+    if (pred(c)) out.push(c);
+    findAll(c, pred, out);
+  }
+  return out;
+}
 function makeEl(id, tag = 'div') {
   const listeners = {};
   const classSet = new Set();
@@ -3094,7 +3101,7 @@ def test_phase1a2_api_strict_revisions_fd_cleanup_get_purity_and_artwork_sync(cl
             cookies=auth_cookies,
         ).status_code == 422
 
-    # 2. Artwork upload returns updated album with incremented revision; replacement returns 409
+    # 2. Artwork upload and replacement return updated album with incremented revision
     art_res = client.post(
         f"/api/projects/albums/{alb_id}/artwork",
         data={"expected_revision": str(rev)},
@@ -3112,12 +3119,14 @@ def test_phase1a2_api_strict_revisions_fd_cleanup_get_purity_and_artwork_sync(cl
         files={"file": ("cover2.jpg", io.BytesIO(VALID_JPEG_BYTES), "image/jpeg")},
         cookies=auth_cookies,
     )
-    assert rep_art.status_code == 409
+    assert rep_art.status_code == 200
+    rep_body = rep_art.json()
+    assert rep_body["album"]["revision"] == rev + 2
 
     # 3. Bulk PATCH rejects placeholder-to-Take assignment with 400
     ph_alb = client.post(
         f"/api/projects/albums/{alb_id}/entries",
-        json={"expected_revision": art_body["album"]["revision"], "track_id": trk["id"], "take_id": None},
+        json={"expected_revision": rep_body["album"]["revision"], "track_id": trk["id"], "take_id": None},
         cookies=auth_cookies,
     ).json()
     ph_entry = ph_alb["tracks"][0]
@@ -3780,10 +3789,9 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
     alb_dir = papi_mod.project_storage_manager._get_album_dir(user_id, alb["id"])
     journal_path = alb_dir / "journal.json"
 
-    def _call_2_unenrolled_routes(rev: int):
+    def _call_1_unenrolled_route(rev: int):
         return [
             ("delete_album", client.delete(f"/api/projects/albums/{alb['id']}?expected_revision={rev}", cookies=auth_cookies)),
-            ("artwork", client.post(f"/api/projects/albums/{alb['id']}/artwork", data={"expected_revision": str(rev)}, files={"file": ("cover.jpg", jpg_bytes, "image/jpeg")}, cookies=auth_cookies)),
         ]
 
     def _call_all_8_routes(rev: int):
@@ -3794,13 +3802,14 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
             ("patch_entry", client.patch(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}", json={"custom_title": "Y", "expected_revision": rev}, cookies=auth_cookies)),
             ("refresh", client.post(f"/api/projects/albums/{alb['id']}/entries/{entry_rec['id']}/refresh", json={"expected_revision": rev, "expected_source_revision": 1, "expected_source_audio_sha256": entry_rec["snapshot"]["audio_sha256"], "expected_source_metadata_fingerprint": "a" * 64}, cookies=auth_cookies)),
             ("del_entry", client.delete(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}?expected_revision={rev}", cookies=auth_cookies)),
-            *_call_2_unenrolled_routes(rev),
+            ("artwork", client.post(f"/api/projects/albums/{alb['id']}/artwork", data={"expected_revision": str(rev)}, files={"file": ("cover.jpg", jpg_bytes, "image/jpeg")}, cookies=auth_cookies)),
+            *_call_1_unenrolled_route(rev),
         ]
 
-    # 1. Idle v2 journal -> 409 mutation_not_enrolled on the 2 remaining unenrolled routes (and no reconciliation recommended)
+    # 1. Idle v2 journal -> 409 mutation_not_enrolled on remaining unenrolled route (and no reconciliation recommended)
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb["id"])
     journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
-    for name, res in _call_2_unenrolled_routes(alb["revision"]):
+    for name, res in _call_1_unenrolled_route(alb["revision"]):
         assert res.status_code == 409, f"{name} expected 409, got {res.status_code}: {res.text}"
         assert res.headers.get("X-Error-Code") == "mutation_not_enrolled"
         body = res.json()["detail"]
@@ -3886,10 +3895,8 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
     journal_path.write_text(json.dumps(raw_j.model_dump(mode="json")), encoding="utf-8")
     raw_m_bytes = manifest_path.read_bytes()
     raw_j_bytes = journal_path.read_bytes()
-    raw_res = client.post(
-        f"/api/projects/albums/{alb['id']}/artwork",
-        data={"expected_revision": str(persisted_data["revision"])},
-        files={"file": ("cover.jpg", jpg_bytes, "image/jpeg")},
+    raw_res = client.delete(
+        f"/api/projects/albums/{alb['id']}?expected_revision={persisted_data['revision']}",
         cookies=auth_cookies,
     )
     assert raw_res.status_code == 409
@@ -4920,3 +4927,251 @@ vm.runInNewContext(code, context);
     proc = subprocess.run([node_bin, "-e", js_script], capture_output=True, text=True, env=env)
     assert proc.returncode == 0, f"node failed: {proc.stderr}\n{proc.stdout}"
     assert "UI_CHECK_OK" in proc.stdout
+
+
+def test_feature5_api_and_ui_artwork_replacement(client, auth_cookies):
+    """Feature 5: API artwork upload/replacement, GET /artwork, invalid upload guard, finalize, 409 on finalized, and frontend controls."""
+    import io
+    import os
+    from pathlib import Path
+    import shutil
+    import subprocess
+    import wave
+    from PIL import Image
+
+    wbuf = io.BytesIO()
+    with wave.open(wbuf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x22\x23" * 300)
+    wav_ok = wbuf.getvalue()
+
+    def _make_img_bytes(color: tuple[int, int, int], fmt: str) -> bytes:
+        img = Image.new("RGB", (32, 32), color=color)
+        b = io.BytesIO()
+        img.save(b, format=fmt)
+        return b.getvalue()
+
+    jpg_1 = _make_img_bytes((200, 10, 10), "JPEG")
+    png_2 = _make_img_bytes((10, 200, 10), "PNG")
+    jpg_3 = _make_img_bytes((10, 10, 200), "JPEG")
+
+    trk = client.post("/api/projects/tracks", json={"title": "API F5 Track"}, cookies=auth_cookies).json()
+    tk = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        files={"file": ("f5.wav", wav_ok, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    alb = client.post("/api/projects/albums", json={"title": "API F5 Cover LP"}, cookies=auth_cookies).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    eid = alb["tracks"][0]["id"]
+
+    # Initial upload -> 200, GET /artwork returns normalized image
+    r1 = client.post(
+        f"/api/projects/albums/{alb['id']}/artwork",
+        data={"expected_revision": str(alb["revision"])},
+        files={"file": ("c1.jpg", io.BytesIO(jpg_1), "image/jpeg")},
+        cookies=auth_cookies,
+    )
+    assert r1.status_code == 200, r1.text
+    alb1 = r1.json()["album"]
+    assert alb1["cover_generation"] == 1
+    assert alb1["active_cover_filename"] == "cover_g1.jpg"
+    g1_bytes = client.get(f"/api/projects/albums/{alb['id']}/artwork", cookies=auth_cookies).content
+
+    # Replace once & twice -> 200, GET /artwork updates to latest
+    r2 = client.post(
+        f"/api/projects/albums/{alb['id']}/artwork",
+        data={"expected_revision": str(alb1["revision"])},
+        files={"file": ("c2.png", io.BytesIO(png_2), "image/png")},
+        cookies=auth_cookies,
+    )
+    assert r2.status_code == 200, r2.text
+    alb2 = r2.json()["album"]
+    assert alb2["cover_generation"] == 2
+    assert alb2["active_cover_filename"] == "cover_g2.png"
+    g2_bytes = client.get(f"/api/projects/albums/{alb['id']}/artwork", cookies=auth_cookies).content
+    assert g2_bytes != g1_bytes
+
+    r3 = client.post(
+        f"/api/projects/albums/{alb['id']}/artwork",
+        data={"expected_revision": str(alb2["revision"])},
+        files={"file": ("c3.jpg", io.BytesIO(jpg_3), "image/jpeg")},
+        cookies=auth_cookies,
+    )
+    assert r3.status_code == 200, r3.text
+    alb3 = r3.json()["album"]
+    assert alb3["cover_generation"] == 3
+    g3_bytes = client.get(f"/api/projects/albums/{alb['id']}/artwork", cookies=auth_cookies).content
+    assert g3_bytes != g2_bytes
+
+    # Invalid upload -> 400, leaves Album revision & active cover unchanged
+    r_bad = client.post(
+        f"/api/projects/albums/{alb['id']}/artwork",
+        data={"expected_revision": str(alb3["revision"])},
+        files={"file": ("bad.jpg", io.BytesIO(b"not an image"), "image/jpeg")},
+        cookies=auth_cookies,
+    )
+    assert r_bad.status_code == 400
+    assert client.get(f"/api/projects/albums/{alb['id']}", cookies=auth_cookies).json()["revision"] == alb3["revision"]
+    assert client.get(f"/api/projects/albums/{alb['id']}/artwork", cookies=auth_cookies).content == g3_bytes
+
+    # Stale revision -> 409
+    r_stale = client.post(
+        f"/api/projects/albums/{alb['id']}/artwork",
+        data={"expected_revision": str(alb3["revision"] - 1)},
+        files={"file": ("c1.jpg", io.BytesIO(jpg_1), "image/jpeg")},
+        cookies=auth_cookies,
+    )
+    assert r_stale.status_code == 409
+
+    # Finalize and verify active cover and entry audio still served, further replacement rejected with 409
+    r_fin = client.post(f"/api/projects/albums/{alb['id']}/finalize?expected_revision={alb3['revision']}", cookies=auth_cookies)
+    assert r_fin.status_code == 200, r_fin.text
+    fin_alb = r_fin.json()
+    assert client.get(f"/api/projects/albums/{alb['id']}/artwork", cookies=auth_cookies).content == g3_bytes
+    assert client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies).content == wav_ok
+
+    r_fin_rep = client.post(
+        f"/api/projects/albums/{alb['id']}/artwork",
+        data={"expected_revision": str(fin_alb["revision"])},
+        files={"file": ("c1.jpg", io.BytesIO(jpg_1), "image/jpeg")},
+        cookies=auth_cookies,
+    )
+    assert r_fin_rep.status_code == 409
+
+    # Frontend check: artwork upload updates src on success, preserves src on failure, and disables input on finalized Album
+    node_bin = shutil.which("node")
+    assert node_bin is not None
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+    js_script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
+
+const elements = {};
+function findAll(root, pred, out = []) {
+  for (const c of (root.children || [])) {
+    if (pred(c)) out.push(c);
+    findAll(c, pred, out);
+  }
+  return out;
+}
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set();
+  const el = {
+    id, tagName: tag.toUpperCase(), value: '', name: '', type: '', textContent: '', className: '',
+    src: '', checked: false, disabled: false, files: [], listeners, dataset: {}, style: {}, children: [], _innerHTML: '',
+    classList: {
+      add: (c) => classSet.add(c),
+      remove: (c) => classSet.delete(c),
+      contains: (c) => classSet.has(c),
+      toggle: (c, force) => { if (force === true) classSet.add(c); else if (force === false) classSet.delete(c); else if (classSet.has(c)) classSet.delete(c); else classSet.add(c); },
+    },
+    set innerHTML(val) { this._innerHTML = val; if (val === '' || (typeof val === 'string' && val.startsWith('<option'))) this.children = []; },
+    get innerHTML() { return this._innerHTML; },
+    addEventListener: (ev, fn) => { if (!listeners[ev]) listeners[ev] = []; listeners[ev].push(fn); },
+    setAttribute: () => {},
+    appendChild: (child) => { el.children.push(child); return child; },
+    querySelector: () => null,
+    querySelectorAll: (sel) => findAll(el, c => sel === 'button' ? c.tagName === 'BUTTON' : false),
+    reset: () => {},
+    remove: () => {},
+  };
+  return el;
+}
+function getEl(id) {
+  if (!elements[id]) elements[id] = makeEl(id);
+  return elements[id];
+}
+
+const docListeners = {};
+let nextUploadOk = true;
+const draftAlbum = {
+  id: 'alb_f5', title: 'F5 UI Album', status: 'draft', is_finalized: false, revision: 2, has_cover: true,
+  tracks: [], revisions: [],
+};
+const finalizedAlbum = { ...draftAlbum, id: 'alb_f5_fin', is_finalized: true, status: 'completed', revision: 4 };
+
+class MockFormData { constructor() { this.items = []; } append(k, v) { this.items.push([k, v]); } }
+
+const context = {
+  console, Date, Math, JSON, Set, Map, Promise, FormData: MockFormData, URLSearchParams, encodeURIComponent, decodeURIComponent, setTimeout, clearTimeout,
+  document: {
+    getElementById: getEl,
+    createElement: (tag) => makeEl('', tag),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
+    body: makeEl('body', 'body'),
+  },
+  window: { location: { pathname: '/projects', search: '' }, addEventListener: () => {} },
+  confirm: () => true,
+  alert: () => {},
+  fetch: async (url, opts) => {
+    if (url === '/api/projects/tracks') return { ok: true, status: 200, json: async () => [] };
+    if (url === '/api/projects/albums') return { ok: true, status: 200, json: async () => [draftAlbum, finalizedAlbum] };
+    if (url === '/api/projects/albums/alb_f5') return { ok: true, status: 200, json: async () => draftAlbum };
+    if (url === '/api/projects/albums/alb_f5_fin') return { ok: true, status: 200, json: async () => finalizedAlbum };
+    if (url === '/api/storage/quota') return { ok: true, status: 200, json: async () => ({ used_bytes: 0, limit_bytes: 1000, usage_percent: 0 }) };
+    if (url === '/api/projects/albums/alb_f5/artwork' && opts && opts.method === 'POST') {
+      if (!nextUploadOk) return { ok: false, status: 400, json: async () => ({ detail: 'Bad image' }) };
+      return { ok: true, status: 200, json: async () => ({ status: 'saved', album: { ...draftAlbum, revision: 3, active_cover_filename: 'cover_g2.png' } }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+};
+context.window.window = context.window;
+
+vm.runInNewContext(code, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  await new Promise(r => setTimeout(r, 20));
+  const cards = getEl('albumsGridContainer').children;
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+
+  const artEl = getEl('albumDetailArtwork');
+  const initialSrc = artEl.src;
+  const inputEl = getEl('inputAlbumCoverFile');
+  if (inputEl.disabled) throw new Error('Expected cover input enabled on draft Album');
+
+  // Failed upload preserves displayed cover src
+  nextUploadOk = false;
+  inputEl.files = [{ name: 'bad.jpg', size: 10 }];
+  await inputEl.listeners['change'][0]({ target: inputEl });
+  await new Promise(r => setTimeout(r, 20));
+  if (artEl.src !== initialSrc) throw new Error('Expected failed upload to preserve previous cover src');
+
+  // Successful upload updates displayed cover src
+  nextUploadOk = true;
+  await new Promise(r => setTimeout(r, 5));
+  await inputEl.listeners['change'][0]({ target: inputEl });
+  await new Promise(r => setTimeout(r, 20));
+  if (artEl.src === initialSrc || !artEl.src.includes('/api/projects/albums/alb_f5/artwork?t=')) {
+    throw new Error('Expected successful upload to update cover src');
+  }
+
+  // Finalized Album disables cover replacement input
+  await cards[1].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (!inputEl.disabled) throw new Error('Expected cover input disabled on finalized Album');
+  console.log('F5_UI_CHECK_OK');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    env = os.environ.copy()
+    env["TARGET_JS_PATH"] = str(projects_js_path)
+    proc = subprocess.run([node_bin, "-e", js_script], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, f"node failed: {proc.stderr}\n{proc.stdout}"
+    assert "F5_UI_CHECK_OK" in proc.stdout

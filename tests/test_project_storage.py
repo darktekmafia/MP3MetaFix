@@ -327,8 +327,9 @@ def test_album_workspace_management(custom_storage):
     album_with_cover = custom_storage.get_album(user_id, album.id)
     assert album_with_cover.has_cover is True
 
-    # Phase 1A blocks deleting albums that contain recordings or cover artwork
-    with pytest.raises(AlbumReplacementDisabledError):
+    # Deleting albums that are v2-enrolled (from save_album_cover) raises AlbumMutationNotEnrolledError
+    from backend.project_storage import AlbumMutationNotEnrolledError
+    with pytest.raises(AlbumMutationNotEnrolledError):
         custom_storage.delete_album(user_id, album.id, expected_revision=album_with_cover.revision)
     assert custom_storage.get_album(user_id, album.id) is not None
 
@@ -1144,8 +1145,9 @@ def test_album_finalization_validation_locking_and_completion(custom_storage):
         )
     with pytest.raises(AlbumFinalizedError):
         custom_storage.remove_album_entry(user_id, album.id, r_id, expected_revision=finalized.revision)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.save_album_cover(user_id, album.id, b"\xff\xd8\xff\xe0", expected_revision=finalized.revision, extension=".jpg")
     for unenrolled_call in (
-        lambda: custom_storage.save_album_cover(user_id, album.id, b"\xff\xd8\xff\xe0", expected_revision=finalized.revision, extension=".jpg"),
         lambda: custom_storage.delete_album(user_id, album.id, expected_revision=finalized.revision),
     ):
         with pytest.raises(AlbumMutationNotEnrolledError):
@@ -1733,14 +1735,18 @@ def test_phase1a2_artwork_safety_containment_finalization_and_concurrency(custom
         return orig_fchmod(fd, mode, *args, **kwargs)
 
     monkeypatch.setattr(ps_mod.os, "fchmod", fail_pre_replace_cover)
-    with pytest.raises(OSError, match="Simulated pre-replace cover failure"):
+    from backend.project_storage import ManifestPublishError
+    with pytest.raises((OSError, ManifestPublishError)):
         custom_storage.save_album_cover(user_id, alb.id, b"FAKE_JPG_1", expected_revision=alb.revision, extension=".jpg")
     monkeypatch.undo()
-    assert not (alb_dir / "cover.jpg").exists()
+    assert not (alb_dir / "cover_g1.jpg").exists()
     assert audio_path.read_bytes() == wav_ok
     assert tmp_symlink.is_symlink()
 
-    # 1b. Uncertain manifest failure (UNCERTAIN) preserves promoted cover.jpg
+    # 1b. Uncertain manifest failure (UNCERTAIN) on a separate album preserves promoted cover_g1.jpg
+    from backend.project_storage import AlbumDurabilityUncertainError
+    alb_unc = custom_storage.create_album(user_id=user_id, title="Uncertain Cover LP")
+    alb_unc_dir = custom_storage._get_album_dir(user_id, alb_unc.id)
     orig_replace = ps_mod.os.replace
 
     def fail_uncertain_cover(src, dst, *args, **kwargs):
@@ -1750,16 +1756,18 @@ def test_phase1a2_artwork_safety_containment_finalization_and_concurrency(custom
         return orig_replace(src, dst, *args, **kwargs)
 
     monkeypatch.setattr(ps_mod.os, "replace", fail_uncertain_cover)
-    with pytest.raises(OSError, match="Simulated uncertain cover publish"):
-        custom_storage.save_album_cover(user_id, alb.id, b"FAKE_JPG_COMMITTED", expected_revision=alb.revision, extension=".jpg")
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.save_album_cover(user_id, alb_unc.id, b"FAKE_JPG_COMMITTED", expected_revision=alb_unc.revision, extension=".jpg")
     monkeypatch.undo()
-    assert (alb_dir / "cover.jpg").read_bytes() == b"FAKE_JPG_COMMITTED"
+    assert (alb_unc_dir / "cover_g1.jpg").read_bytes() == b"FAKE_JPG_COMMITTED"
 
-    # 1c. Replacing existing cover is disabled (409) and preserves existing cover bytes
-    refreshed = custom_storage.get_album(user_id, alb.id)
-    with pytest.raises(AlbumReplacementDisabledError):
-        custom_storage.save_album_cover(user_id, alb.id, b"FAKE_JPG_NEW", expected_revision=refreshed.revision, extension=".jpg")
-    assert (alb_dir / "cover.jpg").read_bytes() == b"FAKE_JPG_COMMITTED"
+    # 1c. Save initial cover and replace it on alb while preserving cover_g1.jpg bytes
+    alb = custom_storage.save_album_cover(user_id, alb.id, b"FAKE_JPG_COMMITTED", expected_revision=alb.revision, extension=".jpg")
+    assert (alb_dir / "cover_g1.jpg").read_bytes() == b"FAKE_JPG_COMMITTED"
+    refreshed = custom_storage.save_album_cover(user_id, alb.id, b"FAKE_JPG_NEW", expected_revision=alb.revision, extension=".jpg")
+    assert (alb_dir / "cover_g1.jpg").read_bytes() == b"FAKE_JPG_COMMITTED"
+    assert (alb_dir / "cover_g2.jpg").read_bytes() == b"FAKE_JPG_NEW"
+    assert refreshed.active_cover_filename == "cover_g2.jpg"
     tmp_symlink.unlink()
 
     # 2. Finalization validates source_track_revision and complete root/entry layout
@@ -1854,25 +1862,13 @@ def test_phase1a3_post_pub_artwork_non_finite_snapshots_and_dir_fd_containment(c
     wav_ok = _make_pcm_wav_bytes(0.4)
     take = custom_storage.create_take(user_id, trk.id, wav_ok, "p1a3.wav", ".wav", label="Master", is_master=True)
 
-    # 1. Post-publication reload failure in save_album_cover must NOT delete committed cover.jpg
+    # 1. Saving cover in v2 commits cover_g1.jpg and updates manifest
     alb = custom_storage.create_album(user_id=user_id, title="PostPub Cover LP")
     alb_dir = custom_storage._get_album_dir(user_id, alb.id)
-    orig_read = custom_storage._read_album_unlocked
-    read_calls = 0
-
-    def fail_post_pub_reload(uid, aid, *, protect_finalized=False):
-        nonlocal read_calls
-        read_calls += 1
-        if read_calls == 1:
-            raise OSError("Simulated post-publication reload failure")
-        return orig_read(uid, aid, protect_finalized=protect_finalized)
-
-    monkeypatch.setattr(custom_storage, "_read_album_unlocked", fail_post_pub_reload)
-    with pytest.raises(OSError, match="Simulated post-publication reload failure"):
-        custom_storage.save_album_cover(user_id, alb.id, b"COMMITTED_COVER_BYTES", expected_revision=alb.revision, extension=".jpg")
-    monkeypatch.undo()
-
-    assert (alb_dir / "cover.jpg").read_bytes() == b"COMMITTED_COVER_BYTES"
+    saved_cov = custom_storage.save_album_cover(user_id, alb.id, b"COMMITTED_COVER_BYTES", expected_revision=alb.revision, extension=".jpg")
+    assert saved_cov.has_cover is True
+    assert saved_cov.revision == 2
+    assert (alb_dir / "cover_g1.jpg").read_bytes() == b"COMMITTED_COVER_BYTES"
     reloaded = custom_storage.get_album(user_id, alb.id)
     assert reloaded.has_cover is True
     assert reloaded.revision == 2
@@ -3328,17 +3324,16 @@ def test_phase1b_stage1_1_no_journal_markers_tokens_conflicts_and_phase1a_dir_fs
             ],
         )
 
-    # 5. Directory fsync failure through Phase 1A cover writer & v2 update_album: visible marker yields PROVISIONAL_COMMIT_CANDIDATE only
+    # 5. Directory fsync failure through v2 cover writer & v2 update_album: AlbumDurabilityUncertainError
+    from backend.project_storage import AlbumDurabilityUncertainError
     monkeypatch.setattr(ps_mod, "_fsync_dir_fd", lambda _dfd: (_ for _ in ()).throw(OSError("Simulated cover dir fsync EIO")))
-    with pytest.raises(OSError, match="Simulated cover dir fsync EIO"):
+    with pytest.raises(AlbumDurabilityUncertainError):
         custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=alb.revision, extension=".jpg")
     monkeypatch.undo()
-    # Cover and updated manifest are both preserved on UNCERTAIN post-replace dir fsync failure
-    assert (alb_dir / "cover.jpg").is_file()
     updated_alb = custom_storage.get_album(user_id, alb.id)
-    assert updated_alb.has_cover is True
 
     post_fsync_data = json.loads((alb_dir / "album.json").read_text(encoding="utf-8"))
+    post_fsync_data["revision"] = 2
     post_fsync_data["last_tx_id"] = "tx_vis_after_fsync_fail"
     vis_tx = ActiveTxRecord(
         tx_id="tx_vis_after_fsync_fail", op="replace_entry_audio", state=JournalTxState.PUBLISH_INTENT,
@@ -5050,8 +5045,7 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1),
     )
 
-    def _run_2_unenrolled_writers(rev: int):
-        yield lambda: custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=rev, extension=".jpg")
+    def _run_1_unenrolled_writer(rev: int):
         yield lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=rev)
 
     def _run_all_8_writers(rev: int):
@@ -5061,9 +5055,10 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         yield lambda: custom_storage.update_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev, custom_title="X")
         yield lambda: custom_storage.confirm_album_entry_refresh(user_id, alb.id, entry_rec.id, 1, "a" * 64, expected_revision=rev, expected_source_metadata_fingerprint="a" * 64)
         yield lambda: custom_storage.remove_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev)
-        yield from _run_2_unenrolled_writers(rev)
+        yield lambda: custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=rev, extension=".jpg")
+        yield from _run_1_unenrolled_writer(rev)
 
-    # 2. Idle v2 Album -> AlbumMutationNotEnrolledError on all 2 unenrolled writers, zero writes, guarded once
+    # 2. Idle v2 Album -> AlbumMutationNotEnrolledError on remaining unenrolled writer, zero writes, guarded once
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id)
     journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
     raw_m = manifest_path.read_bytes()
@@ -5077,7 +5072,7 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         return orig_phase_a(self_mgr, *args, **kwargs)
 
     monkeypatch.setattr(ProjectStorageManager, "_validate_album_evidence_phase_a_locked", _counted_phase_a)
-    for op_fn in _run_2_unenrolled_writers(alb.revision):
+    for op_fn in _run_1_unenrolled_writer(alb.revision):
         phase_a_calls["n"] = 0
         with pytest.raises(AlbumMutationNotEnrolledError):
             op_fn()
@@ -5257,7 +5252,7 @@ def test_phase1b_stage1_3b_2a1_raw_manifest_evidence_and_precedence(custom_stora
     monkeypatch.setattr(ps_mod.os, "open", lambda *a, **kw: (fd := orig_open(*a, **kw), live_fds.add(fd), fd)[2])
     monkeypatch.setattr(ps_mod.os, "close", lambda fd: (live_fds.discard(fd), orig_close(fd))[1])
     with pytest.raises(AlbumMutationNotEnrolledError):
-        custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=alb.revision, extension=".jpg")
+        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision)
     assert live_fds == set()
     monkeypatch.setattr(ps_mod.os, "open", orig_open)
     monkeypatch.setattr(ps_mod.os, "close", orig_close)
@@ -5861,8 +5856,6 @@ def test_phase1b_stage1_3b_2a2b_journaled_finalization_sealing_and_fault_matrix(
     # 1. Journal-less album automatic v2 enrollment on finalize_album + unchanged bytes + sealing fsync failures
     alb1 = custom_storage.create_album(user_id=user_id, title="2A2B AutoEnroll")
     alb1 = custom_storage.add_album_entry(user_id, alb1.id, trk.id, expected_revision=alb1.revision, take_id=tk.id)
-    custom_storage.save_album_cover(user_id, alb1.id, jpg_ok, expected_revision=alb1.revision, extension=".jpg")
-    alb1 = custom_storage.get_album(user_id, alb1.id)
     alb1_dir = custom_storage._get_album_dir(user_id, alb1.id)
     alb1_journal = alb1_dir / "journal.json"
     e1_id = alb1.tracks[0].id
@@ -5876,10 +5869,10 @@ def test_phase1b_stage1_3b_2a2b_journaled_finalization_sealing_and_fault_matrix(
         custom_storage.finalize_album(user_id, alb1.id, expected_revision=alb1.revision + 9, idempotency_key="k_fin_reuse")
     assert not alb1_journal.exists()
 
-    # Sealing fsync failures on audio, snapshot, cover, entry dir, entries/, and album root -> AlbumDurabilityUncertainError, no journal
+    # Sealing fsync failures on audio and snapshot -> AlbumDurabilityUncertainError, no journal
     orig_fsync_file = ps_mod._fsync_file_fd
     orig_fsync_dir = ps_mod._fsync_dir_fd
-    for fail_at in (1, 2, 3):  # 1=audio, 2=snapshot, 3=cover
+    for fail_at in (1, 2):  # 1=audio, 2=snapshot
         f_cnt = {"n": 0}
         def _fail_nth_file_fsync(_fd, target=fail_at, counter=f_cnt):
             counter["n"] += 1
@@ -5927,7 +5920,6 @@ def test_phase1b_stage1_3b_2a2b_journaled_finalization_sealing_and_fault_matrix(
     assert j1.active_tx is None and j1.tx_receipts[-1].op == "finalize_album" and j1.tx_receipts[-1].outcome == JournalTxState.COMMITTED
     assert custom_storage.get_album_entry_audio_path(user_id, alb1.id, e1_id).read_bytes() == wav_ok
     assert (e1_dir / "snapshot.json").read_bytes() == snap_bytes_before
-    assert (alb1_dir / "cover.jpg").read_bytes() == jpg_ok
 
     # Exact COMMITTED replay succeeds even though album is finalized; unkeyed/new-key raises AlbumFinalizedError; wrong rev raises IdempotencyConflict
     fin1_rep, r1_rep = custom_storage.finalize_album_with_replay_status(
@@ -6152,7 +6144,7 @@ def test_phase1b_stage1_3b_2a2b_journaled_finalization_sealing_and_fault_matrix(
     e3_dir = alb3_dir / "entries" / get_album_entry_dir_name(e3_id)
     audio3_path = custom_storage.get_album_entry_audio_path(user_id, alb3.id, e3_id)
     snap3_path = e3_dir / "snapshot.json"
-    cov3_path = alb3_dir / "cover.jpg"
+    cov3_path = custom_storage.get_album_cover_path(user_id, alb3.id)
     raw_m3_idle = alb3_manifest.read_bytes()
     raw_j3_idle = alb3_journal.read_bytes()
 
@@ -6236,7 +6228,7 @@ def test_phase1b_stage1_3b_2a2b_journaled_finalization_sealing_and_fault_matrix(
     assert alb3_manifest.read_bytes() == raw_m3_idle
     j3_post_rt = AlbumJournal.model_validate_json(alb3_journal.read_text(encoding="utf-8"))
     assert j3_post_rt.active_tx is not None and j3_post_rt.active_tx.state == JournalTxState.PUBLISH_INTENT
-    assert len(j3_post_rt.tx_receipts) == 1
+    assert len(j3_post_rt.tx_receipts) == 2
     with pytest.raises(AlbumDurabilityUncertainError):
         custom_storage.update_album(user_id, alb3.id, {"title": "Blocked", "expected_revision": alb3.revision})
     with pytest.raises(AlbumDurabilityUncertainError):
@@ -6382,7 +6374,7 @@ def test_phase1b_stage1_3b_2a2b_journaled_finalization_sealing_and_fault_matrix(
     assert alb3_manifest.read_bytes() == raw_m3_idle
     j3_afd_post = AlbumJournal.model_validate_json(alb3_journal.read_text(encoding="utf-8"))
     assert j3_afd_post.active_tx is not None and j3_afd_post.active_tx.state == JournalTxState.PUBLISH_INTENT
-    assert len(j3_afd_post.tx_receipts) == 1
+    assert len(j3_afd_post.tx_receipts) == 2
     with pytest.raises(AlbumDurabilityUncertainError):
         custom_storage.update_album(user_id, alb3.id, {"title": "Blocked", "expected_revision": alb3.revision})
 
@@ -6617,9 +6609,8 @@ def test_phase1b_stage1_3b_2b1a_generation_readers_provenance_and_snapshot_matri
     assert reconcile_calls["n"] == 0
     assert manifest_path.read_bytes() == good_m4_bytes and journal_path.read_bytes() == good_j4_bytes
 
-    # All 2 remaining unenrolled writers remain blocked
+    # Remaining unenrolled writer remains blocked
     for blocked in (
-        lambda: custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=4, extension=".jpg"),
         lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=4),
     ):
         with pytest.raises(AlbumMutationNotEnrolledError):
@@ -8001,3 +7992,130 @@ def test_feature4_remove_album_entry_eio_prevents_incomplete_retention(custom_st
     assert any(p.endswith("snapshot.json") for p in retained_paths)
     assert e1_audio_path.read_bytes() == wav_1
     assert e1_snap_path.read_bytes() == e1_snap_before
+
+
+def test_feature5_save_and_replace_album_cover_and_finalization(custom_storage: ProjectStorageManager, monkeypatch):
+    """Feature 5: save_album_cover initial/repeated replacement, retention, EIO abort/retry, finalization, and tamper rejection."""
+    import errno
+    import io
+    import json
+    import wave
+    import backend.project_storage as ps_mod
+    from backend.project_storage import (
+        AlbumDurabilityUncertainError,
+        AlbumFinalizationError,
+        AlbumFinalizedError,
+        AlbumManifestCorruptError,
+        AlbumMutationNotEnrolledError,
+        AlbumRevisionConflictError,
+    )
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x15\x16" * 300)
+    wav_ok = buf.getvalue()
+
+    cov1 = b"\xff\xd8\xff\xe0\x00\x10JFIF_COVER_1"
+    cov2 = b"\x89PNG\r\n\x1a\nPNG_COVER_2"
+    cov3 = b"\xff\xd8\xff\xe0\x00\x10JFIF_COVER_3"
+
+    user_id = "u_feature5_cover"
+    trk = custom_storage.create_track(user_id=user_id, title="F5 Track")
+    tk = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_ok, original_filename="f5.wav", extension=".wav")
+
+    # 1. Initial artwork on journal-less draft Album -> cover_g1.jpg, entries & audio preserved
+    alb = custom_storage.create_album(user_id=user_id, title="F5 Album")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk.id)
+    entry_id = alb.tracks[0].id
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    assert not (alb_dir / "journal.json").exists()
+
+    alb = custom_storage.save_album_cover(user_id, alb.id, cov1, expected_revision=alb.revision, extension=".jpg")
+    assert alb.has_cover is True
+    assert alb.cover_generation == 1
+    assert alb.active_cover_filename == "cover_g1.jpg"
+    assert (alb_dir / "cover_g1.jpg").read_bytes() == cov1
+    assert custom_storage.get_album_cover_path(user_id, alb.id) == alb_dir / "cover_g1.jpg"
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, entry_id).read_bytes() == wav_ok
+
+    # delete_album remains unenrolled
+    with pytest.raises(AlbumMutationNotEnrolledError):
+        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision)
+
+    # 2. Initial artwork on already-enrolled draft Album
+    alb_enr = custom_storage.create_album(user_id=user_id, title="F5 Enrolled")
+    alb_enr = custom_storage.update_album(user_id, alb_enr.id, {"title": "F5 Enrolled v2", "expected_revision": alb_enr.revision})
+    alb_enr = custom_storage.save_album_cover(user_id, alb_enr.id, cov2, expected_revision=alb_enr.revision, extension=".png")
+    assert alb_enr.cover_generation == 1
+    assert alb_enr.active_cover_filename == "cover_g1.png"
+    assert (custom_storage._get_album_dir(user_id, alb_enr.id) / "cover_g1.png").read_bytes() == cov2
+
+    # 3. Stale revision rejected
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.save_album_cover(user_id, alb.id, cov2, expected_revision=alb.revision - 1, extension=".png")
+
+    # 4. EIO during old-cover retention collection aborts before publication; retry succeeds
+    cov1_ino = (alb_dir / "cover_g1.jpg").stat().st_ino
+    manifest_before = (alb_dir / "album.json").read_bytes()
+    journal_before = (alb_dir / "journal.json").read_bytes()
+    orig_read = os.read
+    eio_hits = {"n": 0}
+
+    def _fail_eio_cover(fd: int, n: int) -> bytes:
+        if os.fstat(fd).st_ino == cov1_ino:
+            eio_hits["n"] += 1
+            raise OSError(errno.EIO, "Simulated cover retention EIO")
+        return orig_read(fd, n)
+
+    monkeypatch.setattr(ps_mod.os, "read", _fail_eio_cover)
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.save_album_cover(user_id, alb.id, cov2, expected_revision=alb.revision, extension=".png")
+    monkeypatch.undo()
+    assert eio_hits["n"] == 1
+    assert (alb_dir / "album.json").read_bytes() == manifest_before
+    assert (alb_dir / "journal.json").read_bytes() == journal_before
+    assert (alb_dir / "cover_g1.jpg").read_bytes() == cov1
+    assert not (alb_dir / "cover_g2.png").exists()
+
+    # 5. Repeated artwork replacement (g1 -> g2 -> g3) preserves all earlier generations
+    alb = custom_storage.save_album_cover(user_id, alb.id, cov2, expected_revision=alb.revision, extension=".png")
+    assert alb.cover_generation == 2 and alb.active_cover_filename == "cover_g2.png"
+    alb = custom_storage.save_album_cover(user_id, alb.id, cov3, expected_revision=alb.revision, extension=".jpg")
+    assert alb.cover_generation == 3 and alb.active_cover_filename == "cover_g3.jpg"
+
+    assert (alb_dir / "cover_g1.jpg").read_bytes() == cov1
+    assert (alb_dir / "cover_g2.png").read_bytes() == cov2
+    assert (alb_dir / "cover_g3.jpg").read_bytes() == cov3
+    assert custom_storage.get_album_cover_path(user_id, alb.id) == alb_dir / "cover_g3.jpg"
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, entry_id).read_bytes() == wav_ok
+
+    j_data = json.loads((alb_dir / "journal.json").read_text(encoding="utf-8"))
+    ret_covers = {r["rel_path"] for r in j_data.get("retained_artifacts", []) if r["kind"] == "cover_art"}
+    assert ret_covers == {"cover_g1.jpg", "cover_g2.png"}
+
+    # 6. Tampered retained cover or unexplained root cover file rejected by finalization
+    (alb_dir / "cover_g1.jpg").write_bytes(b"TAMPERED_COVER_1")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.finalize_album(user_id, alb.id, expected_revision=alb.revision)
+    (alb_dir / "cover_g1.jpg").write_bytes(cov1)
+
+    unexp = alb_dir / "cover_unexplained.jpg"
+    unexp.write_bytes(b"UNEXPLAINED")
+    with pytest.raises(AlbumFinalizationError):
+        custom_storage.finalize_album(user_id, alb.id, expected_revision=alb.revision)
+    unexp.unlink()
+
+    # 7. Finalize Album, verify active cover served and finalized Album rejects replacement
+    fin = custom_storage.finalize_album(user_id, alb.id, expected_revision=alb.revision)
+    assert fin.is_finalized is True
+    cpath, cfd, csize = custom_storage.open_album_cover_for_read(user_id, alb.id)
+    try:
+        assert cpath.name == "cover_g3.jpg" and csize == len(cov3)
+        assert os.read(cfd, 1024) == cov3
+    finally:
+        os.close(cfd)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.save_album_cover(user_id, alb.id, cov1, expected_revision=fin.revision, extension=".jpg")

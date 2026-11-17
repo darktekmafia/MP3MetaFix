@@ -6012,8 +6012,31 @@ class ProjectStorageManager:
                         except OSError:
                             pass
 
-            allowed_cover_names = {"cover.jpg", "cover.jpeg", "cover.png", "cover.webp"} if album.has_cover else set()
+            committed_superseded_all: Dict[Tuple[str, str], ArtifactRefRecord] = {}
+            retained_cover_map: Dict[str, Tuple[Any, ArtifactRefRecord]] = {}
+            if journal is not None:
+                for rcp in journal.tx_receipts:
+                    if rcp.outcome == JournalTxState.COMMITTED:
+                        for sref in rcp.superseded_refs:
+                            committed_superseded_all[(rcp.tx_id, sref.rel_path)] = sref
+                for ret in journal.retained_artifacts:
+                    if ret.kind == ArtifactRole.COVER_ART.value and "/" not in ret.rel_path:
+                        sref = committed_superseded_all.get((ret.superseded_by_tx_id, ret.rel_path))
+                        if sref is None or sref.sha256 != ret.sha256 or sref.role != ArtifactRole.COVER_ART:
+                            raise AlbumManifestCorruptError(
+                                f"Retained cover '{ret.rel_path}' lacks matching COMMITTED provenance."
+                            )
+                        retained_cover_map[ret.rel_path] = (ret, sref)
+
+            if album.active_cover_filename is not None:
+                allowed_cover_names = {album.active_cover_filename}
+            elif album.has_cover:
+                allowed_cover_names = {"cover.jpg", "cover.jpeg", "cover.png", "cover.webp"}
+            else:
+                allowed_cover_names = set()
             seen_covers = []
+            seen_retained_covers = []
+            sealed_retained_covers: List[Tuple[str, Tuple[int, int, int, int, int], str]] = []
             try:
                 root_names = os.listdir(album_dir_fd)
             except OSError as exc:
@@ -6046,6 +6069,10 @@ class ProjectStorageManager:
                     if not stat.S_ISREG(rst.st_mode):
                         errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": f"Album cover '{rname}' is not a regular file."})
                     seen_covers.append(rname)
+                elif rname in retained_cover_map:
+                    if not stat.S_ISREG(rst.st_mode):
+                        errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": f"Retained album cover '{rname}' is not a regular file."})
+                    seen_retained_covers.append(rname)
                 else:
                     errors.append({
                         "entry_id": None,
@@ -6055,15 +6082,11 @@ class ProjectStorageManager:
                     })
             if len(seen_covers) > 1:
                 errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Multiple cover artwork files present in album root."})
+            if album.has_cover and len(seen_covers) == 0:
+                errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Active album cover artwork is missing."})
 
             if entries_fd is not None:
                 expected_dirs = {get_album_entry_dir_name(eid) for eid in manifest_entry_ids if eid}
-                committed_superseded_all: Dict[Tuple[str, str], ArtifactRefRecord] = {}
-                if journal is not None:
-                    for rcp in journal.tx_receipts:
-                        if rcp.outcome == JournalTxState.COMMITTED:
-                            for sref in rcp.superseded_refs:
-                                committed_superseded_all[(rcp.tx_id, sref.rel_path)] = sref
                 try:
                     entries_list = os.listdir(entries_fd)
                 except OSError as exc:
@@ -6223,6 +6246,61 @@ class ProjectStorageManager:
                     except OSError:
                         pass
 
+            for ret_cname in seen_retained_covers:
+                ret_rec, committed_csref = retained_cover_map[ret_cname]
+                try:
+                    rcfd = os.open(ret_cname, file_flags, dir_fd=album_dir_fd)
+                except FileNotFoundError as exc:
+                    raise AlbumManifestCorruptError(
+                        f"Retained album cover '{ret_cname}' disappeared during sealing."
+                    ) from exc
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
+                        raise AlbumManifestCorruptError(f"Unsafe retained album cover '{ret_cname}': {exc}") from exc
+                    raise AlbumDurabilityUncertainError(
+                        f"Cannot open retained album cover '{ret_cname}' during sealing: {exc}"
+                    ) from exc
+                try:
+                    try:
+                        pre_rcst = os.fstat(rcfd)
+                    except OSError as exc:
+                        raise AlbumDurabilityUncertainError(
+                            f"Cannot stat retained album cover '{ret_cname}' during sealing: {exc}"
+                        ) from exc
+                    if not stat.S_ISREG(pre_rcst.st_mode):
+                        raise AlbumManifestCorruptError(f"Retained album cover '{ret_cname}' is not a regular file.")
+                    try:
+                        with os.fdopen(os.dup(rcfd), "rb") as rcf:
+                            ret_cbytes = rcf.read()
+                    except OSError as exc:
+                        raise AlbumDurabilityUncertainError(
+                            f"Cannot read retained album cover '{ret_cname}' during sealing: {exc}"
+                        ) from exc
+                    ret_csha = hashlib.sha256(ret_cbytes).hexdigest()
+                    if len(ret_cbytes) != committed_csref.size_bytes or ret_csha != ret_rec.sha256:
+                        raise AlbumManifestCorruptError(
+                            f"Retained album cover '{ret_cname}' checksum or size contradicts committed provenance."
+                        )
+                    try:
+                        _fsync_file_fd(rcfd)
+                        post_rcst = os.fstat(rcfd)
+                        dir_rcst = os.lstat(ret_cname, dir_fd=album_dir_fd)
+                    except OSError as exc:
+                        raise AlbumDurabilityUncertainError(
+                            f"Retained cover sealing synchronization failed for '{ret_cname}': {exc}"
+                        ) from exc
+                    pre_rc_tup = self._seal_stat_tuple(pre_rcst)
+                    if self._seal_stat_tuple(post_rcst) != pre_rc_tup or self._seal_stat_tuple(dir_rcst) != pre_rc_tup:
+                        raise AlbumManifestCorruptError(
+                            f"Retained album cover '{ret_cname}' changed or was substituted during finalization sealing."
+                        )
+                    sealed_retained_covers.append((ret_cname, pre_rc_tup, ret_csha))
+                finally:
+                    try:
+                        os.close(rcfd)
+                    except OSError:
+                        pass
+
             if entries_fd is not None:
                 try:
                     _fsync_dir_fd(entries_fd)
@@ -6246,6 +6324,7 @@ class ProjectStorageManager:
                 "entries": sealed_entries,
                 "retained_entries": sealed_retained_entries,
                 "cover": sealed_cover,
+                "retained_covers": sealed_retained_covers,
             }
         finally:
             if entries_fd is not None:
@@ -6458,6 +6537,41 @@ class ProjectStorageManager:
                 finally:
                     try:
                         os.close(cfd)
+                    except OSError:
+                        pass
+
+            for ret_cname, ret_cstat, ret_csha in sealed.get("retained_covers", []):
+                try:
+                    rcfd = os.open(ret_cname, file_flags, dir_fd=album_dir_fd)
+                except FileNotFoundError as exc:
+                    _handle_missing_or_io(f"Retained album cover '{ret_cname}' missing before publication", exc, is_missing=True)
+                    return
+                except OSError as exc:
+                    _handle_missing_or_io(f"Cannot open retained album cover '{ret_cname}' before publication", exc, is_missing=False)
+                    return
+                try:
+                    try:
+                        rcst = os.fstat(rcfd)
+                    except OSError as exc:
+                        _handle_missing_or_io(f"Cannot stat retained album cover '{ret_cname}' before publication", exc, is_missing=False)
+                        return
+                    if not stat.S_ISREG(rcst.st_mode) or self._seal_stat_tuple(rcst) != ret_cstat:
+                        raise AlbumManifestCorruptError(
+                            f"Retained album cover '{ret_cname}' was substituted or modified before publication."
+                        )
+                    try:
+                        with os.fdopen(os.dup(rcfd), "rb") as rcf:
+                            ret_cov_read = rcf.read()
+                    except OSError as exc:
+                        _handle_missing_or_io(f"Cannot read retained album cover '{ret_cname}' before publication", exc, is_missing=False)
+                        return
+                    if hashlib.sha256(ret_cov_read).hexdigest() != ret_csha:
+                        raise AlbumManifestCorruptError(
+                            f"Retained album cover '{ret_cname}' content changed before publication."
+                        )
+                finally:
+                    try:
+                        os.close(rcfd)
                     except OSError:
                         pass
         finally:
@@ -6725,6 +6839,107 @@ class ProjectStorageManager:
                 except OSError:
                     pass
 
+    def _compute_next_cover_generation_locked(
+        self,
+        album_dir_fd: int,
+        album: AlbumMetadata,
+        journal: Optional[AlbumJournal],
+    ) -> int:
+        """Compute monotonically increasing cover_g<N> generation across manifest, journal, and root dir."""
+        max_gen = int(album.cover_generation) if album.cover_generation is not None else 0
+        if journal is not None:
+            for rcp in journal.tx_receipts:
+                for ref in (*rcp.new_refs, *rcp.superseded_refs):
+                    if ref.role == ArtifactRole.COVER_ART and ref.generation is not None:
+                        max_gen = max(max_gen, int(ref.generation))
+            for ret in journal.retained_artifacts:
+                if ret.kind == ArtifactRole.COVER_ART.value:
+                    if ret.generation is not None:
+                        max_gen = max(max_gen, int(ret.generation))
+                    cm = _GEN_COVER_RE.match(ret.rel_path)
+                    if cm:
+                        max_gen = max(max_gen, int(cm.group(1)))
+            if journal.active_tx is not None:
+                for ref in (*journal.active_tx.staged_refs, *journal.active_tx.superseded_refs):
+                    if ref.role == ArtifactRole.COVER_ART and ref.generation is not None:
+                        max_gen = max(max_gen, int(ref.generation))
+        try:
+            for fname in os.listdir(album_dir_fd):
+                cm = _GEN_COVER_RE.match(fname)
+                if cm:
+                    max_gen = max(max_gen, int(cm.group(1)))
+        except OSError:
+            pass
+        return max_gen + 1
+
+    def _collect_superseded_cover_refs_locked(
+        self,
+        album_dir_fd: int,
+        album: AlbumMetadata,
+    ) -> List[ArtifactRefRecord]:
+        """Collect complete ArtifactRefRecord for the current active cover being superseded."""
+        cover_name: Optional[str] = album.active_cover_filename
+        if cover_name is None:
+            for ext in (".jpg", ".jpeg", ".png", ".webp"):
+                cand = f"cover{ext}"
+                try:
+                    st = os.lstat(cand, dir_fd=album_dir_fd)
+                    if stat.S_ISREG(st.st_mode):
+                        cover_name = cand
+                        break
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:
+                    raise AlbumDurabilityUncertainError(
+                        f"Cannot inspect existing album cover '{cand}': {exc}"
+                    ) from exc
+
+        if cover_name is None:
+            if album.has_cover:
+                raise AlbumDurabilityUncertainError("Existing album cover artwork is missing.")
+            return []
+
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            ffd = os.open(cover_name, file_flags, dir_fd=album_dir_fd)
+        except OSError as exc:
+            raise AlbumDurabilityUncertainError(
+                f"Cannot open existing album cover '{cover_name}' for retention: {exc}"
+            ) from exc
+        try:
+            fst = os.fstat(ffd)
+            if not stat.S_ISREG(fst.st_mode):
+                raise AlbumDurabilityUncertainError(
+                    f"Existing album cover '{cover_name}' is not a regular file."
+                )
+            h = hashlib.sha256()
+            total = 0
+            while True:
+                chunk = os.read(ffd, 65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+                total += len(chunk)
+            return [
+                ArtifactRefRecord(
+                    rel_path=cover_name,
+                    role=ArtifactRole.COVER_ART,
+                    sha256=h.hexdigest(),
+                    size_bytes=total,
+                    entry_id=None,
+                    generation=album.cover_generation,
+                )
+            ]
+        except OSError as exc:
+            raise AlbumDurabilityUncertainError(
+                f"Cannot read existing album cover '{cover_name}' for retention: {exc}"
+            ) from exc
+        finally:
+            try:
+                os.close(ffd)
+            except OSError:
+                pass
+
     def save_album_cover(
         self,
         user_id: str,
@@ -6733,10 +6948,10 @@ class ProjectStorageManager:
         expected_revision: int,
         extension: str = ".jpg",
     ) -> Optional[AlbumMetadata]:
-        """Save initial album cover artwork safely under lock; replacing existing covers is disabled in Phase 1A."""
+        """Save or replace draft album cover artwork via the v2 journal transaction pipeline."""
         expected_revision = self._validate_expected_revision(expected_revision)
         try:
-            album_dir = self._get_album_dir_path(user_id, album_id)
+            self._get_album_dir_path(user_id, album_id)
         except ValueError:
             return None
 
@@ -6750,12 +6965,17 @@ class ProjectStorageManager:
                 loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
                 if not loaded:
                     return None
-                album, data, _ = loaded
+                album, norm_data, manifest_st = loaded
+                evidence: Dict[str, Any] = {}
                 _, journal, consistency = self._validate_album_evidence_phase_a_locked(
-                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
+                    album_id,
+                    album_dir_fd,
+                    raw_album_data=raw_holder[0],
+                    raw_album_identity=(manifest_st.st_dev, manifest_st.st_ino),
+                    evidence_out=evidence,
                 )
                 self._check_album_mutation_eligibility_phase_b_locked(
-                    album_id, journal, consistency, is_enrolled=False
+                    album_id, journal, consistency, is_enrolled=True
                 )
                 if self._is_album_finalized(album):
                     raise AlbumFinalizedError("Cannot update cover artwork on a finalized album.")
@@ -6764,30 +6984,18 @@ class ProjectStorageManager:
                         f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
                     )
 
-                existing_cover = False
-                for ext in (".jpg", ".jpeg", ".png", ".webp"):
-                    try:
-                        os.lstat(f"cover{ext}", dir_fd=album_dir_fd)
-                        existing_cover = True
-                        break
-                    except FileNotFoundError:
-                        continue
-                if album.has_cover or existing_cover:
-                    raise AlbumReplacementDisabledError(
-                        "Replacing existing album cover artwork is temporarily disabled in Phase 1A."
-                    )
-
+                superseded_refs = self._collect_superseded_cover_refs_locked(album_dir_fd, album)
                 self.ensure_quota_available(user_id, len(image_bytes))
 
+                next_gen = self._compute_next_cover_generation_locked(album_dir_fd, album, journal)
                 target_ext = ".png" if extension.lower() == ".png" else ".jpg"
-                cover_name = f"cover{target_ext}"
+                dest_cover_name = f"cover_g{next_gen}{target_ext}"
                 tmp_cover_name = f".staging_cover_{secrets.token_hex(8)}{target_ext}"
 
                 flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
                 fd = os.open(tmp_cover_name, flags, 0o600, dir_fd=album_dir_fd)
                 tmp_exists = True
-                cover_promoted = False
-                manifest_published = False
+                promoted = False
                 try:
                     with os.fdopen(fd, "wb") as f:
                         f.write(image_bytes)
@@ -6795,50 +7003,84 @@ class ProjectStorageManager:
                         os.fsync(f.fileno())
                         os.fchmod(f.fileno(), 0o600)
 
-                    try:
-                        os.lstat(cover_name, dir_fd=album_dir_fd)
-                        raise AlbumReplacementDisabledError(
-                            "Replacing existing album cover artwork is temporarily disabled in Phase 1A."
+                    cov_sha = hashlib.sha256(image_bytes).hexdigest()
+                    new_refs = [
+                        ArtifactRefRecord(
+                            rel_path=dest_cover_name,
+                            role=ArtifactRole.COVER_ART,
+                            sha256=cov_sha,
+                            size_bytes=len(image_bytes),
+                            entry_id=None,
+                            generation=next_gen,
                         )
-                    except FileNotFoundError:
-                        pass
+                    ]
 
-                    os.replace(tmp_cover_name, cover_name, src_dir_fd=album_dir_fd, dst_dir_fd=album_dir_fd)
-                    tmp_exists = False
-                    cover_promoted = True
+                    def _promote_post_intent(is_post_intent: bool) -> None:
+                        nonlocal tmp_exists, promoted
+                        if not is_post_intent or promoted:
+                            return
+                        try:
+                            os.lstat(dest_cover_name, dir_fd=album_dir_fd)
+                            raise AlbumManifestCorruptError(
+                                f"Target cover generation '{dest_cover_name}' already exists."
+                            )
+                        except FileNotFoundError:
+                            pass
+                        os.replace(tmp_cover_name, dest_cover_name, src_dir_fd=album_dir_fd, dst_dir_fd=album_dir_fd)
+                        tmp_exists = False
+                        promoted = True
+                        _fsync_dir_fd(album_dir_fd)
 
-                    data = dict(data)
-                    new_rev = int(data.get("revision", 1)) + 1
-                    data["revision"] = new_rev
-                    data["has_cover"] = True
-                    data["updated_at"] = time.time()
-                    if "revisions" not in data or not isinstance(data["revisions"], list):
-                        data["revisions"] = []
-                    data["revisions"].append({
+                    target_data = dict(norm_data)
+                    new_rev = int(target_data.get("revision", 1)) + 1
+                    target_data["revision"] = new_rev
+                    target_data["has_cover"] = True
+                    target_data["cover_generation"] = next_gen
+                    target_data["active_cover_filename"] = dest_cover_name
+                    target_data["updated_at"] = time.time()
+                    revs = list(target_data.get("revisions") or [])
+                    revs.append({
                         "revision": new_rev,
                         "timestamp": time.time(),
-                        "change_summary": "Updated album cover artwork",
+                        "change_summary": "Replaced album cover artwork" if superseded_refs else "Updated album cover artwork",
                         "changed_fields": ["cover_art"],
                     })
-                    _publish_manifest_atomic_in_dir(album_dir_fd, "album.json", data)
-                    manifest_published = True
-                except ManifestPublishError as mpe:
-                    if cover_promoted and mpe.publish_state == ManifestPublishState.NOT_PUBLISHED:
-                        try:
-                            os.unlink(cover_name, dir_fd=album_dir_fd)
-                        except Exception:
-                            pass
-                    raise (mpe.cause or mpe)
-                except Exception:
-                    if tmp_exists and not cover_promoted:
+                    target_data["revisions"] = revs
+
+                    payload_sha256 = self._compute_update_album_payload_sha256(
+                        "save_album_cover",
+                        expected_revision,
+                        {
+                            "extension": target_ext,
+                            "cover_sha256": cov_sha,
+                            "size_bytes": len(image_bytes),
+                        },
+                    )
+
+                    return self._execute_v2_album_tx_locked(
+                        album_id=album_id,
+                        album_dir_fd=album_dir_fd,
+                        evidence=evidence,
+                        target_data=target_data,
+                        op="save_album_cover",
+                        expected_revision=expected_revision,
+                        payload_sha256=payload_sha256,
+                        idempotency_key=None,
+                        pre_manifest_publish_check=_promote_post_intent,
+                        new_refs=new_refs,
+                        superseded_refs=superseded_refs,
+                    )
+                except Exception as exc:
+                    if tmp_exists and not promoted:
                         try:
                             os.unlink(tmp_cover_name, dir_fd=album_dir_fd)
-                        except Exception:
+                        except OSError:
                             pass
-                    elif cover_promoted and not manifest_published:
+                    elif promoted and not isinstance(exc, AlbumDurabilityUncertainError):
                         try:
-                            os.unlink(cover_name, dir_fd=album_dir_fd)
-                        except Exception:
+                            os.unlink(dest_cover_name, dir_fd=album_dir_fd)
+                            _fsync_dir_fd(album_dir_fd)
+                        except OSError:
                             pass
                     raise
             finally:
@@ -6846,8 +7088,6 @@ class ProjectStorageManager:
                     os.close(album_dir_fd)
                 except OSError:
                     pass
-
-            return self._read_album_unlocked(user_id, album_id)
 
     def get_album_cover_path(self, user_id: str, album_id: str) -> Optional[Path]:
         """Return path to active album cover artwork via shared read context (side-effect-free)."""
