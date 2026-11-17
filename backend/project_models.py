@@ -3,7 +3,7 @@
 import time
 from enum import Enum
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator
 
 
 class WorkspaceStatus(str, Enum):
@@ -236,16 +236,10 @@ class AlbumUpdateRequest(BaseModel):
     genre: Optional[str] = Field(default=None, max_length=100)
     credits: Optional[str] = Field(default=None, max_length=10000)
     status: Optional[WorkspaceStatus] = Field(default=None)
+    expected_revision: StrictInt = Field(..., ge=1)
     tracks: Optional[List[AlbumTrackEntry]] = Field(default=None)
     track_ids: Optional[List[str]] = Field(default=None)
     change_summary: Optional[str] = Field(default=None, max_length=500)
-
-    def model_post_init(self, __context: Any) -> None:
-        if self.tracks is None and self.track_ids is not None:
-            self.tracks = [
-                AlbumTrackEntry(track_number=i + 1, disc_number=1, track_id=tid, take_id=None, is_placeholder=True)
-                for i, tid in enumerate(self.track_ids)
-            ]
 
 
 class AlbumEntryAddRequest(BaseModel):
@@ -254,6 +248,7 @@ class AlbumEntryAddRequest(BaseModel):
     disc_number: int = Field(default=1, ge=1, le=99)
     track_number: Optional[int] = Field(default=None, ge=1, le=999)
     custom_title: Optional[str] = Field(default=None, max_length=200)
+    expected_revision: StrictInt = Field(..., ge=1)
 
 
 class AlbumEntryUpdateRequest(BaseModel):
@@ -261,6 +256,7 @@ class AlbumEntryUpdateRequest(BaseModel):
     clear_take_to_placeholder: bool = Field(default=False)
     disc_number: Optional[int] = Field(default=None, ge=1, le=99)
     custom_title: Optional[str] = Field(default=None, max_length=200)
+    expected_revision: StrictInt = Field(..., ge=1)
 
 
 class AlbumEntryRefreshPreviewResponse(BaseModel):

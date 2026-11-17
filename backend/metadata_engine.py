@@ -77,6 +77,168 @@ def format_slash_field(first: Optional[str], second: Optional[str]) -> str:
     return f or s
 
 
+def _extract_id3_metadata_dict(tags: Any) -> Dict[str, Any]:
+    """Normalize ID3 tag frames into the shared metadata dictionary shape."""
+    def get_text(frame_name: str, default: str = "") -> str:
+        if tags and frame_name in tags:
+            frame = tags[frame_name]
+            if hasattr(frame, "text") and frame.text:
+                return str(frame.text[0]).strip()
+        return default
+
+    raw_track = get_text("TRCK")
+    track_num, total_tracks = parse_split_slash(raw_track)
+
+    raw_disc = get_text("TPOS")
+    disc_num, total_discs = parse_split_slash(raw_disc)
+
+    year = get_text("TDRC")
+    if not year:
+        year = get_text("TYER")
+
+    comment = ""
+    if tags:
+        for k, v in tags.items():
+            if k.startswith("COMM"):
+                if hasattr(v, "text") and v.text:
+                    comment = str(v.text[0]).strip()
+                    break
+
+    lyrics = ""
+    if tags:
+        for k, v in tags.items():
+            if k.startswith("USLT"):
+                if hasattr(v, "text") and v.text:
+                    lyrics = str(v.text).strip()
+                    break
+
+    synced_lyrics = []
+    if tags:
+        for k, v in tags.items():
+            if k.startswith("SYLT"):
+                if hasattr(v, "text") and v.text:
+                    for item in v.text:
+                        if isinstance(item, (list, tuple)) and len(item) >= 2:
+                            synced_lyrics.append({"text": str(item[0]), "time_ms": int(item[1])})
+                    break
+
+    return {
+        "title": get_text("TIT2"),
+        "artist": get_text("TPE1"),
+        "album": get_text("TALB"),
+        "album_artist": get_text("TPE2"),
+        "composer": get_text("TCOM"),
+        "genre": get_text("TCON"),
+        "year": year,
+        "track_number": track_num,
+        "total_tracks": total_tracks,
+        "disc_number": disc_num,
+        "total_discs": total_discs,
+        "bpm": get_text("TBPM"),
+        "comment": comment,
+        "lyrics": lyrics,
+        "synced_lyrics": synced_lyrics,
+    }
+
+
+def _extract_m4a_metadata_dict(tags: Any) -> Dict[str, Any]:
+    """Normalize M4A/MP4 atoms into the shared metadata dictionary shape."""
+    tags = tags or {}
+    metadata: Dict[str, Any] = {}
+    for field, atom in M4A_TEXT_FIELDS.items():
+        values = tags.get(atom, [])
+        metadata[field] = str(values[0]).strip() if values else ""
+    for atom, first, total in [("trkn", "track_number", "total_tracks"), ("disk", "disc_number", "total_discs")]:
+        values = tags.get(atom, [(0, 0)])[0]
+        metadata[first], metadata[total] = (str(value) if value else "" for value in values)
+    bpm = tags.get("tmpo", [0])[0]
+    metadata["bpm"] = str(bpm) if bpm else ""
+    metadata["synced_lyrics"] = []
+    return metadata
+
+
+def extract_metadata_from_fd(fd: int, ext: str) -> Dict[str, Any]:
+    """Extract normalized metadata and rounded duration directly from an open audio descriptor."""
+    fmt = (ext or "").strip().lower().lstrip(".")
+    os.lseek(fd, 0, os.SEEK_SET)
+    dup_fd = os.dup(fd)
+    try:
+        f = os.fdopen(dup_fd, "rb")
+    except BaseException:
+        os.close(dup_fd)
+        raise
+
+    with f:
+        if fmt == "m4a":
+            audio = MP4(f)
+            codec = audio.info.codec or ""
+            if not (codec.startswith("mp4a") or codec in ("alac", "Opus")):
+                raise ValueError("Unsupported M4A audio codec; expected AAC, ALAC, or Opus.")
+            return {
+                "metadata": _extract_m4a_metadata_dict(audio.tags or {}),
+                "duration": round(getattr(audio.info, "length", 0.0), 2),
+            }
+
+        if fmt == "wav":
+            audio = WAVE(f)
+            if (
+                audio.info.audio_format not in (1, 3, 65534)
+                or audio.info.channels <= 0
+                or audio.info.sample_rate <= 0
+                or audio.info.bits_per_sample <= 0
+                or audio.info.length <= 0
+            ):
+                raise ValueError("Unsupported or invalid WAV audio stream.")
+            metadata = _extract_id3_metadata_dict(audio.tags)
+            proc_fd_path = Path(f"/proc/self/fd/{fd}")
+            if proc_fd_path.exists():
+                info_tags = read_info(proc_fd_path)
+                for key, value in info_tags.items():
+                    if not metadata.get(key):
+                        metadata[key] = value
+            return {
+                "metadata": metadata,
+                "duration": round(getattr(audio.info, "length", 0.0), 2),
+            }
+
+        if fmt == "mp3":
+            audio = None
+            tags: Any = None
+            try:
+                audio = MP3(f)
+            except HeaderNotFoundError:
+                f.seek(0)
+                try:
+                    tags = ID3(f)
+                except Exception as e:
+                    raise ValueError(f"Could not parse MP3 file: {str(e)}")
+            except Exception as e:
+                raise ValueError(f"Invalid MP3 audio: {str(e)}")
+
+            if audio is not None:
+                tags = audio.tags if audio.tags is not None else None
+                if tags is None:
+                    f.seek(0)
+                    try:
+                        tags = ID3(f)
+                    except ID3NoHeaderError:
+                        tags = {}
+                    except Exception:
+                        tags = {}
+
+            duration = (
+                round(getattr(audio.info, "length", 0.0), 2)
+                if audio is not None and audio.info is not None
+                else 0.0
+            )
+            return {
+                "metadata": _extract_id3_metadata_dict(tags),
+                "duration": duration,
+            }
+
+        raise ValueError(f"Unsupported audio format: {ext}")
+
+
 def extract_metadata_and_artwork(file_path: Path) -> Dict[str, Any]:
     """Inspect a supported audio file and return normalized tags, stream info, and artwork."""
     descriptor = audio_format(file_path)
@@ -110,55 +272,6 @@ def extract_metadata_and_artwork(file_path: Path) -> Dict[str, Any]:
         except Exception:
             tags = {}
 
-    # Helper for text tags
-    def get_text(frame_name: str, default: str = "") -> str:
-        if tags and frame_name in tags:
-            frame = tags[frame_name]
-            if hasattr(frame, "text") and frame.text:
-                return str(frame.text[0]).strip()
-        return default
-
-    # Track and Disc parsing
-    raw_track = get_text("TRCK")
-    track_num, total_tracks = parse_split_slash(raw_track)
-
-    raw_disc = get_text("TPOS")
-    disc_num, total_discs = parse_split_slash(raw_disc)
-
-    # Year (check TDRC first, then TYER)
-    year = get_text("TDRC")
-    if not year:
-        year = get_text("TYER")
-
-    # Comment (find COMM frame)
-    comment = ""
-    if tags:
-        for k, v in tags.items():
-            if k.startswith("COMM"):
-                if hasattr(v, "text") and v.text:
-                    comment = str(v.text[0]).strip()
-                    break
-
-    # Lyrics (find USLT frame)
-    lyrics = ""
-    if tags:
-        for k, v in tags.items():
-            if k.startswith("USLT"):
-                if hasattr(v, "text") and v.text:
-                    lyrics = str(v.text).strip()
-                    break
-
-    # Synced lyrics (find SYLT frame)
-    synced_lyrics = []
-    if tags:
-        for k, v in tags.items():
-            if k.startswith("SYLT"):
-                if hasattr(v, "text") and v.text:
-                    for item in v.text:
-                        if isinstance(item, (list, tuple)) and len(item) >= 2:
-                            synced_lyrics.append({"text": str(item[0]), "time_ms": int(item[1])})
-                    break
-
     # Audio stream properties
     duration = 0.0
     bitrate = 0
@@ -184,23 +297,7 @@ def extract_metadata_and_artwork(file_path: Path) -> Dict[str, Any]:
         artwork_base64 = f"data:{artwork_mime};base64,{base64.b64encode(img_data).decode('ascii')}"
 
     result = {
-        "metadata": {
-            "title": get_text("TIT2"),
-            "artist": get_text("TPE1"),
-            "album": get_text("TALB"),
-            "album_artist": get_text("TPE2"),
-            "composer": get_text("TCOM"),
-            "genre": get_text("TCON"),
-            "year": year,
-            "track_number": track_num,
-            "total_tracks": total_tracks,
-            "disc_number": disc_num,
-            "total_discs": total_discs,
-            "bpm": get_text("TBPM"),
-            "comment": comment,
-            "lyrics": lyrics,
-            "synced_lyrics": synced_lyrics,
-        },
+        "metadata": _extract_id3_metadata_dict(tags),
         "audio_info": {
             **descriptor,
             "duration": duration,
@@ -401,16 +498,7 @@ def _extract_m4a(file_path):
     if not (codec.startswith("mp4a") or codec in ("alac", "Opus")):
         raise ValueError("Unsupported M4A audio codec; expected AAC, ALAC, or Opus.")
     tags = audio.tags or {}
-    metadata = {}
-    for field, atom in M4A_TEXT_FIELDS.items():
-        values = tags.get(atom, [])
-        metadata[field] = str(values[0]).strip() if values else ""
-    for atom, first, total in [("trkn", "track_number", "total_tracks"), ("disk", "disc_number", "total_discs")]:
-        values = tags.get(atom, [(0, 0)])[0]
-        metadata[first], metadata[total] = (str(value) if value else "" for value in values)
-    bpm = tags.get("tmpo", [0])[0]
-    metadata["bpm"] = str(bpm) if bpm else ""
-    metadata["synced_lyrics"] = []
+    metadata = _extract_m4a_metadata_dict(tags)
     art = _m4a_artwork(tags)
     return {
         "metadata": metadata,

@@ -18,6 +18,9 @@
     quota: null,
     activeAlbum: null,
     pickTrackEditingEntryId: null,
+    pickTrackTakesLoaded: false,
+    pickTrackLoadSeq: 0,
+    pickTrackModalSessionId: 0,
     pendingRefreshPreview: null,
     loadedProjectTake: null,
     expandedTrackIds: new Set(),
@@ -773,12 +776,19 @@
     btnInspect.addEventListener('click', () => openAlbumDetailModal(album.id));
     headerActions.appendChild(btnInspect);
 
-    const btnDelete = document.createElement('button');
-    btnDelete.className = 'btn btn-secondary btn-sm btn-icon-only btn-delete-track';
-    btnDelete.title = 'Delete Album';
-    btnDelete.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
-    btnDelete.addEventListener('click', () => confirmDeleteAlbum(album.id, album.title));
-    headerActions.appendChild(btnDelete);
+    const isFinalized = !!(album.is_finalized || album.status === 'completed');
+    const hasProtectedContent = !!(
+      album.has_cover
+      || (Array.isArray(album.tracks) && album.tracks.some(t => !t.is_placeholder || t.has_owned_audio || t.take_id))
+    );
+    if (!isFinalized && !hasProtectedContent) {
+      const btnDelete = document.createElement('button');
+      btnDelete.className = 'btn btn-secondary btn-sm btn-icon-only btn-delete-track';
+      btnDelete.title = 'Delete Album';
+      btnDelete.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
+      btnDelete.addEventListener('click', () => confirmDeleteAlbum(album.id, album.title, album.revision || 1));
+      headerActions.appendChild(btnDelete);
+    }
 
     headerRow.appendChild(headerActions);
     card.appendChild(headerRow);
@@ -1026,13 +1036,16 @@
           actionGroup.appendChild(btnDown);
         }
 
-        const btnRemove = document.createElement('button');
-        btnRemove.type = 'button';
-        btnRemove.className = 'btn btn-ghost btn-xs text-danger';
-        btnRemove.title = 'Remove from Album';
-        btnRemove.textContent = '✕';
-        btnRemove.addEventListener('click', () => removeAlbumTrack(entry));
-        actionGroup.appendChild(btnRemove);
+        const isEntryRecorded = !entry.is_placeholder || entry.has_owned_audio || entry.take_id;
+        if (!isEntryRecorded) {
+          const btnRemove = document.createElement('button');
+          btnRemove.type = 'button';
+          btnRemove.className = 'btn btn-ghost btn-xs text-danger';
+          btnRemove.title = 'Remove from Album';
+          btnRemove.textContent = '✕';
+          btnRemove.addEventListener('click', () => removeAlbumTrack(entry));
+          actionGroup.appendChild(btnRemove);
+        }
       }
 
       if (entry.has_owned_audio && entry.id) {
@@ -1075,8 +1088,9 @@
     if (!state.activeAlbum || !entry || !entry.id) return;
     if (state.activeAlbum.is_finalized || state.activeAlbum.status === 'completed') return;
     const albumId = state.activeAlbum.id;
+    const expectedRevision = encodeURIComponent(state.activeAlbum.revision || 1);
     try {
-      const res = await fetch(`/api/projects/albums/${albumId}/entries/${entry.id}`, {
+      const res = await fetch(`/api/projects/albums/${albumId}/entries/${entry.id}?expected_revision=${expectedRevision}`, {
         method: 'DELETE',
       });
       if (res.ok) {
@@ -1098,11 +1112,34 @@
     }
   }
 
+  function closePickTrackModal() {
+    state.pickTrackModalSessionId += 1;
+    state.pickTrackLoadSeq += 1;
+    state.pickTrackTakesLoaded = false;
+    state.pickTrackEditingEntryId = null;
+    if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.disabled = true;
+    if (dom.modalPickTrackForAlbum) dom.modalPickTrackForAlbum.classList.add('hidden');
+  }
+
   async function loadTakesForPickTrackModal(trackId, preferredTakeId = null, preferPlaceholder = false) {
+    const reqSeq = ++state.pickTrackLoadSeq;
+    const modalSession = state.pickTrackModalSessionId;
+    const targetTrackId = trackId || '';
+    const targetEntryId = state.pickTrackEditingEntryId;
+
+    const isStalePickRequest = () => (
+      reqSeq !== state.pickTrackLoadSeq
+      || modalSession !== state.pickTrackModalSessionId
+      || state.pickTrackEditingEntryId !== targetEntryId
+      || (dom.selectPickTrack && (dom.selectPickTrack.value || '') !== targetTrackId)
+    );
+
+    state.pickTrackTakesLoaded = false;
+    if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.disabled = true;
     if (!dom.pickTrackTakesGroup || !dom.pickTrackTakesList) return;
     dom.pickTrackTakesList.innerHTML = '';
 
-    if (!trackId) {
+    if (!targetTrackId) {
       dom.pickTrackTakesGroup.classList.add('hidden');
       return;
     }
@@ -1114,25 +1151,36 @@
     dom.pickTrackTakesList.appendChild(loadingEl);
 
     try {
-      const res = await fetch(`/api/projects/tracks/${trackId}`);
+      const res = await fetch(`/api/projects/tracks/${targetTrackId}`);
+      if (isStalePickRequest()) return;
       if (!res.ok) {
         dom.pickTrackTakesList.innerHTML = '';
         const errEl = document.createElement('div');
         errEl.className = 'takes-error';
-        errEl.textContent = 'Failed to load takes for selected track.';
+        errEl.textContent = 'Failed to load takes for selected track. Please close and retry.';
         dom.pickTrackTakesList.appendChild(errEl);
+        state.pickTrackTakesLoaded = false;
+        if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.disabled = true;
         return;
       }
       const data = await res.json();
+      if (isStalePickRequest()) return;
       const track = data.track || {};
       const takes = Array.isArray(data.takes) ? data.takes : [];
       dom.pickTrackTakesList.innerHTML = '';
 
-      let defaultVal = '';
+      const editingEntry = (targetEntryId && state.activeAlbum && Array.isArray(state.activeAlbum.tracks))
+        ? state.activeAlbum.tracks.find(t => t.id === targetEntryId)
+        : null;
+      const editingRecordedEntry = !!(
+        editingEntry && (!editingEntry.is_placeholder || editingEntry.has_owned_audio || editingEntry.take_id)
+      );
+
+      let defaultVal = editingRecordedEntry ? null : '';
       if (!preferPlaceholder && takes.length > 0) {
         if (preferredTakeId && takes.some(t => t.id === preferredTakeId)) {
           defaultVal = preferredTakeId;
-        } else {
+        } else if (!editingRecordedEntry) {
           const masterTake = takes.find(t => t.is_master) || takes.find(t => t.id === track.primary_take_id) || takes[0];
           defaultVal = masterTake ? masterTake.id : '';
         }
@@ -1194,6 +1242,15 @@
       }
 
       if (takes.length === 0) {
+        if (editingRecordedEntry) {
+          const unavailableEl = document.createElement('div');
+          unavailableEl.className = 'takes-error';
+          unavailableEl.textContent = 'Source take unavailable; existing album recording is preserved.';
+          dom.pickTrackTakesList.appendChild(unavailableEl);
+          state.pickTrackTakesLoaded = false;
+          if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.disabled = true;
+          return;
+        }
         appendTakeRadioRow(
           '',
           'Placeholder (No Takes Uploaded)',
@@ -1202,6 +1259,12 @@
           true
         );
       } else {
+        if (editingRecordedEntry && preferredTakeId && !takes.some(t => t.id === preferredTakeId)) {
+          const warnEl = document.createElement('div');
+          warnEl.className = 'takes-error';
+          warnEl.textContent = 'Source take unavailable; existing album recording is preserved.';
+          dom.pickTrackTakesList.appendChild(warnEl);
+        }
         takes.forEach(take => {
           const durStr = formatDurationSeconds(take.duration_seconds);
           const mbStr = `${((take.size_bytes || 0) / (1024 * 1024)).toFixed(2)} MB`;
@@ -1215,20 +1278,29 @@
           appendTakeRadioRow(take.id, take.label || 'Take', metaParts.join(' • '), isMaster, defaultVal === take.id);
         });
 
-        appendTakeRadioRow(
-          '',
-          'Placeholder (Unassigned — Choose Take Later)',
-          'Keep entry in tracklist without copying a recording yet.',
-          false,
-          defaultVal === ''
-        );
+        if (!editingRecordedEntry) {
+          appendTakeRadioRow(
+            '',
+            'Placeholder (Unassigned — Choose Take Later)',
+            'Keep entry in tracklist without copying a recording yet.',
+            false,
+            defaultVal === ''
+          );
+        }
+      }
+      state.pickTrackTakesLoaded = true;
+      if (dom.btnConfirmAddTrackToAlbum) {
+        dom.btnConfirmAddTrackToAlbum.disabled = !!(editingRecordedEntry && !defaultVal);
       }
     } catch (e) {
+      if (isStalePickRequest()) return;
       dom.pickTrackTakesList.innerHTML = '';
       const errEl = document.createElement('div');
       errEl.className = 'takes-error';
-      errEl.textContent = 'Network error loading track takes.';
+      errEl.textContent = 'Network error loading track takes. Please close and retry.';
       dom.pickTrackTakesList.appendChild(errEl);
+      state.pickTrackTakesLoaded = false;
+      if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.disabled = true;
     }
   }
 
@@ -1240,7 +1312,11 @@
     }
 
     const entry = (editingEntry && editingEntry.id && editingEntry.track_id) ? editingEntry : null;
+    state.pickTrackModalSessionId += 1;
+    state.pickTrackLoadSeq += 1;
     state.pickTrackEditingEntryId = entry ? entry.id : null;
+    state.pickTrackTakesLoaded = false;
+    if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.disabled = true;
 
     dom.selectPickTrack.innerHTML = '<option value="">-- Choose Track --</option>';
     state.tracks.forEach(t => {
@@ -1281,8 +1357,23 @@
     const checkedRadio = dom.pickTrackTakesList
       ? dom.pickTrackTakesList.querySelector('input[name="pickAlbumTakeId"]:checked')
       : null;
-    const takeId = checkedRadio && checkedRadio.value ? checkedRadio.value : null;
+    if (!state.pickTrackTakesLoaded || !checkedRadio) {
+      showToast('Please wait for track takes to finish loading or select a valid recording option.', 'error');
+      return;
+    }
+    if (state.pickTrackEditingEntryId) {
+      const currentEntry = Array.isArray(state.activeAlbum.tracks)
+        ? state.activeAlbum.tracks.find(t => t.id === state.pickTrackEditingEntryId)
+        : null;
+      if (!currentEntry || currentEntry.track_id !== trackId) {
+        showToast('Album entry context changed. Please reopen the take picker.', 'error');
+        closePickTrackModal();
+        return;
+      }
+    }
+    const takeId = checkedRadio.value ? checkedRadio.value : null;
     const albumId = state.activeAlbum.id;
+    const expectedRevision = state.activeAlbum.revision || 1;
 
     if (dom.btnConfirmAddTrackToAlbum) dom.btnConfirmAddTrackToAlbum.disabled = true;
     try {
@@ -1292,6 +1383,7 @@
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            expected_revision: expectedRevision,
             take_id: takeId,
             clear_take_to_placeholder: takeId === null,
           }),
@@ -1301,6 +1393,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            expected_revision: expectedRevision,
             track_id: trackId,
             take_id: takeId,
             disc_number: 1,
@@ -1317,7 +1410,7 @@
         }
         renderAlbumRevisionHistory(updated);
         renderSequencerTable(state.activeAlbum);
-        if (dom.modalPickTrackForAlbum) dom.modalPickTrackForAlbum.classList.add('hidden');
+        closePickTrackModal();
         showToast(takeId ? '✨ Recording copied into album!' : '📌 Placeholder added to album tracklist', 'success');
         fetchAlbums();
         fetchQuota();
@@ -1493,8 +1586,9 @@
       return;
     }
     if (dom.btnFinalizeAlbum) dom.btnFinalizeAlbum.disabled = true;
+    const expectedRevision = encodeURIComponent(state.activeAlbum.revision || 1);
     try {
-      const res = await fetch(`/api/projects/albums/${albumId}/finalize`, {
+      const res = await fetch(`/api/projects/albums/${albumId}/finalize?expected_revision=${expectedRevision}`, {
         method: 'POST',
       });
       if (res.ok) {
@@ -1538,6 +1632,7 @@
       album_artist: dom.editAlbumArtist.value.trim() || null,
       year: dom.editAlbumYear.value ? parseInt(dom.editAlbumYear.value, 10) : null,
       genre: dom.editAlbumGenre.value.trim() || null,
+      expected_revision: state.activeAlbum.revision || 1,
       tracks: state.activeAlbum.tracks || [],
     };
 
@@ -1579,6 +1674,7 @@
     const albumId = state.activeAlbum.id;
 
     const formData = new FormData();
+    formData.append('expected_revision', String(state.activeAlbum.revision || 1));
     formData.append('file', file);
 
     showToast('Uploading album cover art...', 'info', 2000);
@@ -1591,17 +1687,23 @@
       if (res.ok) {
         const data = await res.json().catch(() => null);
         const updated = (data && data.album) ? data.album : (data && data.id ? data : null);
-        if (updated) {
-          state.activeAlbum = updated;
-          if (dom.albumDetailRevisionPill) {
-            dom.albumDetailRevisionPill.textContent = `Rev ${updated.revision || 1}`;
+        if (state.activeAlbum && state.activeAlbum.id === albumId) {
+          if (updated && updated.id === albumId) {
+            state.activeAlbum = updated;
+            if (dom.albumDetailRevisionPill) {
+              dom.albumDetailRevisionPill.textContent = `Rev ${updated.revision || 1}`;
+            }
+            renderAlbumRevisionHistory(updated);
           }
-          renderAlbumRevisionHistory(updated);
+          if (dom.albumDetailArtwork) {
+            dom.albumDetailArtwork.src = `/api/projects/albums/${albumId}/artwork?t=${Date.now()}`;
+            dom.albumDetailArtwork.classList.remove('hidden');
+          }
+          if (dom.albumDetailPlaceholder) {
+            dom.albumDetailPlaceholder.classList.add('hidden');
+          }
         }
         showToast('✨ Master album artwork saved!', 'success');
-        dom.albumDetailArtwork.src = `/api/projects/albums/${albumId}/artwork?t=${Date.now()}`;
-        dom.albumDetailArtwork.classList.remove('hidden');
-        dom.albumDetailPlaceholder.classList.add('hidden');
         fetchAlbums();
       } else {
         const err = await res.json().catch(() => ({}));
@@ -1931,16 +2033,21 @@
     }
   }
 
-  async function confirmDeleteAlbum(albumId, title) {
+  async function confirmDeleteAlbum(albumId, title, expectedRevision = 1) {
     if (!confirm(`Are you sure you want to delete Album Release "${title}"?`)) return;
+    const revParam = encodeURIComponent(expectedRevision || 1);
     try {
-      const res = await fetch(`/api/projects/albums/${albumId}`, {
+      const res = await fetch(`/api/projects/albums/${albumId}?expected_revision=${revParam}`, {
         method: 'DELETE',
       });
       if (res.ok) {
         showToast('Album Release deleted', 'info');
         fetchAlbums();
         fetchQuota();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        const msg = err.detail && typeof err.detail === 'object' ? (err.detail.message || 'Could not delete album') : (err.detail || 'Could not delete album');
+        showToast(msg, 'error', 5000);
       }
     } catch (e) {
       showToast('Error deleting album', 'error');
@@ -2956,6 +3063,10 @@
     document.querySelectorAll('[data-close-modal]').forEach(btn => {
       btn.addEventListener('click', () => {
         const modalId = btn.dataset.closeModal;
+        if (modalId === 'modalPickTrackForAlbum') {
+          closePickTrackModal();
+          return;
+        }
         const modal = document.getElementById(modalId);
         if (modal) modal.classList.add('hidden');
       });
@@ -2963,13 +3074,15 @@
 
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        if (dom.modalPickTrackForAlbum && !dom.modalPickTrackForAlbum.classList.contains('hidden')) {
+          closePickTrackModal();
+        }
         [
           dom.modalNewTrack,
           dom.modalUploadTake,
           dom.modalUploadStem,
           dom.modalNewAlbum,
           dom.modalAlbumDetail,
-          dom.modalPickTrackForAlbum,
           dom.modalRefreshAlbumEntry,
           dom.modalSaveToProject,
         ].forEach(m => {

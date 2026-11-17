@@ -412,6 +412,7 @@ def test_album_workspace_api(client, auth_cookies):
     files = {"file": ("cover.jpg", io.BytesIO(VALID_JPEG_BYTES), "image/jpeg")}
     res = client.post(
         f"/api/projects/albums/{album_id}/artwork",
+        data={"expected_revision": str(album["revision"])},
         files=files,
         cookies=auth_cookies,
     )
@@ -429,10 +430,18 @@ def test_album_workspace_api(client, auth_cookies):
     albums = res.json()
     assert any(a["id"] == album_id for a in albums)
 
-    # 5. Delete album
-    res = client.delete(f"/api/projects/albums/{album_id}", cookies=auth_cookies)
-    assert res.status_code == 200
-    assert res.json()["status"] == "deleted"
+    # 5. Phase 1A blocks deleting album with artwork (409), while empty draft album deletes cleanly (200)
+    cur_rev = client.get(f"/api/projects/albums/{album_id}", cookies=auth_cookies).json()["revision"]
+    res = client.delete(f"/api/projects/albums/{album_id}?expected_revision={cur_rev}", cookies=auth_cookies)
+    assert res.status_code == 409
+
+    empty_alb = client.post("/api/projects/albums", json={"title": "Empty Draft"}, cookies=auth_cookies).json()
+    res_empty = client.delete(
+        f"/api/projects/albums/{empty_alb['id']}?expected_revision={empty_alb['revision']}",
+        cookies=auth_cookies,
+    )
+    assert res_empty.status_code == 200
+    assert res_empty.json()["status"] == "deleted"
 
 
 def test_storage_quota_telemetry(client, auth_cookies):
@@ -573,7 +582,7 @@ def test_api_cross_tenant_isolation(client, setup_auth_environment, auth_cookies
     res = client.get(f"/api/projects/albums/{album_id}", cookies=bob_cookies)
     assert res.status_code == 404
 
-    res = client.delete(f"/api/projects/albums/{album_id}", cookies=bob_cookies)
+    res = client.delete(f"/api/projects/albums/{album_id}?expected_revision=1", cookies=bob_cookies)
     assert res.status_code == 404
 
     # Bob's track list is empty
@@ -674,23 +683,25 @@ def test_album_tracklist_sequencing_and_synchronization(client, auth_cookies):
     res2 = client.post("/api/projects/tracks", json={"title": "Track Two"}, cookies=auth_cookies)
     trk2_id = res2.json()["id"]
 
-    # Create album
+    # Create album and add entries via dedicated /entries endpoint
     res_alb = client.post("/api/projects/albums", json={"title": "Sequenced Album"}, cookies=auth_cookies)
     assert res_alb.status_code == 201
-    alb_id = res_alb.json()["id"]
+    alb = res_alb.json()
+    alb_id = alb["id"]
 
-    # Update album with sequenced tracks list
-    tracks_payload = [
-        {"track_number": 1, "disc_number": 1, "track_id": trk1_id, "take_id": None, "custom_title": "Custom Track One"},
-        {"track_number": 2, "disc_number": 1, "track_id": trk2_id, "take_id": None, "custom_title": None},
-    ]
-    res_patch = client.patch(
-        f"/api/projects/albums/{alb_id}",
-        json={"tracks": tracks_payload},
+    r_add1 = client.post(
+        f"/api/projects/albums/{alb_id}/entries",
+        json={"expected_revision": alb["revision"], "track_id": trk1_id, "take_id": None, "custom_title": "Custom Track One"},
         cookies=auth_cookies,
     )
-    assert res_patch.status_code == 200
-    data = res_patch.json()
+    assert r_add1.status_code == 201
+    r_add2 = client.post(
+        f"/api/projects/albums/{alb_id}/entries",
+        json={"expected_revision": r_add1.json()["revision"], "track_id": trk2_id, "take_id": None},
+        cookies=auth_cookies,
+    )
+    assert r_add2.status_code == 201
+    data = r_add2.json()
     assert len(data["tracks"]) == 2
     assert data["tracks"][0]["track_id"] == trk1_id
     assert data["tracks"][0]["custom_title"] == "Custom Track One"
@@ -704,10 +715,10 @@ def test_album_tracklist_sequencing_and_synchronization(client, auth_cookies):
     assert len(get_data["tracks"]) == 2
     assert get_data["track_ids"] == [trk1_id, trk2_id]
 
-    # Test patch with track_ids format
+    # Test patch with track_ids format (reordering existing entries)
     res_patch_ids = client.patch(
         f"/api/projects/albums/{alb_id}",
-        json={"track_ids": [trk2_id, trk1_id]},
+        json={"expected_revision": get_data["revision"], "track_ids": [trk2_id, trk1_id]},
         cookies=auth_cookies,
     )
     assert res_patch_ids.status_code == 200
@@ -751,7 +762,12 @@ def test_revision_tracking_api(client, auth_cookies):
 
     alb_patch = client.patch(
         f"/api/projects/albums/{album_id}",
-        json={"genre": "Ambient", "year": 2026, "change_summary": "Added genre and release year"},
+        json={
+            "expected_revision": album["revision"],
+            "genre": "Ambient",
+            "year": 2026,
+            "change_summary": "Added genre and release year",
+        },
         cookies=auth_cookies,
     )
     assert alb_patch.status_code == 200
@@ -762,7 +778,7 @@ def test_revision_tracking_api(client, auth_cookies):
 
     # Clean up
     client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
-    client.delete(f"/api/projects/albums/{album_id}", cookies=auth_cookies)
+    client.delete(f"/api/projects/albums/{album_id}?expected_revision={patched_alb['revision']}", cookies=auth_cookies)
 
 
 def test_ingest_session_updates_track_revision(client, auth_cookies):
@@ -1219,11 +1235,12 @@ def test_direct_take_upload_and_master_switch_album_release_compatibility(client
 
     alb = client.post("/api/projects/albums", json={"title": "Compat EP"}, cookies=auth_cookies).json()
     alb_id = alb["id"]
-    client.patch(
-        f"/api/projects/albums/{alb_id}",
-        json={"tracks": [{"track_number": 1, "disc_number": 1, "track_id": track_id, "take_id": None}]},
+    add_res = client.post(
+        f"/api/projects/albums/{alb_id}/entries",
+        json={"expected_revision": alb["revision"], "track_id": track_id, "take_id": None},
         cookies=auth_cookies,
     )
+    assert add_res.status_code == 201
 
     # Direct upload of a new master take updates track primary_take_id
     t2 = client.post(
@@ -1250,7 +1267,7 @@ def test_direct_take_upload_and_master_switch_album_release_compatibility(client
     assert alb_after["track_ids"] == [track_id]
     assert alb_after["tracks"][0]["track_id"] == track_id
 
-    client.delete(f"/api/projects/albums/{alb_id}", cookies=auth_cookies)
+    client.delete(f"/api/projects/albums/{alb_id}?expected_revision={alb_after['revision']}", cookies=auth_cookies)
     client.delete(f"/api/projects/tracks/{track_id}", cookies=auth_cookies)
 
 
@@ -1478,7 +1495,7 @@ def test_album_entries_take_selection_streaming_and_isolation(client, auth_cooki
     # 1. Add 0-take track as placeholder
     r1 = client.post(
         f"/api/projects/albums/{album_id}/entries",
-        json={"track_id": trk_zero["id"], "take_id": None, "disc_number": 1},
+        json={"expected_revision": album["revision"], "track_id": trk_zero["id"], "take_id": None, "disc_number": 1},
         cookies=auth_cookies,
     )
     assert r1.status_code == 201
@@ -1491,7 +1508,7 @@ def test_album_entries_take_selection_streaming_and_isolation(client, auth_cooki
     # 2. Add explicit non-master take -> does NOT alter track master
     r2 = client.post(
         f"/api/projects/albums/{album_id}/entries",
-        json={"track_id": trk_rec["id"], "take_id": t_alt["id"], "disc_number": 1},
+        json={"expected_revision": a1["revision"], "track_id": trk_rec["id"], "take_id": t_alt["id"], "disc_number": 1},
         cookies=auth_cookies,
     )
     assert r2.status_code == 201
@@ -1508,12 +1525,18 @@ def test_album_entries_take_selection_streaming_and_isolation(client, auth_cooki
     # 3. Add same track again using master take with custom_title
     r3 = client.post(
         f"/api/projects/albums/{album_id}/entries",
-        json={"track_id": trk_rec["id"], "take_id": t_master["id"], "custom_title": "Main Song (Master Cut)"},
+        json={
+            "expected_revision": a2["revision"],
+            "track_id": trk_rec["id"],
+            "take_id": t_master["id"],
+            "custom_title": "Main Song (Master Cut)",
+        },
         cookies=auth_cookies,
     )
     assert r3.status_code == 201
-    assert len(r3.json()["tracks"]) == 3
-    assert len({t["id"] for t in r3.json()["tracks"]}) == 3
+    a3 = r3.json()
+    assert len(a3["tracks"]) == 3
+    assert len({t["id"] for t in a3["tracks"]}) == 3
 
     # 4. Mutate & delete source t_alt -> album stream, HTTP 206 range, and download still serve wav_alt
     ingest_edit_sess = storage_manager.create_session("alt_changed.wav", ".wav")
@@ -1547,20 +1570,27 @@ def test_album_entries_take_selection_streaming_and_isolation(client, auth_cooki
     assert dl_res.status_code == 200
     assert dl_res.content == wav_alt
 
-    # 5. Clear e_alt to placeholder via PATCH, then delete it via DELETE
+    # 5. Phase 1A blocks clearing or removing a recorded entry (409), while placeholder entry can still be removed (200)
     p_res = client.patch(
         f"/api/projects/albums/{album_id}/entries/{e_alt['id']}",
-        json={"clear_take_to_placeholder": True},
+        json={"expected_revision": a3["revision"], "clear_take_to_placeholder": True},
         cookies=auth_cookies,
     )
-    assert p_res.status_code == 200
-    cleared_entry = next(t for t in p_res.json()["tracks"] if t["id"] == e_alt["id"])
-    assert cleared_entry["is_placeholder"] is True
-    assert client.get(f"/api/projects/albums/{album_id}/entries/{e_alt['id']}/stream", cookies=auth_cookies).status_code == 404
+    assert p_res.status_code == 409
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{e_alt['id']}/stream", cookies=auth_cookies).status_code == 200
 
-    d_res = client.delete(f"/api/projects/albums/{album_id}/entries/{e_alt['id']}", cookies=auth_cookies)
-    assert d_res.status_code == 200
-    assert len(d_res.json()["tracks"]) == 2
+    d_rec_res = client.delete(
+        f"/api/projects/albums/{album_id}/entries/{e_alt['id']}?expected_revision={a3['revision']}",
+        cookies=auth_cookies,
+    )
+    assert d_rec_res.status_code == 409
+
+    d_ph_res = client.delete(
+        f"/api/projects/albums/{album_id}/entries/{e_placeholder['id']}?expected_revision={a3['revision']}",
+        cookies=auth_cookies,
+    )
+    assert d_ph_res.status_code == 200
+    assert len(d_ph_res.json()["tracks"]) == 2
 
 
 def test_album_entries_cross_track_and_cross_tenant_rejected(client, setup_auth_environment, auth_cookies):
@@ -1608,24 +1638,33 @@ def test_album_entries_cross_track_and_cross_tenant_rejected(client, setup_auth_
     # Valid entry on Track A
     ok_res = client.post(
         f"/api/projects/albums/{album_id}/entries",
-        json={"track_id": trk_a["id"], "take_id": tak_a["id"]},
+        json={"expected_revision": album["revision"], "track_id": trk_a["id"], "take_id": tak_a["id"]},
         cookies=auth_cookies,
     )
     assert ok_res.status_code == 201
-    entry_id = ok_res.json()["tracks"][0]["id"]
+    alb_after_ok = ok_res.json()
+    entry_id = alb_after_ok["tracks"][0]["id"]
 
     # Wrong track for take on POST -> 400
     bad_post = client.post(
         f"/api/projects/albums/{album_id}/entries",
-        json={"track_id": trk_a["id"], "take_id": tak_b["id"]},
+        json={"expected_revision": alb_after_ok["revision"], "track_id": trk_a["id"], "take_id": tak_b["id"]},
         cookies=auth_cookies,
     )
     assert bad_post.status_code == 400
 
-    # Wrong track for take on PATCH -> 400
+    # Wrong track for take on PATCH against a placeholder entry -> 400
+    ph_res = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"expected_revision": alb_after_ok["revision"], "track_id": trk_a["id"], "take_id": None},
+        cookies=auth_cookies,
+    )
+    assert ph_res.status_code == 201
+    alb_after_ph = ph_res.json()
+    ph_entry_id = alb_after_ph["tracks"][1]["id"]
     bad_patch = client.patch(
-        f"/api/projects/albums/{album_id}/entries/{entry_id}",
-        json={"take_id": tak_b["id"]},
+        f"/api/projects/albums/{album_id}/entries/{ph_entry_id}",
+        json={"expected_revision": alb_after_ph["revision"], "take_id": tak_b["id"]},
         cookies=auth_cookies,
     )
     assert bad_patch.status_code == 400
@@ -1633,15 +1672,19 @@ def test_album_entries_cross_track_and_cross_tenant_rejected(client, setup_auth_
     # Cross-tenant track/take reference -> 400
     bad_tenant = client.post(
         f"/api/projects/albums/{album_id}/entries",
-        json={"track_id": bob_trk["id"], "take_id": bob_tak["id"]},
+        json={"expected_revision": alb_after_ph["revision"], "track_id": bob_trk["id"], "take_id": bob_tak["id"]},
         cookies=auth_cookies,
     )
     assert bad_tenant.status_code == 400
 
     # Bob cannot access or mutate admin album entry endpoints
-    assert client.post(f"/api/projects/albums/{album_id}/entries", json={"track_id": bob_trk["id"], "take_id": bob_tak["id"]}, cookies=bob_cookies).status_code == 404
+    assert client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"expected_revision": 1, "track_id": bob_trk["id"], "take_id": bob_tak["id"]},
+        cookies=bob_cookies,
+    ).status_code == 404
     assert client.get(f"/api/projects/albums/{album_id}/entries/{entry_id}/stream", cookies=bob_cookies).status_code == 404
-    assert client.post(f"/api/projects/albums/{album_id}/finalize", cookies=bob_cookies).status_code == 404
+    assert client.post(f"/api/projects/albums/{album_id}/finalize?expected_revision=1", cookies=bob_cookies).status_code == 404
 
 
 def test_album_entry_refresh_api_preview_confirm_and_conflict(client, auth_cookies):
@@ -1666,7 +1709,7 @@ def test_album_entry_refresh_api_preview_confirm_and_conflict(client, auth_cooki
     album = client.post("/api/projects/albums", json={"title": "Refresh API LP"}, cookies=auth_cookies).json()
     album = client.post(
         f"/api/projects/albums/{album['id']}/entries",
-        json={"track_id": trk["id"], "take_id": tak["id"]},
+        json={"expected_revision": album["revision"], "track_id": trk["id"], "take_id": tak["id"]},
         cookies=auth_cookies,
     ).json()
     entry_id = album["tracks"][0]["id"]
@@ -1698,18 +1741,8 @@ def test_album_entry_refresh_api_preview_confirm_and_conflict(client, auth_cooki
     assert preview["album_audio_stream_url"].endswith(f"/entries/{entry_id}/stream")
     assert preview["source_audio_stream_url"].endswith(f"/takes/{tak['id']}/stream")
 
-    # Mutate source again after preview -> 409 Conflict
-    sess2_id, sess2_path = storage_manager.create_session("v3.wav", ".wav")
-    with open(sess2_path, "wb") as f:
-        f.write(wav_3)
-    client.post(
-        "/api/projects/ingest-session",
-        json={"track_id": trk["id"], "take_id": tak["id"]},
-        cookies={**auth_cookies, SESSION_COOKIE_NAME: create_signed_session_token(sess2_id)},
-    )
-    storage_manager.cleanup_session(sess2_id)
-
-    conflict_res = client.post(
+    # Phase 1A blocks POST /refresh with 409 Conflict and preserves wav_1
+    refresh_res = client.post(
         f"/api/projects/albums/{album['id']}/entries/{entry_id}/refresh",
         json={
             "expected_source_revision": preview["expected_source_revision"],
@@ -1718,22 +1751,9 @@ def test_album_entry_refresh_api_preview_confirm_and_conflict(client, auth_cooki
         },
         cookies=auth_cookies,
     )
-    assert conflict_res.status_code == 409
+    assert refresh_res.status_code == 409
+    assert "temporarily disabled" in refresh_res.json()["detail"].lower()
     assert client.get(f"/api/projects/albums/{album['id']}/entries/{entry_id}/download", cookies=auth_cookies).content == wav_1
-
-    # Fresh preview & confirm succeeds
-    fresh = client.get(f"/api/projects/albums/{album['id']}/entries/{entry_id}/refresh-preview", cookies=auth_cookies).json()
-    ok_refresh = client.post(
-        f"/api/projects/albums/{album['id']}/entries/{entry_id}/refresh",
-        json={
-            "expected_source_revision": fresh["expected_source_revision"],
-            "expected_source_audio_sha256": fresh["expected_source_audio_sha256"],
-            "expected_source_updated_at": fresh["expected_source_updated_at"],
-        },
-        cookies=auth_cookies,
-    )
-    assert ok_refresh.status_code == 200
-    assert client.get(f"/api/projects/albums/{album['id']}/entries/{entry_id}/download", cookies=auth_cookies).content == wav_3
 
 
 def test_album_finalization_api_validation_and_lock_enforcement(client, auth_cookies):
@@ -1761,12 +1781,15 @@ def test_album_finalization_api_validation_and_lock_enforcement(client, auth_coo
     # Add placeholder -> finalize fails 400 with structured error list
     add_ph = client.post(
         f"/api/projects/albums/{album_id}/entries",
-        json={"track_id": trk["id"], "take_id": None},
+        json={"expected_revision": album["revision"], "track_id": trk["id"], "take_id": None},
         cookies=auth_cookies,
     ).json()
     entry_id = add_ph["tracks"][0]["id"]
 
-    fail_fin = client.post(f"/api/projects/albums/{album_id}/finalize", cookies=auth_cookies)
+    fail_fin = client.post(
+        f"/api/projects/albums/{album_id}/finalize?expected_revision={add_ph['revision']}",
+        cookies=auth_cookies,
+    )
     assert fail_fin.status_code == 400
     detail = fail_fin.json()["detail"]
     assert isinstance(detail, dict) and len(detail.get("errors", [])) >= 1
@@ -1774,43 +1797,57 @@ def test_album_finalization_api_validation_and_lock_enforcement(client, auth_coo
     # Assign real take -> finalize succeeds
     assign_res = client.patch(
         f"/api/projects/albums/{album_id}/entries/{entry_id}",
-        json={"take_id": tak["id"]},
+        json={"expected_revision": add_ph["revision"], "take_id": tak["id"]},
         cookies=auth_cookies,
     )
     assert assign_res.status_code == 200
+    assigned_rev = assign_res.json()["revision"]
 
-    fin_res = client.post(f"/api/projects/albums/{album_id}/finalize", cookies=auth_cookies)
+    fin_res = client.post(
+        f"/api/projects/albums/{album_id}/finalize?expected_revision={assigned_rev}",
+        cookies=auth_cookies,
+    )
     assert fin_res.status_code == 200
     fin_album = fin_res.json()
     assert fin_album["is_finalized"] is True
     assert fin_album["status"] == "completed"
     assert fin_album["finalized_at"] is not None
+    fin_rev = fin_album["revision"]
 
     # All prohibited mutating / refresh routes return 409 Conflict
-    assert client.patch(f"/api/projects/albums/{album_id}", json={"title": "Edited"}, cookies=auth_cookies).status_code == 409
+    assert client.patch(
+        f"/api/projects/albums/{album_id}",
+        json={"expected_revision": fin_rev, "title": "Edited"},
+        cookies=auth_cookies,
+    ).status_code == 409
     assert client.post(
         f"/api/projects/albums/{album_id}/artwork",
+        data={"expected_revision": str(fin_rev)},
         files={"file": ("cover.jpg", VALID_JPEG_BYTES, "image/jpeg")},
         cookies=auth_cookies,
     ).status_code == 409
     assert client.post(
         f"/api/projects/albums/{album_id}/entries",
-        json={"track_id": trk["id"], "take_id": tak["id"]},
+        json={"expected_revision": fin_rev, "track_id": trk["id"], "take_id": tak["id"]},
         cookies=auth_cookies,
     ).status_code == 409
     assert client.patch(
         f"/api/projects/albums/{album_id}/entries/{entry_id}",
-        json={"clear_take_to_placeholder": True},
+        json={"expected_revision": fin_rev, "clear_take_to_placeholder": True},
         cookies=auth_cookies,
     ).status_code == 409
-    assert client.delete(f"/api/projects/albums/{album_id}/entries/{entry_id}", cookies=auth_cookies).status_code == 409
+    assert client.delete(
+        f"/api/projects/albums/{album_id}/entries/{entry_id}?expected_revision={fin_rev}",
+        cookies=auth_cookies,
+    ).status_code == 409
     assert client.get(f"/api/projects/albums/{album_id}/entries/{entry_id}/refresh-preview", cookies=auth_cookies).status_code == 409
     assert client.post(
         f"/api/projects/albums/{album_id}/entries/{entry_id}/refresh",
         json={"expected_source_revision": 1, "expected_source_audio_sha256": "a" * 64},
         cookies=auth_cookies,
     ).status_code == 409
-    assert client.post(f"/api/projects/albums/{album_id}/finalize", cookies=auth_cookies).status_code == 409
+    assert client.post(f"/api/projects/albums/{album_id}/finalize?expected_revision={fin_rev}", cookies=auth_cookies).status_code == 409
+    assert client.delete(f"/api/projects/albums/{album_id}?expected_revision={fin_rev}", cookies=auth_cookies).status_code == 409
 
     # Read-only download & stream still work
     assert client.get(f"/api/projects/albums/{album_id}/entries/{entry_id}/stream", cookies=auth_cookies).status_code == 200
@@ -2165,6 +2202,1146 @@ vm.runInNewContext(code, context);
     )
     assert proc.returncode == 0, f"Node Album VM test failed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
     assert "NODE_ALBUM_VM_OK" in proc.stdout
+
+
+def test_phase1a_api_replacement_blocked_legacy_reorder_and_unknown_ids(client, auth_cookies):
+    """Verify HTTP 409 replacement blocks across endpoints, legacy track_ids preservation, and unknown ale_ ID rejection."""
+    from backend.security import generate_album_entry_id
+
+    wav_1 = _make_api_wav_bytes(0.3)
+    wav_2 = _make_api_wav_bytes(0.5)
+    trk_a = client.post("/api/projects/tracks", json={"title": "Song A"}, cookies=auth_cookies).json()
+    trk_b = client.post("/api/projects/tracks", json={"title": "Song B"}, cookies=auth_cookies).json()
+
+    t_a1 = client.post(
+        f"/api/projects/tracks/{trk_a['id']}/takes",
+        data={"label": "Take A1", "is_master": "true"},
+        files={"file": ("a1.wav", wav_1, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    t_a2 = client.post(
+        f"/api/projects/tracks/{trk_a['id']}/takes",
+        data={"label": "Take A2", "is_master": "false"},
+        files={"file": ("a2.wav", wav_2, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    t_b1 = client.post(
+        f"/api/projects/tracks/{trk_b['id']}/takes",
+        data={"label": "Take B1", "is_master": "true"},
+        files={"file": ("b1.wav", wav_2, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    album = client.post("/api/projects/albums", json={"title": "Safeguard API LP"}, cookies=auth_cookies).json()
+    album_id = album["id"]
+
+    # Add two entries from trk_a (t_a1, t_a2) and one from trk_b (t_b1)
+    alb = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"expected_revision": album["revision"], "track_id": trk_a["id"], "take_id": t_a1["id"]},
+        cookies=auth_cookies,
+    ).json()
+    alb = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"expected_revision": alb["revision"], "track_id": trk_a["id"], "take_id": t_a2["id"]},
+        cookies=auth_cookies,
+    ).json()
+    alb = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"expected_revision": alb["revision"], "track_id": trk_b["id"], "take_id": t_b1["id"]},
+        cookies=auth_cookies,
+    ).json()
+    e_a1, e_a2, e_b1 = alb["tracks"]
+
+    # 1. Replacing owned audio via PATCH /entries/{id} returns 409 and preserves wav_1
+    res_rep_entry = client.patch(
+        f"/api/projects/albums/{album_id}/entries/{e_a1['id']}",
+        json={"expected_revision": alb["revision"], "take_id": t_a2["id"]},
+        cookies=auth_cookies,
+    )
+    assert res_rep_entry.status_code == 409
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{e_a1['id']}/download", cookies=auth_cookies).content == wav_1
+
+    # 2. Bypass attempt via PATCH /albums/{id} also returns 409 and preserves wav_1
+    res_rep_alb = client.patch(
+        f"/api/projects/albums/{album_id}",
+        json={
+            "expected_revision": alb["revision"],
+            "tracks": [
+                {**e_a1, "take_id": t_a2["id"]},
+                e_a2,
+                e_b1,
+            ]
+        },
+        cookies=auth_cookies,
+    )
+    assert res_rep_alb.status_code == 409
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{e_a1['id']}/download", cookies=auth_cookies).content == wav_1
+
+    # 3. Legacy track_ids reorder preserves all entries, takes, and owned audio
+    res_legacy = client.patch(
+        f"/api/projects/albums/{album_id}",
+        json={"expected_revision": alb["revision"], "track_ids": [trk_b["id"], trk_a["id"], trk_a["id"]]},
+        cookies=auth_cookies,
+    )
+    assert res_legacy.status_code == 200
+    reordered = res_legacy.json()
+    assert [t["id"] for t in reordered["tracks"]] == [e_b1["id"], e_a1["id"], e_a2["id"]]
+    assert [t["take_id"] for t in reordered["tracks"]] == [t_b1["id"], t_a1["id"], t_a2["id"]]
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{e_a1['id']}/download", cookies=auth_cookies).content == wav_1
+
+    # 4. Ambiguous legacy track_ids dropping duplicate trk_a returns 400 or 409 without mutating entries
+    res_ambig = client.patch(
+        f"/api/projects/albums/{album_id}",
+        json={"expected_revision": reordered["revision"], "track_ids": [trk_b["id"], trk_a["id"]]},
+        cookies=auth_cookies,
+    )
+    assert res_ambig.status_code in (400, 409)
+
+    # 5. Unknown explicit ale_ ID returns 400 without deleting existing audio
+    unknown_id = generate_album_entry_id()
+    res_unknown = client.patch(
+        f"/api/projects/albums/{album_id}",
+        json={
+            "expected_revision": reordered["revision"],
+            "tracks": [
+                {"id": unknown_id, "track_number": 1, "disc_number": 1, "track_id": trk_b["id"], "take_id": t_b1["id"]},
+                e_a1,
+                e_a2,
+            ]
+        },
+        cookies=auth_cookies,
+    )
+    assert res_unknown.status_code == 400
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{e_b1['id']}/download", cookies=auth_cookies).content == wav_2
+
+
+def test_phase1a_frontend_take_picker_error_and_finalized_delete_hidden():
+    """Verify failed Take-picker loads never submit placeholder PATCH/POST and finalized album cards hide delete."""
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node_bin = shutil.which("node")
+    assert node_bin is not None, "node is required to execute frontend behavior tests"
+
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+
+    harness = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
+
+const elements = {};
+function findAll(root, pred, out = []) {
+  for (const c of (root.children || [])) {
+    if (pred(c)) out.push(c);
+    findAll(c, pred, out);
+  }
+  return out;
+}
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set();
+  const el = {
+    id,
+    tagName: tag.toUpperCase(),
+    value: '',
+    name: '',
+    type: '',
+    textContent: '',
+    className: '',
+    checked: false,
+    disabled: false,
+    files: [],
+    listeners,
+    dataset: {},
+    style: {},
+    children: [],
+    _innerHTML: '',
+    classList: {
+      add: (c) => classSet.add(c),
+      remove: (c) => classSet.delete(c),
+      contains: (c) => classSet.has(c),
+      toggle: (c, force) => {
+        if (force === true) classSet.add(c);
+        else if (force === false) classSet.delete(c);
+        else if (classSet.has(c)) classSet.delete(c);
+        else classSet.add(c);
+      },
+    },
+    set innerHTML(val) {
+      this._innerHTML = val;
+      if (val === '' || (typeof val === 'string' && val.startsWith('<option'))) this.children = [];
+    },
+    get innerHTML() { return this._innerHTML; },
+    addEventListener: (ev, fn) => {
+      if (!listeners[ev]) listeners[ev] = [];
+      listeners[ev].push(fn);
+    },
+    dispatchEvent: async (ev) => {
+      if (!ev.target) ev.target = el;
+      for (const fn of (listeners[ev.type] || [])) await fn(ev);
+    },
+    setAttribute: () => {},
+    appendChild: (child) => { el.children.push(child); return child; },
+    querySelector: (sel) => findAll(el, c => {
+      if (sel === 'input[name="pickAlbumTakeId"]:checked') return c.tagName === 'INPUT' && c.name === 'pickAlbumTakeId' && !!c.checked;
+      return false;
+    })[0] || null,
+    querySelectorAll: (sel) => findAll(el, c => {
+      if (sel === 'button') return c.tagName === 'BUTTON';
+      return false;
+    }),
+    reset: () => {},
+  };
+  return el;
+}
+
+const getEl = (id) => {
+  if (!elements[id]) elements[id] = makeEl(id);
+  return elements[id];
+};
+const docListeners = {};
+const toasts = [];
+const mutationCalls = [];
+let trackFetchMode = 'http_500';
+
+const albumsPayload = [
+  {
+    id: 'alb_draft1',
+    title: 'Draft LP',
+    status: 'draft',
+    is_finalized: false,
+    revision: 1,
+    revisions: [],
+    tracks: [
+      { id: 'ale_owned1', track_number: 1, disc_number: 1, track_id: 'trk_1', take_id: 'tak_1', is_placeholder: false, has_owned_audio: true, snapshot: { source_track_title: 'Song 1', source_take_label: 'Take 1', format: 'wav' } }
+    ],
+  },
+  {
+    id: 'alb_final1',
+    title: 'Final LP',
+    status: 'completed',
+    is_finalized: true,
+    revision: 2,
+    revisions: [],
+    tracks: [
+      { id: 'ale_owned2', track_number: 1, disc_number: 1, track_id: 'trk_1', take_id: 'tak_1', is_placeholder: false, has_owned_audio: true, snapshot: { source_track_title: 'Song 1', source_take_label: 'Take 1', format: 'wav' } }
+    ],
+  },
+  {
+    id: 'alb_empty1',
+    title: 'Empty Draft LP',
+    status: 'draft',
+    is_finalized: false,
+    has_cover: false,
+    revision: 3,
+    revisions: [],
+    tracks: [],
+  },
+];
+
+const context = {
+  console, setTimeout, clearTimeout, Set, Map, Number, Date,
+  CustomEvent: class CustomEvent { constructor(n, o) { this.type = n; this.detail = o && o.detail; } },
+  FormData: class FormData { constructor() { this.fields = []; } append(k, v) { this.fields.push([k, v]); } },
+  sessionStorage: { _s: {}, getItem(k) { return this._s[k] || null; }, setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } },
+  document: {
+    getElementById: getEl,
+    createElement(tag) { return makeEl('', tag); },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: (ev, fn) => {
+      if (!docListeners[ev]) docListeners[ev] = [];
+      docListeners[ev].push(fn);
+    },
+  },
+  window: {
+    MP3MetaFixMaxUploadSizeMb: 150,
+    showToast: (msg, type) => toasts.push({ msg, type }),
+    addEventListener: () => {},
+    dispatchEvent: () => {},
+  },
+  confirm: () => true,
+  fetch: async (url, opts) => {
+    if (opts && (opts.method === 'POST' || opts.method === 'PATCH' || opts.method === 'DELETE')) {
+      mutationCalls.push({ url, opts });
+    }
+    if (url === '/api/projects/tracks') {
+      return { ok: true, status: 200, json: async () => ([{ id: 'trk_1', title: 'Song 1', status: 'draft', takes_count: 1 }]) };
+    }
+    if (url === '/api/projects/tracks/trk_1') {
+      if (trackFetchMode === 'http_500') return { ok: false, status: 500, json: async () => ({ detail: 'Server error' }) };
+      throw new Error('Simulated network failure');
+    }
+    if (url === '/api/projects/albums') {
+      return { ok: true, status: 200, json: async () => albumsPayload };
+    }
+    if (url === '/api/projects/albums/alb_draft1') {
+      return { ok: true, status: 200, json: async () => albumsPayload[0] };
+    }
+    if (url === '/api/storage/quota') {
+      return { ok: true, status: 200, json: async () => ({ used_bytes: 0, limit_bytes: 1000, usage_percent: 0 }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+};
+context.window.window = context.window;
+
+vm.runInNewContext(code, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  await new Promise(r => setTimeout(r, 20));
+  const cards = getEl('albumsGridContainer').children;
+  if (cards.length !== 3) throw new Error('Expected 3 album cards');
+  const draftBtns = cards[0].querySelectorAll('button');
+  const finalBtns = cards[1].querySelectorAll('button');
+  const emptyBtns = cards[2].querySelectorAll('button');
+  if (draftBtns.some(b => (b.className || '').includes('btn-delete-track'))) {
+    throw new Error('Recorded draft album card must NOT render delete button in Phase 1A');
+  }
+  if (finalBtns.some(b => (b.className || '').includes('btn-delete-track'))) {
+    throw new Error('Finalized album card must NOT render delete button');
+  }
+  if (!emptyBtns.some(b => (b.className || '').includes('btn-delete-track'))) {
+    throw new Error('Empty draft album card should keep delete button');
+  }
+
+  // Open draft album
+  await draftBtns[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+
+  // 1. Add Track with HTTP 500 take lookup -> confirm disabled, clicking confirm sends NO POST
+  trackFetchMode = 'http_500';
+  await getEl('btnAddTrackToSequencer').listeners['click'][0]();
+  getEl('selectPickTrack').value = 'trk_1';
+  await getEl('selectPickTrack').dispatchEvent({ type: 'change' });
+  await new Promise(r => setTimeout(r, 20));
+  if (!getEl('btnConfirmAddTrackToAlbum').disabled) {
+    throw new Error('Expected confirm button disabled when take lookup returns HTTP 500');
+  }
+  await getEl('btnConfirmAddTrackToAlbum').listeners['click'][0]();
+  if (mutationCalls.length !== 0) {
+    throw new Error('Failed take lookup in Add Track mode must NOT send POST!');
+  }
+
+  // 2. Change Take with network error -> confirm disabled, clicking confirm sends NO PATCH (never wipes recording)
+  trackFetchMode = 'network_error';
+  const rowButtons = getEl('albumSequencerTbody').children[0].querySelectorAll('button');
+  const changeBtn = rowButtons.find(b => b.textContent === 'Take');
+  await changeBtn.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (!getEl('btnConfirmAddTrackToAlbum').disabled) {
+    throw new Error('Expected confirm button disabled on network error in Change Take mode');
+  }
+  await getEl('btnConfirmAddTrackToAlbum').listeners['click'][0]();
+  if (mutationCalls.length !== 0) {
+    throw new Error('Failed take lookup in Change Take mode must NOT send PATCH!');
+  }
+  console.log('NODE_PHASE1A_VM_OK');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    env = os.environ.copy()
+    env["TARGET_JS_PATH"] = str(projects_js_path)
+    proc = subprocess.run(
+        [node_bin, "-e", harness],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert proc.returncode == 0, f"Node Phase 1A VM test failed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+    assert "NODE_PHASE1A_VM_OK" in proc.stdout
+
+
+def test_phase1a1_api_optimistic_concurrency_implicit_clear_and_corrupt_manifest(client, auth_cookies):
+    """Verify REST expected_revision 409 guards, implicit take_id preservation/rejection, and fail-closed corrupt manifests."""
+    import backend.projects_api as papi_mod
+
+    wav_1 = _make_api_wav_bytes(0.4)
+    trk = client.post("/api/projects/tracks", json={"title": "Concurrency Song"}, cookies=auth_cookies).json()
+    tak = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        data={"label": "Take 1", "is_master": "true"},
+        files={"file": ("c1.wav", wav_1, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    alb = client.post("/api/projects/albums", json={"title": "Concurrency LP"}, cookies=auth_cookies).json()
+    album_id = alb["id"]
+    alb = client.post(
+        f"/api/projects/albums/{album_id}/entries",
+        json={"expected_revision": alb["revision"], "track_id": trk["id"], "take_id": tak["id"]},
+        cookies=auth_cookies,
+    ).json()
+    e1 = alb["tracks"][0]
+    rev_current = alb["revision"]
+
+    # 1. PATCH /albums/{id} omitting take_id preserves e1's owned recording
+    res_meta = client.patch(
+        f"/api/projects/albums/{album_id}",
+        json={
+            "expected_revision": rev_current,
+            "tracks": [{"id": e1["id"], "track_id": trk["id"], "track_number": 1, "disc_number": 1, "custom_title": "Edited"}],
+        },
+        cookies=auth_cookies,
+    )
+    assert res_meta.status_code == 200
+    assert res_meta.json()["tracks"][0]["take_id"] == tak["id"]
+    assert res_meta.json()["tracks"][0]["has_owned_audio"] is True
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{e1['id']}/download", cookies=auth_cookies).content == wav_1
+    rev_after_edit = res_meta.json()["revision"]
+
+    # 2. PATCH /albums/{id} with explicit take_id: null on recorded entry -> 400 or 409
+    res_null = client.patch(
+        f"/api/projects/albums/{album_id}",
+        json={
+            "expected_revision": rev_after_edit,
+            "tracks": [{"id": e1["id"], "track_id": trk["id"], "take_id": None, "track_number": 1}],
+        },
+        cookies=auth_cookies,
+    )
+    assert res_null.status_code in (400, 409)
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{e1['id']}/download", cookies=auth_cookies).content == wav_1
+
+    # 3. Stale expected_revision -> 409 Conflict
+    res_stale = client.patch(
+        f"/api/projects/albums/{album_id}",
+        json={"expected_revision": rev_current, "title": "Stale Overwrite", "tracks": []},
+        cookies=auth_cookies,
+    )
+    assert res_stale.status_code == 409
+    assert len(client.get(f"/api/projects/albums/{album_id}", cookies=auth_cookies).json()["tracks"]) == 1
+
+    # 4. Omitting expected_revision -> 422 Unprocessable Entity at API boundary
+    res_omit_rev = client.patch(
+        f"/api/projects/albums/{album_id}",
+        json={"tracks": []},
+        cookies=auth_cookies,
+    )
+    assert res_omit_rev.status_code == 422
+    assert client.get(f"/api/projects/albums/{album_id}/entries/{e1['id']}/download", cookies=auth_cookies).content == wav_1
+
+    # 5. Corrupting album.json -> GET and DELETE fail closed with 422 and preserve owned audio on disk
+    mgr = papi_mod.project_storage_manager
+    user_id = client.get("/api/auth/status", cookies=auth_cookies).json().get("user", {}).get("id")
+    if not user_id:
+        from backend.auth import verify_auth_token
+        user_id = verify_auth_token(auth_cookies[AUTH_COOKIE_NAME])
+    album_dir = mgr._get_album_dir(user_id, album_id)
+    (album_dir / "album.json").write_text("{broken_json", encoding="utf-8")
+
+    assert client.get(f"/api/projects/albums/{album_id}", cookies=auth_cookies).status_code == 422
+    assert client.delete(f"/api/projects/albums/{album_id}?expected_revision={rev_after_edit}", cookies=auth_cookies).status_code == 422
+    assert mgr.get_album_entry_audio_path(user_id, album_id, e1["id"]).read_bytes() == wav_1
+
+
+def test_phase1a1_frontend_overlapping_take_picker_and_expected_revision():
+    """Verify stale late-success Take-picker responses are discarded and saveAlbumChanges sends expected_revision."""
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node_bin = shutil.which("node")
+    assert node_bin is not None, "node is required to execute frontend behavior tests"
+
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+
+    harness = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
+
+const elements = {};
+function findAll(root, pred, out = []) {
+  for (const c of (root.children || [])) {
+    if (pred(c)) out.push(c);
+    findAll(c, pred, out);
+  }
+  return out;
+}
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set();
+  const el = {
+    id, tagName: tag.toUpperCase(), value: '', name: '', type: '', textContent: '', className: '',
+    checked: false, disabled: false, files: [], listeners, dataset: {}, style: {}, children: [], _innerHTML: '',
+    classList: {
+      add: (c) => classSet.add(c),
+      remove: (c) => classSet.delete(c),
+      contains: (c) => classSet.has(c),
+      toggle: (c, force) => {
+        if (force === true) classSet.add(c);
+        else if (force === false) classSet.delete(c);
+        else if (classSet.has(c)) classSet.delete(c);
+        else classSet.add(c);
+      },
+    },
+    set innerHTML(val) {
+      this._innerHTML = val;
+      if (val === '' || (typeof val === 'string' && val.startsWith('<option'))) this.children = [];
+    },
+    get innerHTML() { return this._innerHTML; },
+    addEventListener: (ev, fn) => { if (!listeners[ev]) listeners[ev] = []; listeners[ev].push(fn); },
+    dispatchEvent: async (ev) => {
+      if (!ev.target) ev.target = el;
+      for (const fn of (listeners[ev.type] || [])) await fn(ev);
+    },
+    setAttribute: () => {},
+    appendChild: (child) => { el.children.push(child); return child; },
+    querySelector: (sel) => findAll(el, c => sel === 'input[name="pickAlbumTakeId"]:checked' ? (c.tagName === 'INPUT' && c.name === 'pickAlbumTakeId' && !!c.checked) : false)[0] || null,
+    querySelectorAll: (sel) => findAll(el, c => sel === 'button' ? c.tagName === 'BUTTON' : (sel === 'input[name="pickAlbumTakeId"]' ? (c.tagName === 'INPUT' && c.name === 'pickAlbumTakeId') : false)),
+    reset: () => {},
+  };
+  return el;
+}
+
+const getEl = (id) => { if (!elements[id]) elements[id] = makeEl(id); return elements[id]; };
+const docListeners = {};
+const mutationCalls = [];
+const albumObj = {
+  id: 'alb_rev5',
+  title: 'Rev LP',
+  status: 'draft',
+  is_finalized: false,
+  revision: 5,
+  revisions: [],
+  tracks: [{ id: 'ale_1', track_number: 1, disc_number: 1, track_id: 'trk_a', take_id: 'tak_1', is_placeholder: false, has_owned_audio: true, snapshot: { source_track_title: 'Track A', source_take_label: 'Take 1', format: 'wav' } }],
+};
+
+const context = {
+  console, setTimeout, clearTimeout, Set, Map, Number, Date,
+  CustomEvent: class CustomEvent { constructor(n, o) { this.type = n; this.detail = o && o.detail; } },
+  FormData: class FormData { constructor() { this.fields = []; } append(k, v) { this.fields.push([k, v]); } },
+  sessionStorage: { _s: {}, getItem(k) { return this._s[k] || null; }, setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } },
+  document: {
+    getElementById: getEl,
+    createElement(tag) { return makeEl('', tag); },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
+  },
+  window: { MP3MetaFixMaxUploadSizeMb: 150, showToast: () => {}, addEventListener: () => {}, dispatchEvent: () => {} },
+  confirm: () => true,
+  fetch: async (url, opts) => {
+    if (opts && (opts.method === 'POST' || opts.method === 'PATCH' || opts.method === 'DELETE')) {
+      mutationCalls.push({ url, opts });
+      if (url === '/api/projects/albums/alb_rev5' && opts.method === 'PATCH') {
+        return { ok: true, status: 200, json: async () => ({ ...albumObj, revision: 6 }) };
+      }
+    }
+    if (url === '/api/projects/tracks') {
+      return { ok: true, status: 200, json: async () => ([
+        { id: 'trk_a', title: 'Track A', status: 'draft', takes_count: 1 },
+        { id: 'trk_b', title: 'Track B', status: 'draft', takes_count: 1 },
+      ]) };
+    }
+    if (url === '/api/projects/tracks/trk_a') {
+      // Slow success (45ms)
+      await new Promise(r => setTimeout(r, 45));
+      return { ok: true, status: 200, json: async () => ({ track: { id: 'trk_a', primary_take_id: 'tak_1' }, takes: [{ id: 'tak_1', label: 'Late Success Take', format: 'wav', is_master: true }] }) };
+    }
+    if (url === '/api/projects/tracks/trk_b') {
+      // Fast failure (5ms)
+      await new Promise(r => setTimeout(r, 5));
+      return { ok: false, status: 500, json: async () => ({ detail: 'Track B failed' }) };
+    }
+    if (url === '/api/projects/albums') return { ok: true, status: 200, json: async () => ([albumObj]) };
+    if (url === '/api/projects/albums/alb_rev5') return { ok: true, status: 200, json: async () => albumObj };
+    if (url === '/api/storage/quota') return { ok: true, status: 200, json: async () => ({ used_bytes: 0, limit_bytes: 1000, usage_percent: 0 }) };
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+};
+context.window.window = context.window;
+
+vm.runInNewContext(code, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  await new Promise(r => setTimeout(r, 20));
+  const inspectBtn = getEl('albumsGridContainer').querySelectorAll('button')[0];
+  await inspectBtn.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+
+  // 1. Overlapping Take-picker: select trk_a (slow success) then immediately trk_b (fast 500 failure)
+  await getEl('btnAddTrackToSequencer').listeners['click'][0]();
+  getEl('selectPickTrack').value = 'trk_a';
+  getEl('selectPickTrack').dispatchEvent({ type: 'change' });
+  getEl('selectPickTrack').value = 'trk_b';
+  getEl('selectPickTrack').dispatchEvent({ type: 'change' });
+
+  // Wait past both responses (65ms)
+  await new Promise(r => setTimeout(r, 65));
+  if (!getEl('btnConfirmAddTrackToAlbum').disabled) {
+    throw new Error('Late success from trk_a must NOT re-enable confirm after trk_b failed!');
+  }
+  const radios = getEl('pickTrackTakesList').querySelectorAll('input[name="pickAlbumTakeId"]');
+  if (radios.length !== 0) {
+    throw new Error('Late success from trk_a must NOT overwrite trk_b error state!');
+  }
+  await getEl('btnConfirmAddTrackToAlbum').listeners['click'][0]();
+  if (mutationCalls.length !== 0) {
+    throw new Error('Stale/failed Take-picker state must NOT trigger POST/PATCH');
+  }
+
+  // 2. Verify saveAlbumChanges sends expected_revision: 5
+  await getEl('btnSaveAlbumDetails').listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 15));
+  const saveCall = mutationCalls.find(c => c.url === '/api/projects/albums/alb_rev5' && c.opts.method === 'PATCH');
+  if (!saveCall) throw new Error('Expected PATCH /api/projects/albums/alb_rev5');
+  const sentBody = JSON.parse(saveCall.opts.body);
+  if (sentBody.expected_revision !== 5) {
+    throw new Error('Expected expected_revision === 5, got ' + sentBody.expected_revision);
+  }
+  console.log('NODE_PHASE1A1_VM_OK');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    env = os.environ.copy()
+    env["TARGET_JS_PATH"] = str(projects_js_path)
+    proc = subprocess.run(
+        [node_bin, "-e", harness],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert proc.returncode == 0, f"Node Phase 1A.1 VM test failed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+    assert "NODE_PHASE1A1_VM_OK" in proc.stdout
+
+
+def test_phase1a_final_api_revision_boundary_and_stream_safety(client, auth_cookies, tmp_path):
+    """Verify 422 on missing expected_revision across all album mutators, 409 on bulk add/remove, and O_NOFOLLOW stream safety."""
+    import backend.projects_api as papi_mod
+
+    wav_1 = _make_api_wav_bytes(0.4)
+    trk = client.post("/api/projects/tracks", json={"title": "Boundary Song"}, cookies=auth_cookies).json()
+    tak = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        data={"label": "Take 1", "is_master": "true"},
+        files={"file": ("b1.wav", wav_1, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    alb = client.post("/api/projects/albums", json={"title": "Boundary LP"}, cookies=auth_cookies).json()
+    alb_id = alb["id"]
+
+    # 1. Missing expected_revision -> 422 on every existing-album mutator
+    assert client.patch(f"/api/projects/albums/{alb_id}", json={"title": "NoRev"}, cookies=auth_cookies).status_code == 422
+    assert client.delete(f"/api/projects/albums/{alb_id}", cookies=auth_cookies).status_code == 422
+    assert client.post(
+        f"/api/projects/albums/{alb_id}/entries",
+        json={"track_id": trk["id"], "take_id": tak["id"]},
+        cookies=auth_cookies,
+    ).status_code == 422
+    assert client.post(f"/api/projects/albums/{alb_id}/finalize", cookies=auth_cookies).status_code == 422
+    assert client.post(
+        f"/api/projects/albums/{alb_id}/artwork",
+        files={"file": ("cover.jpg", VALID_JPEG_BYTES, "image/jpeg")},
+        cookies=auth_cookies,
+    ).status_code == 422
+
+    alb = client.post(
+        f"/api/projects/albums/{alb_id}/entries",
+        json={"expected_revision": alb["revision"], "track_id": trk["id"], "take_id": tak["id"]},
+        cookies=auth_cookies,
+    ).json()
+    e1 = alb["tracks"][0]
+    assert client.patch(
+        f"/api/projects/albums/{alb_id}/entries/{e1['id']}",
+        json={"custom_title": "NoRev"},
+        cookies=auth_cookies,
+    ).status_code == 422
+    assert client.delete(f"/api/projects/albums/{alb_id}/entries/{e1['id']}", cookies=auth_cookies).status_code == 422
+
+    # 2. Bulk PATCH /albums/{id} rejects entry additions/removals with 409
+    assert client.patch(
+        f"/api/projects/albums/{alb_id}",
+        json={"expected_revision": alb["revision"], "tracks": []},
+        cookies=auth_cookies,
+    ).status_code == 409
+
+    # 3. O_NOFOLLOW stream/download protection rejects symlinked audio file with 404
+    mgr = papi_mod.project_storage_manager
+    user_id = papi_mod.auth_manager.verify_token(auth_cookies[AUTH_COOKIE_NAME])
+    assert user_id is not None
+    audio_path = mgr.get_album_entry_audio_path(user_id, alb_id, e1["id"])
+    assert audio_path is not None
+    outside = tmp_path / "secret.wav"
+    outside.write_bytes(b"SECRET")
+    audio_path.unlink()
+    audio_path.symlink_to(outside)
+
+    assert client.get(f"/api/projects/albums/{alb_id}/entries/{e1['id']}/stream", cookies=auth_cookies).status_code == 404
+    assert client.get(f"/api/projects/albums/{alb_id}/entries/{e1['id']}/download", cookies=auth_cookies).status_code == 404
+
+
+def test_phase1a_final_frontend_change_take_zero_takes_and_card_delete_revision():
+    """Verify Change Take mode on recorded entry never auto-selects placeholder on 0 takes/missing take and card delete sends expected_revision."""
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node_bin = shutil.which("node")
+    assert node_bin is not None, "node is required to execute frontend behavior tests"
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+
+    harness = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
+
+const elements = {};
+function findAll(root, pred, out = []) {
+  for (const c of (root.children || [])) {
+    if (pred(c)) out.push(c);
+    findAll(c, pred, out);
+  }
+  return out;
+}
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set();
+  const el = {
+    id, tagName: tag.toUpperCase(), value: '', name: '', type: '', textContent: '', className: '',
+    checked: false, disabled: false, files: [], listeners, dataset: {}, style: {}, children: [], _innerHTML: '',
+    classList: {
+      add: (c) => classSet.add(c),
+      remove: (c) => classSet.delete(c),
+      contains: (c) => classSet.has(c),
+      toggle: (c, force) => { if (force === true) classSet.add(c); else if (force === false) classSet.delete(c); else if (classSet.has(c)) classSet.delete(c); else classSet.add(c); },
+    },
+    set innerHTML(val) { this._innerHTML = val; if (val === '' || (typeof val === 'string' && val.startsWith('<option'))) this.children = []; },
+    get innerHTML() { return this._innerHTML; },
+    addEventListener: (ev, fn) => { if (!listeners[ev]) listeners[ev] = []; listeners[ev].push(fn); },
+    dispatchEvent: async (ev) => { if (!ev.target) ev.target = el; for (const fn of (listeners[ev.type] || [])) await fn(ev); },
+    setAttribute: () => {},
+    appendChild: (child) => { el.children.push(child); return child; },
+    querySelector: (sel) => findAll(el, c => sel === 'input[name="pickAlbumTakeId"]:checked' ? (c.tagName === 'INPUT' && c.name === 'pickAlbumTakeId' && !!c.checked) : false)[0] || null,
+    querySelectorAll: (sel) => findAll(el, c => sel === 'button' ? c.tagName === 'BUTTON' : false),
+    reset: () => {},
+  };
+  return el;
+}
+const getEl = (id) => { if (!elements[id]) elements[id] = makeEl(id); return elements[id]; };
+const docListeners = {};
+const mutationCalls = [];
+let trackTakesPayload = [];
+
+const albumsPayload = [
+  {
+    id: 'alb_rec1', title: 'Recorded LP', status: 'draft', is_finalized: false, has_cover: false, revision: 2, revisions: [],
+    tracks: [{ id: 'ale_r1', track_number: 1, disc_number: 1, track_id: 'trk_1', take_id: 'tak_missing', is_placeholder: false, has_owned_audio: true, snapshot: { source_track_title: 'Song 1', source_take_label: 'Old Take', format: 'wav' } }],
+  },
+  {
+    id: 'alb_empty2', title: 'Empty LP', status: 'draft', is_finalized: false, has_cover: false, revision: 7, revisions: [], tracks: [],
+  },
+];
+
+const context = {
+  console, setTimeout, clearTimeout, Set, Map, Number, Date, encodeURIComponent,
+  CustomEvent: class CustomEvent { constructor(n, o) { this.type = n; this.detail = o && o.detail; } },
+  FormData: class FormData { constructor() { this.fields = []; } append(k, v) { this.fields.push([k, v]); } },
+  sessionStorage: { _s: {}, getItem(k) { return this._s[k] || null; }, setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } },
+  document: {
+    getElementById: getEl,
+    createElement(tag) { return makeEl('', tag); },
+    querySelector: () => null, querySelectorAll: () => [],
+    addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
+  },
+  window: { MP3MetaFixMaxUploadSizeMb: 150, showToast: () => {}, addEventListener: () => {}, dispatchEvent: () => {} },
+  confirm: () => true,
+  fetch: async (url, opts) => {
+    if (opts && (opts.method === 'POST' || opts.method === 'PATCH' || opts.method === 'DELETE')) mutationCalls.push({ url, opts });
+    if (url === '/api/projects/tracks') return { ok: true, status: 200, json: async () => ([{ id: 'trk_1', title: 'Song 1', status: 'draft', takes_count: trackTakesPayload.length }]) };
+    if (url === '/api/projects/tracks/trk_1') return { ok: true, status: 200, json: async () => ({ track: { id: 'trk_1', primary_take_id: null }, takes: trackTakesPayload }) };
+    if (url === '/api/projects/albums') return { ok: true, status: 200, json: async () => albumsPayload };
+    if (url === '/api/projects/albums/alb_rec1') return { ok: true, status: 200, json: async () => albumsPayload[0] };
+    if (url === '/api/storage/quota') return { ok: true, status: 200, json: async () => ({ used_bytes: 0, limit_bytes: 1000, usage_percent: 0 }) };
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+};
+context.window.window = context.window;
+
+vm.runInNewContext(code, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  await new Promise(r => setTimeout(r, 20));
+  const cards = getEl('albumsGridContainer').children;
+  const emptyDelBtn = cards[1].querySelectorAll('button').find(b => (b.className || '').includes('btn-delete-track'));
+  await emptyDelBtn.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  const delCall = mutationCalls.find(c => c.opts.method === 'DELETE');
+  if (!delCall || delCall.url !== '/api/projects/albums/alb_empty2?expected_revision=7') {
+    throw new Error('Expected card delete to send ?expected_revision=7, got ' + JSON.stringify(delCall));
+  }
+
+  // Open recorded draft album and enter Change Take mode with 0 takes
+  mutationCalls.length = 0;
+  trackTakesPayload = [];
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  const changeBtn = getEl('albumSequencerTbody').children[0].querySelectorAll('button').find(b => b.textContent === 'Take');
+  await changeBtn.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (!getEl('btnConfirmAddTrackToAlbum').disabled) {
+    throw new Error('Expected confirm disabled when 0 takes exist in Change Take mode');
+  }
+  if (getEl('pickTrackTakesList').querySelector('input[name="pickAlbumTakeId"]:checked')) {
+    throw new Error('Must NOT auto-select placeholder radio when 0 takes exist in Change Take mode');
+  }
+
+  // Also verify missing source take with another take present does NOT auto-select placeholder or other take
+  trackTakesPayload = [{ id: 'tak_other', label: 'Other Take', format: 'wav', is_master: false, revision: 1 }];
+  await changeBtn.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (!getEl('btnConfirmAddTrackToAlbum').disabled) {
+    throw new Error('Expected confirm disabled when source take is missing in Change Take mode');
+  }
+  if (getEl('pickTrackTakesList').querySelector('input[name="pickAlbumTakeId"]:checked')) {
+    throw new Error('Must NOT auto-select any radio when source take is missing in Change Take mode');
+  }
+
+  console.log('NODE_PHASE1A_FINAL_VM_OK');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    env = os.environ.copy()
+    env["TARGET_JS_PATH"] = str(projects_js_path)
+    proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, env=env, check=False)
+    assert proc.returncode == 0, f"Node Phase 1A Final VM test failed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+    assert "NODE_PHASE1A_FINAL_VM_OK" in proc.stdout
+
+
+def test_phase1a2_api_strict_revisions_fd_cleanup_get_purity_and_artwork_sync(client, auth_cookies, tmp_path):
+    """Verify strict revision types (422), fd cleanup on pre-iteration disconnect, GET side-effect purity, bulk placeholder rejection, and artwork revision sync."""
+    import errno
+    import os
+    import backend.projects_api as papi_mod
+
+    wav_1 = _make_api_wav_bytes(0.4)
+    trk = client.post("/api/projects/tracks", json={"title": "P1A2 Song"}, cookies=auth_cookies).json()
+    tak = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        data={"label": "Take 1", "is_master": "true"},
+        files={"file": ("p1a2.wav", wav_1, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    alb = client.post("/api/projects/albums", json={"title": "P1A2 LP"}, cookies=auth_cookies).json()
+    alb_id = alb["id"]
+    rev = alb["revision"]
+
+    # 1. Malformed revision types rejected with 422 at API boundary
+    for bad_json_rev in (True, False, 1.5, 1.0, "1", 0, -1):
+        assert client.patch(
+            f"/api/projects/albums/{alb_id}",
+            json={"expected_revision": bad_json_rev, "title": "Bad"},
+            cookies=auth_cookies,
+        ).status_code == 422
+    for bad_q_rev in ("true", "1.5", "1.0", "0", "-1", "abc"):
+        assert client.delete(
+            f"/api/projects/albums/{alb_id}?expected_revision={bad_q_rev}",
+            cookies=auth_cookies,
+        ).status_code == 422
+        assert client.post(
+            f"/api/projects/albums/{alb_id}/finalize?expected_revision={bad_q_rev}",
+            cookies=auth_cookies,
+        ).status_code == 422
+
+    # 2. Artwork upload returns updated album with incremented revision; replacement returns 409
+    art_res = client.post(
+        f"/api/projects/albums/{alb_id}/artwork",
+        data={"expected_revision": str(rev)},
+        files={"file": ("cover.jpg", io.BytesIO(VALID_JPEG_BYTES), "image/jpeg")},
+        cookies=auth_cookies,
+    )
+    assert art_res.status_code == 200
+    art_body = art_res.json()
+    assert art_body["album"]["revision"] == rev + 1
+    assert art_body["album"]["has_cover"] is True
+
+    rep_art = client.post(
+        f"/api/projects/albums/{alb_id}/artwork",
+        data={"expected_revision": str(art_body["album"]["revision"])},
+        files={"file": ("cover2.jpg", io.BytesIO(VALID_JPEG_BYTES), "image/jpeg")},
+        cookies=auth_cookies,
+    )
+    assert rep_art.status_code == 409
+
+    # 3. Bulk PATCH rejects placeholder-to-Take assignment with 400
+    ph_alb = client.post(
+        f"/api/projects/albums/{alb_id}/entries",
+        json={"expected_revision": art_body["album"]["revision"], "track_id": trk["id"], "take_id": None},
+        cookies=auth_cookies,
+    ).json()
+    ph_entry = ph_alb["tracks"][0]
+    bulk_assign = client.patch(
+        f"/api/projects/albums/{alb_id}",
+        json={"expected_revision": ph_alb["revision"], "tracks": [{**ph_entry, "take_id": tak["id"]}]},
+        cookies=auth_cookies,
+    )
+    assert bulk_assign.status_code == 400
+
+    # 4. GET purity: nonexistent album stream/download/artwork and deleted-source refresh-preview create zero dirs/locks
+    mgr = papi_mod.project_storage_manager
+    user_id = papi_mod.auth_manager.verify_token(auth_cookies[AUTH_COOKIE_NAME])
+    missing_id = "alb_0000000000000001"
+    missing_lock = mgr._get_album_lock_path(user_id, missing_id)
+    assert not missing_lock.exists()
+    assert client.get(f"/api/projects/albums/{missing_id}/entries/ale_0000000000000001/stream", cookies=auth_cookies).status_code == 404
+    assert client.get(f"/api/projects/albums/{missing_id}/entries/ale_0000000000000001/download", cookies=auth_cookies).status_code == 404
+    assert client.get(f"/api/projects/albums/{missing_id}/artwork", cookies=auth_cookies).status_code == 404
+    assert not missing_lock.exists()
+
+    # Delete source track's take, then call refresh-preview -> no recreated take dir or lockfile
+    rec_alb = client.post(
+        f"/api/projects/albums/{alb_id}/entries",
+        json={"expected_revision": ph_alb["revision"], "track_id": trk["id"], "take_id": tak["id"]},
+        cookies=auth_cookies,
+    ).json()
+    rec_entry = rec_alb["tracks"][1]
+    assert client.delete(f"/api/projects/tracks/{trk['id']}/takes/{tak['id']}", cookies=auth_cookies).status_code == 200
+    take_dir = mgr._get_take_dir_path(user_id, trk["id"], tak["id"])
+    assert not take_dir.exists()
+    prev_res = client.get(f"/api/projects/albums/{alb_id}/entries/{rec_entry['id']}/refresh-preview", cookies=auth_cookies)
+    assert prev_res.status_code == 200
+    assert prev_res.json()["source_available"] is False
+    assert not take_dir.exists()
+    assert not (mgr._get_track_dir_path(user_id, trk["id"]) / "track.json.lock").exists()
+
+    # 5. _FdStreamResource closes fd deterministically if response is closed/GC'd before generator iteration
+    probe_file = tmp_path / "probe.wav"
+    probe_file.write_bytes(wav_1)
+    fd = os.open(probe_file, os.O_RDONLY)
+    res_obj = papi_mod._FdStreamResource(fd)
+    # Simulate Starlette BackgroundTask cleanup on pre-iteration disconnect without iterating
+    res_obj.close()
+    with pytest.raises(OSError) as exc_ebadf:
+        os.fstat(fd)
+    assert exc_ebadf.value.errno == errno.EBADF
+
+
+def test_phase1a3_asgi_streaming_fd_cleanup(client, auth_cookies, tmp_path):
+    """Verify _OwnedFdStreamingResponse closes descriptors deterministically across ASGI send error, pre-body cancel, mid-stream cancel, and normal completion."""
+    import asyncio
+    import errno
+    import os
+    import backend.projects_api as papi_mod
+
+    wav_bytes = _make_api_wav_bytes(0.4)
+    trk = client.post("/api/projects/tracks", json={"title": "ASGI Stream Song"}, cookies=auth_cookies).json()
+    tak = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        data={"label": "Take 1", "is_master": "true"},
+        files={"file": ("asgi.wav", wav_bytes, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    alb = client.post("/api/projects/albums", json={"title": "ASGI Stream LP"}, cookies=auth_cookies).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"expected_revision": alb["revision"], "track_id": trk["id"], "take_id": tak["id"]},
+        cookies=auth_cookies,
+    ).json()
+    entry_id = alb["tracks"][0]["id"]
+    user_id = papi_mod.auth_manager.verify_token(auth_cookies[AUTH_COOKIE_NAME])
+    mgr = papi_mod.project_storage_manager
+
+    async def _run_case(mode: str, range_hdr: str | None = None):
+        opened = mgr.open_album_entry_audio_for_read(user_id, alb["id"], entry_id)
+        assert opened is not None
+        _, audio_path, fd, file_size = opened
+        resource = papi_mod._FdStreamResource(fd)
+
+        headers = [(b"host", b"testserver")]
+        if range_hdr:
+            headers.append((b"range", range_hdr.encode("ascii")))
+        from starlette.requests import Request as StarletteRequest
+        scope = {"type": "http", "method": "GET", "path": "/", "headers": headers}
+        req = StarletteRequest(scope)
+        resp = papi_mod.serve_audio_range_stream(audio_path, req, preopened_resource=resource, preopened_size=file_size)
+
+        async def receive():
+            await asyncio.sleep(10)
+            return {"type": "http.disconnect"}
+
+        sent_chunks = []
+
+        async def send(message):
+            if mode == "send_error":
+                raise RuntimeError("Simulated ASGI send failure")
+            if mode == "cancel_before_body" and message["type"] == "http.response.start":
+                raise asyncio.CancelledError("Cancelled before body iteration")
+            if mode == "cancel_mid_stream" and message["type"] == "http.response.body":
+                raise asyncio.CancelledError("Cancelled during body streaming")
+            if message["type"] == "http.response.body":
+                sent_chunks.append(message.get("body", b""))
+
+        try:
+            await resp(scope, receive, send)
+        except (RuntimeError, asyncio.CancelledError):
+            pass
+
+        # Must be closed deterministically without calling resource.close() manually
+        with pytest.raises(OSError) as exc_ebadf:
+            os.fstat(fd)
+        assert exc_ebadf.value.errno == errno.EBADF
+        return b"".join(sent_chunks)
+
+    assert asyncio.run(_run_case("normal")) == wav_bytes
+    assert asyncio.run(_run_case("normal", range_hdr="bytes=0-31")) == wav_bytes[:32]
+    asyncio.run(_run_case("send_error"))
+    asyncio.run(_run_case("cancel_before_body"))
+    asyncio.run(_run_case("cancel_mid_stream"))
+
+
+def test_phase1a2_frontend_artwork_revision_sync_and_context_guard():
+    """Verify frontend artwork upload syncs revision when on same album, ignores stale album context, and never auto-retries 409."""
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node_bin = shutil.which("node")
+    assert node_bin is not None, "node is required to execute frontend behavior tests"
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+
+    harness = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
+
+const elements = {};
+function findAll(root, pred, out = []) {
+  for (const c of (root.children || [])) {
+    if (pred(c)) out.push(c);
+    findAll(c, pred, out);
+  }
+  return out;
+}
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set();
+  const el = {
+    id, tagName: tag.toUpperCase(), value: '', textContent: '', className: '',
+    disabled: false, files: [], listeners, dataset: {}, style: {}, children: [], _innerHTML: '', src: '',
+    classList: {
+      add: (c) => classSet.add(c), remove: (c) => classSet.delete(c), contains: (c) => classSet.has(c),
+      toggle: (c, f) => { if (f === true) classSet.add(c); else if (f === false) classSet.delete(c); },
+    },
+    set innerHTML(v) { this._innerHTML = v; if (v === '') this.children = []; }, get innerHTML() { return this._innerHTML; },
+    addEventListener: (ev, fn) => { if (!listeners[ev]) listeners[ev] = []; listeners[ev].push(fn); },
+    dispatchEvent: async (ev) => { if (!ev.target) ev.target = el; for (const fn of (listeners[ev.type] || [])) await fn(ev); },
+    setAttribute: () => {}, appendChild: (c) => { el.children.push(c); return c; },
+    querySelector: () => null,
+    querySelectorAll: (sel) => findAll(el, c => sel === 'button' ? c.tagName === 'BUTTON' : false),
+    reset: () => {},
+  };
+  return el;
+}
+const getEl = (id) => { if (!elements[id]) elements[id] = makeEl(id); return elements[id]; };
+const docListeners = {};
+const calls = [];
+let artworkMode = 'ok';
+const album1 = { id: 'alb_1', title: 'Album 1', status: 'draft', is_finalized: false, revision: 2, revisions: [], tracks: [] };
+const album2 = { id: 'alb_2', title: 'Album 2', status: 'draft', is_finalized: false, revision: 9, revisions: [], tracks: [] };
+
+const context = {
+  console, setTimeout, clearTimeout, Set, Map, Number, Date, encodeURIComponent,
+  CustomEvent: class CustomEvent { constructor(n, o) { this.type = n; this.detail = o && o.detail; } },
+  FormData: class FormData { constructor() { this.fields = []; } append(k, v) { this.fields.push([k, v]); } },
+  sessionStorage: { _s: {}, getItem(k) { return this._s[k] || null; }, setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } },
+  document: {
+    getElementById: getEl, createElement: (t) => makeEl('', t), querySelector: () => null, querySelectorAll: () => [],
+    addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
+  },
+  window: { MP3MetaFixMaxUploadSizeMb: 150, showToast: () => {}, addEventListener: () => {}, dispatchEvent: () => {} },
+  confirm: () => true,
+  fetch: async (url, opts) => {
+    if (opts && opts.method) calls.push({ url, opts });
+    if (url === '/api/projects/albums') return { ok: true, status: 200, json: async () => ([album1, album2]) };
+    if (url === '/api/projects/albums/alb_1') return { ok: true, status: 200, json: async () => album1 };
+    if (url === '/api/projects/albums/alb_2') return { ok: true, status: 200, json: async () => album2 };
+    if (url === '/api/projects/albums/alb_1/artwork') {
+      if (artworkMode === '409') return { ok: false, status: 409, json: async () => ({ detail: 'Conflict' }) };
+      if (artworkMode === 'switch_midflight') {
+        await new Promise(r => setTimeout(r, 30));
+        return { ok: true, status: 200, json: async () => ({ status: 'saved', album: { ...album1, revision: 3, has_cover: true } }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ status: 'saved', album: { ...album1, revision: 3, has_cover: true } }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+};
+context.window.window = context.window;
+vm.runInNewContext(code, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  await new Promise(r => setTimeout(r, 20));
+  const cards = getEl('albumsGridContainer').children;
+  // Open album 1 (rev 2)
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+
+  // Upload artwork -> updates activeAlbum revision to 3, so subsequent save sends expected_revision=3
+  const input = getEl('inputAlbumCoverFile');
+  input.files = [{ name: 'cover.jpg' }];
+  await input.listeners['change'][0]({ target: input });
+  await new Promise(r => setTimeout(r, 20));
+  await getEl('btnSaveAlbumDetails').listeners['click'][0]();
+  const patchCall = calls.find(c => c.opts.method === 'PATCH');
+  if (!patchCall || JSON.parse(patchCall.opts.body).expected_revision !== 3) {
+    throw new Error('Expected PATCH after artwork upload to send expected_revision=3, got ' + JSON.stringify(patchCall));
+  }
+
+  // Switching to album2 mid-flight must NOT overwrite album2's activeAlbum state with album1's response
+  calls.length = 0;
+  artworkMode = 'switch_midflight';
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  const uploadPromise = input.listeners['change'][0]({ target: input });
+  await cards[1].querySelectorAll('button')[0].listeners['click'][0]();
+  await uploadPromise;
+  await getEl('btnSaveAlbumDetails').listeners['click'][0]();
+  const patch2 = calls.find(c => c.opts.method === 'PATCH');
+  if (!patch2 || !patch2.url.endsWith('/alb_2') || JSON.parse(patch2.opts.body).expected_revision !== 9) {
+    throw new Error('Stale album1 artwork response corrupted active album2 state: ' + JSON.stringify(patch2));
+  }
+
+  // 409 artwork conflict must NOT auto-retry
+  calls.length = 0;
+  artworkMode = '409';
+  input.files = [{ name: 'cover.jpg' }];
+  await input.listeners['change'][0]({ target: input });
+  await new Promise(r => setTimeout(r, 20));
+  if (calls.filter(c => c.url.endsWith('/artwork')).length !== 1) {
+    throw new Error('409 artwork response must NOT auto-retry');
+  }
+
+  console.log('NODE_PHASE1A2_VM_OK');
+})().catch(err => { console.error(err); process.exit(1); });
+"""
+    env = os.environ.copy()
+    env["TARGET_JS_PATH"] = str(projects_js_path)
+    proc = subprocess.run([node_bin, "-e", harness], capture_output=True, text=True, env=env, check=False)
+    assert proc.returncode == 0, f"Node Phase 1A.2 VM test failed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+    assert "NODE_PHASE1A2_VM_OK" in proc.stdout
+
+
 
 
 

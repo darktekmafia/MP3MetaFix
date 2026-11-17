@@ -28,9 +28,13 @@ from backend.project_models import (
 )
 from backend.project_storage import (
     ProjectStorageManager,
+    ProjectStorageError,
     ProjectStorageQuotaExceeded,
     ProjectValidationError,
     AlbumFinalizedError,
+    AlbumReplacementDisabledError,
+    AlbumRevisionConflictError,
+    AlbumManifestCorruptError,
     AlbumRefreshConflictError,
     AlbumFinalizationError,
 )
@@ -301,19 +305,27 @@ def test_album_workspace_management(custom_storage):
     assert album.tracks == []
     assert album.has_cover is False
 
-    # Sequence tracks
-    track_entries = [
-        {"track_number": 1, "disc_number": 1, "track_id": t1.id, "take_id": take1.id, "custom_title": "Track One (Remix)"},
-        {"track_number": 2, "disc_number": 1, "track_id": t2.id, "take_id": take2.id, "custom_title": None},
-    ]
-    updated_album = custom_storage.update_album(user_id, album.id, {"tracks": track_entries})
+    # Add entries via dedicated endpoint & reorder via update_album
+    album = custom_storage.add_album_entry(
+        user_id, album.id, t1.id, expected_revision=album.revision, take_id=take1.id, custom_title="Track One (Remix)"
+    )
+    album = custom_storage.add_album_entry(
+        user_id, album.id, t2.id, expected_revision=album.revision, take_id=take2.id
+    )
+    updated_album = custom_storage.update_album(
+        user_id,
+        album.id,
+        {"expected_revision": album.revision, "title": "Debut EP (Mastered)"},
+    )
     assert len(updated_album.tracks) == 2
     assert updated_album.tracks[0].track_number == 1
     assert updated_album.tracks[0].custom_title == "Track One (Remix)"
 
     # Save cover art
     dummy_cover = b"\xff\xd8\xff\xe0\x00\x10JFIF_DUMMY_JPEG"
-    custom_storage.save_album_cover(user_id, album.id, dummy_cover, extension=".jpg")
+    custom_storage.save_album_cover(
+        user_id, album.id, dummy_cover, expected_revision=updated_album.revision, extension=".jpg"
+    )
     
     cover_path = custom_storage.get_album_cover_path(user_id, album.id)
     assert cover_path is not None
@@ -324,9 +336,15 @@ def test_album_workspace_management(custom_storage):
     album_with_cover = custom_storage.get_album(user_id, album.id)
     assert album_with_cover.has_cover is True
 
-    # Delete album
-    assert custom_storage.delete_album(user_id, album.id) is True
-    assert custom_storage.get_album(user_id, album.id) is None
+    # Phase 1A blocks deleting albums that contain recordings or cover artwork
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.delete_album(user_id, album.id, expected_revision=album_with_cover.revision)
+    assert custom_storage.get_album(user_id, album.id) is not None
+
+    # Empty draft album deletion succeeds with matching expected_revision
+    empty_album = custom_storage.create_album(user_id=user_id, title="Empty Draft")
+    assert custom_storage.delete_album(user_id, empty_album.id, expected_revision=empty_album.revision) is True
+    assert custom_storage.get_album(user_id, empty_album.id) is None
     # Track workspaces still exist after album deletion
     assert custom_storage.get_track(user_id, t1.id) is not None
 
@@ -452,7 +470,7 @@ def test_album_revision_tracking(custom_storage):
     updated_album = custom_storage.update_album(
         user_id,
         album.id,
-        {"year": 2026, "genre": "Electronic"},
+        {"expected_revision": album.revision, "year": 2026, "genre": "Electronic"},
         change_summary="Added release year and genre",
     )
     assert updated_album.revision == 2
@@ -460,7 +478,9 @@ def test_album_revision_tracking(custom_storage):
     assert updated_album.revisions[1].change_summary == "Added release year and genre"
 
     # Upload cover art bumps revision
-    custom_storage.save_album_cover(user_id, album.id, b"FAKE_JPEG_IMAGE_BYTES", extension=".jpg")
+    custom_storage.save_album_cover(
+        user_id, album.id, b"FAKE_JPEG_IMAGE_BYTES", expected_revision=updated_album.revision, extension=".jpg"
+    )
     refetched = custom_storage.get_album(user_id, album.id)
     assert refetched.revision == 3
     assert len(refetched.revisions) == 3
@@ -722,7 +742,7 @@ def test_album_placeholder_and_explicit_take_ownership(custom_storage):
     album = custom_storage.create_album(user_id=user_id, title="Draft LP")
 
     # 1. Add 0-take track as placeholder
-    album = custom_storage.add_album_entry(user_id, album.id, empty_track.id, take_id=None)
+    album = custom_storage.add_album_entry(user_id, album.id, empty_track.id, expected_revision=album.revision, take_id=None)
     assert len(album.tracks) == 1
     p_entry = album.tracks[0]
     assert is_valid_project_id(p_entry.id, expected_prefix="ale")
@@ -734,7 +754,7 @@ def test_album_placeholder_and_explicit_take_ownership(custom_storage):
     assert custom_storage.get_track(user_id, empty_track.id).primary_take_id is None
 
     # 2. Add explicit non-master Take t_alt -> owns copy and snapshot, preserves t_master as track master
-    album = custom_storage.add_album_entry(user_id, album.id, recorded_track.id, take_id=t_alt.id)
+    album = custom_storage.add_album_entry(user_id, album.id, recorded_track.id, expected_revision=album.revision, take_id=t_alt.id)
     assert len(album.tracks) == 2
     r_entry = album.tracks[1]
     assert is_valid_project_id(r_entry.id, expected_prefix="ale")
@@ -776,9 +796,11 @@ def test_album_owned_audio_independence_multi_entry_and_identity(custom_storage)
     t2 = custom_storage.create_take(user_id, trk.id, wav_2, "t2.wav", ".wav", label="Part II", is_master=False)
 
     album = custom_storage.create_album(user_id=user_id, title="Double Cut")
-    album = custom_storage.add_album_entry(user_id, album.id, trk.id, take_id=t1.id)
-    album = custom_storage.add_album_entry(user_id, album.id, trk.id, take_id=t2.id)
-    album = custom_storage.add_album_entry(user_id, album.id, trk.id, take_id=t2.id, custom_title="Suite (Reprise)")
+    album = custom_storage.add_album_entry(user_id, album.id, trk.id, expected_revision=album.revision, take_id=t1.id)
+    album = custom_storage.add_album_entry(user_id, album.id, trk.id, expected_revision=album.revision, take_id=t2.id)
+    album = custom_storage.add_album_entry(
+        user_id, album.id, trk.id, expected_revision=album.revision, take_id=t2.id, custom_title="Suite (Reprise)"
+    )
 
     assert len(album.tracks) == 3
     e1, e2, e3 = album.tracks
@@ -798,28 +820,33 @@ def test_album_owned_audio_independence_multi_entry_and_identity(custom_storage)
     reordered = custom_storage.update_album(
         user_id,
         album.id,
-        {"tracks": [e3.model_dump(), e1.model_dump(), e2.model_dump()]},
+        {"expected_revision": album.revision, "tracks": [e3.model_dump(), e1.model_dump(), e2.model_dump()]},
     )
     assert [t.id for t in reordered.tracks] == [e3.id, e1.id, e2.id]
     assert [t.track_number for t in reordered.tracks] == [1, 2, 3]
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
 
-    # Clear e3 to placeholder -> same entry id preserved, owned audio removed
-    cleared = custom_storage.update_album_entry(user_id, album.id, e3.id, clear_take_to_placeholder=True)
-    e3_after = next(t for t in cleared.tracks if t.id == e3.id)
-    assert e3_after.is_placeholder is True
-    assert e3_after.has_owned_audio is False
-    assert e3_after.take_id is None
-    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id) is None
+    # Phase 1A blocks clearing or removing a recorded entry, preserving e3's owned audio
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.update_album_entry(
+            user_id, album.id, e3.id, expected_revision=reordered.revision, clear_take_to_placeholder=True
+        )
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id).read_bytes() == wav_2
 
-    # Remove e3 completely -> e1 and e2 unaffected
-    after_remove = custom_storage.remove_album_entry(user_id, album.id, e3.id)
-    assert [t.id for t in after_remove.tracks] == [e1.id, e2.id]
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.remove_album_entry(user_id, album.id, e3.id, expected_revision=reordered.revision)
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id).read_bytes() == wav_2
+
+    # Placeholder entries can still be added and removed cleanly without affecting e1/e2/e3
+    with_ph = custom_storage.add_album_entry(user_id, album.id, trk.id, expected_revision=reordered.revision, take_id=None)
+    p_id = with_ph.tracks[-1].id
+    after_remove = custom_storage.remove_album_entry(user_id, album.id, p_id, expected_revision=with_ph.revision)
+    assert [t.id for t in after_remove.tracks] == [e3.id, e1.id, e2.id]
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
 
 
 def test_album_entry_staging_rollback_on_failure(custom_storage, monkeypatch):
-    """Verify transactional rollback restores prior owned copy and removes staging/backup artifacts on failure."""
+    """Verify transactional rollback on initial staging failure and Phase 1A block on replacing existing owned audio."""
     import shutil
     import backend.project_storage as ps_mod
 
@@ -831,40 +858,86 @@ def test_album_entry_staging_rollback_on_failure(custom_storage, monkeypatch):
     t2 = custom_storage.create_take(user_id, trk.id, wav_2, "v2.wav", ".wav", label="V2", is_master=False)
 
     album = custom_storage.create_album(user_id=user_id, title="Rollback LP")
-    album = custom_storage.add_album_entry(user_id, album.id, trk.id, take_id=t1.id)
+    album = custom_storage.add_album_entry(user_id, album.id, trk.id, expected_revision=album.revision, take_id=None)
     entry_id = album.tracks[0].id
-    entry_dir = custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).parent
+    entry_dir = custom_storage._get_album_entry_dir(user_id, album.id, entry_id)
 
-    # 1. Fail mid-staging copy
+    # 1. Fail mid-staging copy during placeholder -> initial take assignment
     def broken_copy(*args, **kwargs):
         raise OSError("Simulated disk full during copy")
 
     monkeypatch.setattr(shutil, "copyfileobj", broken_copy)
     with pytest.raises(OSError, match="Simulated disk full"):
-        custom_storage.update_album_entry(user_id, album.id, entry_id, take_id=t2.id)
+        custom_storage.update_album_entry(user_id, album.id, entry_id, expected_revision=album.revision, take_id=t1.id)
     monkeypatch.undo()
 
-    leftover_mid = [p.name for p in entry_dir.iterdir() if p.name.startswith((".staging_", ".backup_"))]
+    leftover_mid = [p.name for p in entry_dir.iterdir() if p.name.startswith((".staging_", ".backup_"))] if entry_dir.exists() else []
     assert leftover_mid == []
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id) is None
+
+    # 2. Fail BEFORE os.replace during album.json publication (NOT_PUBLISHED) -> rollback removes promoted dest_audio & snapshot
+    orig_fchmod = ps_mod.os.fchmod
+    orig_publish_in_dir = ps_mod._publish_manifest_atomic_in_dir
+    in_manifest_publish = False
+    promoted_observed = False
+
+    def wrap_publish_for_fchmod(dir_fd, filename, data):
+        nonlocal in_manifest_publish, promoted_observed
+        # By the time _publish_manifest_atomic_in_dir is called, commit_staged() has already promoted audio.wav & snapshot.json
+        promoted_observed = (entry_dir / "audio.wav").is_file() and (entry_dir / "snapshot.json").is_file()
+        in_manifest_publish = True
+        try:
+            return orig_publish_in_dir(dir_fd, filename, data)
+        finally:
+            in_manifest_publish = False
+
+    def failing_pre_replace_fchmod(fd, mode, *args, **kwargs):
+        if in_manifest_publish:
+            raise OSError("Simulated pre-replace manifest failure")
+        return orig_fchmod(fd, mode, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", wrap_publish_for_fchmod)
+    monkeypatch.setattr(ps_mod.os, "fchmod", failing_pre_replace_fchmod)
+    with pytest.raises(OSError, match="Simulated pre-replace manifest failure"):
+        custom_storage.update_album_entry(user_id, album.id, entry_id, expected_revision=album.revision, take_id=t1.id)
+    monkeypatch.undo()
+
+    assert promoted_observed is True
+    assert not (entry_dir / "snapshot.json").exists()
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id) is None
+    assert custom_storage.get_album(user_id, album.id).tracks[0].is_placeholder is True
+
+    # 3. Initial assignment succeeds, then Phase 1A blocks replacing existing owned audio with t2
+    assigned = custom_storage.update_album_entry(user_id, album.id, entry_id, expected_revision=album.revision, take_id=t1.id)
+    assert assigned.tracks[0].has_owned_audio is True
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_1
 
-    # 2. Fail on final album.json atomic write after commit_fn() replaced audio.wav -> rollback_fn() restores wav_1
-    orig_atomic_json = ps_mod.atomic_json
-
-    def failing_manifest_write(target_path, payload):
-        if target_path.name == "album.json":
-            raise OSError("Simulated manifest commit failure")
-        return orig_atomic_json(target_path, payload)
-
-    monkeypatch.setattr(ps_mod, "atomic_json", failing_manifest_write)
-    with pytest.raises(OSError, match="Simulated manifest commit failure"):
-        custom_storage.update_album_entry(user_id, album.id, entry_id, take_id=t2.id)
-    monkeypatch.undo()
-
-    leftover_post = [p.name for p in entry_dir.iterdir() if p.name.startswith((".staging_", ".backup_"))]
-    assert leftover_post == []
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.update_album_entry(user_id, album.id, entry_id, expected_revision=assigned.revision, take_id=t2.id)
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_1
     assert custom_storage.get_album(user_id, album.id).tracks[0].take_id == t1.id
+
+    # 4. Fail when manifest publication state is UNCERTAIN (os.replace boundary) -> preserve promoted audio & snapshot
+    ph_album = custom_storage.add_album_entry(user_id, album.id, trk.id, expected_revision=assigned.revision, take_id=None)
+    ph_entry_id = ph_album.tracks[-1].id
+    orig_replace = ps_mod.os.replace
+
+    def uncertain_replace(src, dst, *args, **kwargs):
+        if Path(dst).name == "album.json":
+            orig_replace(src, dst, *args, **kwargs)
+            raise OSError("Simulated post-replace I/O uncertainty")
+        return orig_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.os, "replace", uncertain_replace)
+    with pytest.raises(OSError, match="Simulated post-replace I/O uncertainty"):
+        custom_storage.update_album_entry(
+            user_id, album.id, ph_entry_id, expected_revision=ph_album.revision, take_id=t1.id
+        )
+    monkeypatch.undo()
+
+    preserved_audio = custom_storage.get_album_entry_audio_path(user_id, album.id, ph_entry_id)
+    assert preserved_audio is not None and preserved_audio.read_bytes() == wav_1
+    assert (preserved_audio.parent / "snapshot.json").is_file()
 
 
 def test_legacy_album_manifest_compatibility(custom_storage):
@@ -912,7 +985,7 @@ def test_legacy_album_manifest_compatibility(custom_storage):
     assert loaded.tracks[1].has_owned_audio is False
 
     # Unrelated header save must preserve take_id=None (no auto-resolve to master) and not crash/auto-copy unowned legacy refs
-    updated = custom_storage.update_album(user_id, album.id, {"title": "Renamed Legacy"})
+    updated = custom_storage.update_album(user_id, album.id, {"expected_revision": 1, "title": "Renamed Legacy"})
     assert updated.tracks[0].take_id is None
     assert updated.tracks[0].is_placeholder is True
     assert updated.tracks[1].take_id == tb1.id
@@ -936,17 +1009,16 @@ def test_legacy_album_manifest_compatibility(custom_storage):
 
 
 def test_album_entry_refresh_preview_confirm_and_conflict(custom_storage):
-    """Verify source refresh preview diffing, stale-source conflict protection, confirmation, and deleted-source handling."""
+    """Verify read-only refresh preview works while Phase 1A blocks destructive refresh replacement cleanly."""
     user_id = "user_refresh"
     trk = custom_storage.create_track(user_id=user_id, title="Refresh Song")
     wav_v1 = _make_pcm_wav_bytes(0.4)
     wav_v2 = _make_pcm_wav_bytes(0.8)
-    wav_v3 = _make_pcm_wav_bytes(1.1)
 
     t1 = custom_storage.create_take(user_id, trk.id, wav_v1, "v1.wav", ".wav", label="Take 1", notes="Raw mix", is_master=True)
     custom_storage.save_take_lyrics(user_id, trk.id, t1.id, "Line one\nLine two", LyricsFormat.LRC)
     album = custom_storage.create_album(user_id=user_id, title="Refresh LP")
-    album = custom_storage.add_album_entry(user_id, album.id, trk.id, take_id=t1.id)
+    album = custom_storage.add_album_entry(user_id, album.id, trk.id, expected_revision=album.revision, take_id=t1.id)
     entry_id = album.tracks[0].id
 
     clean_preview = custom_storage.preview_album_entry_refresh(user_id, album.id, entry_id)
@@ -958,7 +1030,7 @@ def test_album_entry_refresh_preview_confirm_and_conflict(custom_storage):
     custom_storage.update_take(user_id, trk.id, t1.id, {"notes": "Mastered mix"})
     custom_storage.save_take_lyrics(user_id, trk.id, t1.id, "Line one\nLine two revised", LyricsFormat.LRC)
 
-    # Owned album copy is still v1 until user explicitly refreshes
+    # Owned album copy stays v1
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v1
 
     preview = custom_storage.preview_album_entry_refresh(user_id, album.id, entry_id)
@@ -970,9 +1042,8 @@ def test_album_entry_refresh_preview_confirm_and_conflict(custom_storage):
     assert "+Line two revised" in preview.lyrics_diff
     assert any(c["field"] == "take_notes" and c["old"] == "Raw mix" and c["new"] == "Mastered mix" for c in preview.metadata_changes)
 
-    # Modify source again after preview -> stale preview confirmation must fail with 409 conflict
-    custom_storage.update_take_audio(user_id, trk.id, t1.id, wav_v3, extension=".wav")
-    with pytest.raises(AlbumRefreshConflictError):
+    # Phase 1A blocks confirm_album_entry_refresh and preserves wav_v1 + snapshot
+    with pytest.raises(AlbumReplacementDisabledError):
         custom_storage.confirm_album_entry_refresh(
             user_id,
             album.id,
@@ -982,35 +1053,14 @@ def test_album_entry_refresh_preview_confirm_and_conflict(custom_storage):
             expected_source_updated_at=preview.expected_source_updated_at,
         )
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v1
+    assert custom_storage.get_album(user_id, album.id).tracks[0].snapshot.embedded_lyrics == "Line one\nLine two"
 
-    # Fresh preview & confirm updates album copy to wav_v3 and refreshes snapshot
-    fresh_preview = custom_storage.preview_album_entry_refresh(user_id, album.id, entry_id)
-    refreshed = custom_storage.confirm_album_entry_refresh(
-        user_id,
-        album.id,
-        entry_id,
-        expected_source_revision=fresh_preview.expected_source_revision,
-        expected_source_audio_sha256=fresh_preview.expected_source_audio_sha256,
-        expected_source_updated_at=fresh_preview.expected_source_updated_at,
-    )
-    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v3
-    assert refreshed.tracks[0].snapshot.embedded_lyrics == "Line one\nLine two revised"
-    assert refreshed.tracks[0].snapshot.take_notes == "Mastered mix"
-
-    # Deleting source take -> source_available=False on preview, confirm raises conflict, album copy intact
+    # Deleting source take -> source_available=False on preview, album copy intact
     custom_storage.delete_take(user_id, trk.id, t1.id)
     gone_preview = custom_storage.preview_album_entry_refresh(user_id, album.id, entry_id)
     assert gone_preview.source_available is False
     assert gone_preview.album_snapshot is not None
-    with pytest.raises(AlbumRefreshConflictError):
-        custom_storage.confirm_album_entry_refresh(
-            user_id,
-            album.id,
-            entry_id,
-            expected_source_revision=fresh_preview.expected_source_revision,
-            expected_source_audio_sha256=fresh_preview.expected_source_audio_sha256,
-        )
-    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v3
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, entry_id).read_bytes() == wav_v1
 
 
 def test_album_finalization_validation_locking_and_completion(custom_storage):
@@ -1028,27 +1078,27 @@ def test_album_finalization_validation_locking_and_completion(custom_storage):
 
     # 1. Empty album rejected
     with pytest.raises(AlbumFinalizationError) as exc_empty:
-        custom_storage.finalize_album(user_id, album.id)
+        custom_storage.finalize_album(user_id, album.id, expected_revision=album.revision)
     assert len(exc_empty.value.errors) == 1
 
     # 2. Placeholder entry rejected
-    album = custom_storage.add_album_entry(user_id, album.id, trk_empty.id, take_id=None)
-    album = custom_storage.add_album_entry(user_id, album.id, trk_ok.id, take_id=t_ok.id)
+    album = custom_storage.add_album_entry(user_id, album.id, trk_empty.id, expected_revision=album.revision, take_id=None)
+    album = custom_storage.add_album_entry(user_id, album.id, trk_ok.id, expected_revision=album.revision, take_id=t_ok.id)
     p_id = album.tracks[0].id
     r_id = album.tracks[1].id
 
     with pytest.raises(AlbumFinalizationError) as exc_ph:
-        custom_storage.finalize_album(user_id, album.id)
+        custom_storage.finalize_album(user_id, album.id, expected_revision=album.revision)
     assert any("placeholder" in err["reason"].lower() for err in exc_ph.value.errors)
 
     # Remove placeholder so only recorded entry remains
-    album = custom_storage.remove_album_entry(user_id, album.id, p_id)
+    album = custom_storage.remove_album_entry(user_id, album.id, p_id, expected_revision=album.revision)
 
     # 3. Corrupt audio fails checksum/container verification
     owned_path = custom_storage.get_album_entry_audio_path(user_id, album.id, r_id)
     owned_path.write_bytes(b"NOT_AUDIO_CORRUPT_DATA_BYTES_1234567890")
     with pytest.raises(AlbumFinalizationError) as exc_corrupt:
-        custom_storage.finalize_album(user_id, album.id)
+        custom_storage.finalize_album(user_id, album.id, expected_revision=album.revision)
     assert any(r_id == err["entry_id"] for err in exc_corrupt.value.errors)
 
     # Restore valid audio, verify incomplete .staging_ file fails finalization
@@ -1056,7 +1106,7 @@ def test_album_finalization_validation_locking_and_completion(custom_storage):
     staging_junk = owned_path.parent / ".staging_orphan_audio.wav"
     staging_junk.write_bytes(b"partial")
     with pytest.raises(AlbumFinalizationError) as exc_staging:
-        custom_storage.finalize_album(user_id, album.id)
+        custom_storage.finalize_album(user_id, album.id, expected_revision=album.revision)
     assert any("incomplete" in err["reason"].lower() for err in exc_staging.value.errors)
     staging_junk.unlink()
 
@@ -1065,33 +1115,1673 @@ def test_album_finalization_validation_locking_and_completion(custom_storage):
     orphan_dir.mkdir(parents=True, exist_ok=True)
     (orphan_dir / "junk.bin").write_bytes(b"123")
     with pytest.raises(AlbumFinalizationError) as exc_orphan:
-        custom_storage.finalize_album(user_id, album.id)
+        custom_storage.finalize_album(user_id, album.id, expected_revision=album.revision)
     assert any("inconsistent" in err["reason"].lower() for err in exc_orphan.value.errors)
     (orphan_dir / "junk.bin").unlink()
     orphan_dir.rmdir()
 
     # 5. Passing finalization sets is_finalized, completed status, and locks all mutations
-    finalized = custom_storage.finalize_album(user_id, album.id)
+    finalized = custom_storage.finalize_album(user_id, album.id, expected_revision=album.revision)
     assert finalized.is_finalized is True
     assert finalized.status == WorkspaceStatus.COMPLETED
     assert finalized.finalized_at is not None
 
     with pytest.raises(AlbumFinalizedError):
-        custom_storage.update_album(user_id, album.id, {"title": "Locked Edit"})
+        custom_storage.update_album(user_id, album.id, {"expected_revision": finalized.revision, "title": "Locked Edit"})
     with pytest.raises(AlbumFinalizedError):
-        custom_storage.add_album_entry(user_id, album.id, trk_ok.id, take_id=t_ok.id)
+        custom_storage.add_album_entry(user_id, album.id, trk_ok.id, expected_revision=finalized.revision, take_id=t_ok.id)
     with pytest.raises(AlbumFinalizedError):
-        custom_storage.update_album_entry(user_id, album.id, r_id, clear_take_to_placeholder=True)
+        custom_storage.update_album_entry(
+            user_id, album.id, r_id, expected_revision=finalized.revision, clear_take_to_placeholder=True
+        )
     with pytest.raises(AlbumFinalizedError):
-        custom_storage.remove_album_entry(user_id, album.id, r_id)
+        custom_storage.remove_album_entry(user_id, album.id, r_id, expected_revision=finalized.revision)
     with pytest.raises(AlbumFinalizedError):
         custom_storage.preview_album_entry_refresh(user_id, album.id, r_id)
     with pytest.raises(AlbumFinalizedError):
         custom_storage.confirm_album_entry_refresh(user_id, album.id, r_id, 1, "sha")
     with pytest.raises(AlbumFinalizedError):
-        custom_storage.save_album_cover(user_id, album.id, b"\xff\xd8\xff\xe0", extension=".jpg")
+        custom_storage.save_album_cover(
+            user_id, album.id, b"\xff\xd8\xff\xe0", expected_revision=finalized.revision, extension=".jpg"
+        )
     with pytest.raises(AlbumFinalizedError):
-        custom_storage.finalize_album(user_id, album.id)
+        custom_storage.finalize_album(user_id, album.id, expected_revision=finalized.revision)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.delete_album(user_id, album.id, expected_revision=finalized.revision)
+    assert custom_storage.get_album(user_id, album.id) is not None
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, r_id).read_bytes() == wav_ok
+
+
+def test_phase1a_legacy_track_ids_and_unknown_entry_ids(custom_storage):
+    """Verify legacy track_ids reorder preserves owned recordings and unknown/ambiguous IDs are rejected."""
+    user_id = "user_legacy_reorder"
+    trk_1 = custom_storage.create_track(user_id=user_id, title="Track One")
+    trk_2 = custom_storage.create_track(user_id=user_id, title="Track Two")
+    wav_1a = _make_pcm_wav_bytes(0.3)
+    wav_1b = _make_pcm_wav_bytes(0.5)
+    wav_2 = _make_pcm_wav_bytes(0.7)
+
+    t1a = custom_storage.create_take(user_id, trk_1.id, wav_1a, "1a.wav", ".wav", label="Take 1A", is_master=True)
+    t1b = custom_storage.create_take(user_id, trk_1.id, wav_1b, "1b.wav", ".wav", label="Take 1B", is_master=False)
+    t2 = custom_storage.create_take(user_id, trk_2.id, wav_2, "2.wav", ".wav", label="Take 2", is_master=True)
+
+    album = custom_storage.create_album(user_id=user_id, title="Multi Take LP")
+    album = custom_storage.add_album_entry(user_id, album.id, trk_1.id, expected_revision=album.revision, take_id=t1a.id)
+    album = custom_storage.add_album_entry(user_id, album.id, trk_1.id, expected_revision=album.revision, take_id=t1b.id)
+    album = custom_storage.add_album_entry(user_id, album.id, trk_2.id, expected_revision=album.revision, take_id=t2.id)
+    e1a, e1b, e2 = album.tracks
+
+    # 1. Legacy track_ids reorder with duplicate track references preserves all IDs, takes, audio, and snapshots
+    reordered = custom_storage.update_album(
+        user_id,
+        album.id,
+        {"expected_revision": album.revision, "track_ids": [trk_2.id, trk_1.id, trk_1.id]},
+    )
+    assert [t.id for t in reordered.tracks] == [e2.id, e1a.id, e1b.id]
+    assert [t.take_id for t in reordered.tracks] == [t2.id, t1a.id, t1b.id]
+    assert all(t.has_owned_audio for t in reordered.tracks)
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e1a.id).read_bytes() == wav_1a
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e1b.id).read_bytes() == wav_1b
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
+
+    # 2. Ambiguous legacy track_ids dropping one duplicate of trk_1 is rejected without touching recordings
+    with pytest.raises((ProjectValidationError, AlbumReplacementDisabledError)):
+        custom_storage.update_album(user_id, album.id, {"expected_revision": reordered.revision, "track_ids": [trk_2.id, trk_1.id]})
+    assert [t.id for t in custom_storage.get_album(user_id, album.id).tracks] == [e2.id, e1a.id, e1b.id]
+
+    # 3. Unknown explicit ale_ entry ID is rejected and never hijacks/deletes existing owned audio
+    unknown_id = generate_album_entry_id()
+    with pytest.raises(ProjectValidationError, match="Unknown album entry identifier"):
+        custom_storage.update_album(
+            user_id,
+            album.id,
+            {
+                "expected_revision": reordered.revision,
+                "tracks": [
+                    {"id": unknown_id, "track_number": 1, "disc_number": 1, "track_id": trk_2.id, "take_id": t2.id},
+                    e1a.model_dump(),
+                    e1b.model_dump(),
+                ],
+            },
+        )
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
+
+    # 4. Ambiguous tracks payload omitting id for duplicate track references is rejected
+    with pytest.raises((ProjectValidationError, AlbumReplacementDisabledError)):
+        custom_storage.update_album(
+            user_id,
+            album.id,
+            {
+                "expected_revision": reordered.revision,
+                "tracks": [
+                    {"track_number": 1, "disc_number": 1, "track_id": trk_1.id, "take_id": None},
+                ],
+            },
+        )
+    assert len(custom_storage.get_album(user_id, album.id).tracks) == 3
+
+    # 5. Attempting to replace owned audio via update_album is blocked with AlbumReplacementDisabledError
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.update_album(
+            user_id,
+            album.id,
+            {
+                "expected_revision": reordered.revision,
+                "tracks": [
+                    e2.model_dump(),
+                    {**e1a.model_dump(), "take_id": t1b.id},
+                    e1b.model_dump(),
+                ],
+            },
+        )
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e1a.id).read_bytes() == wav_1a
+
+
+def _mp_worker_add_entry(root_dir_str: str, user_id: str, album_id: str, track_id: str, take_id: str, title: str, barrier, queue) -> None:
+    mgr = ProjectStorageManager(root_dir=Path(root_dir_str))
+    barrier.wait(timeout=10)
+    while True:
+        current = mgr.get_album(user_id, album_id)
+        try:
+            updated = mgr.add_album_entry(
+                user_id,
+                album_id,
+                track_id,
+                expected_revision=current.revision,
+                take_id=take_id,
+                custom_title=title,
+            )
+            queue.put(f"added:{len(updated.tracks)}" if updated else "none")
+            return
+        except AlbumRevisionConflictError:
+            continue
+
+
+def _mp_worker_finalize(root_dir_str: str, user_id: str, album_id: str, expected_revision: int, barrier, queue) -> None:
+    mgr = ProjectStorageManager(root_dir=Path(root_dir_str))
+    barrier.wait(timeout=10)
+    try:
+        fin = mgr.finalize_album(user_id, album_id, expected_revision=expected_revision)
+        queue.put(("finalize", "finalized" if (fin and fin.is_finalized) else "missing"))
+    except AlbumFinalizedError:
+        queue.put(("finalize", "already_finalized"))
+    except AlbumRevisionConflictError:
+        queue.put(("finalize", "revision_conflict"))
+
+
+def _mp_worker_update_title(root_dir_str: str, user_id: str, album_id: str, new_title: str, expected_revision: int, barrier, queue) -> None:
+    mgr = ProjectStorageManager(root_dir=Path(root_dir_str))
+    barrier.wait(timeout=10)
+    try:
+        res = mgr.update_album(user_id, album_id, {"expected_revision": expected_revision, "title": new_title})
+        queue.put(("update", "updated" if res else "missing"))
+    except AlbumFinalizedError:
+        queue.put(("update", "blocked_finalized"))
+    except AlbumRevisionConflictError:
+        queue.put(("update", "revision_conflict"))
+
+
+def _mp_worker_delete_album(root_dir_str: str, user_id: str, album_id: str, expected_revision: int, barrier, queue) -> None:
+    mgr = ProjectStorageManager(root_dir=Path(root_dir_str))
+    barrier.wait(timeout=10)
+    try:
+        deleted = mgr.delete_album(user_id, album_id, expected_revision=expected_revision)
+        queue.put(("delete", "deleted" if deleted else "missing"))
+    except AlbumFinalizedError:
+        queue.put(("delete", "blocked_finalized"))
+    except AlbumReplacementDisabledError:
+        queue.put(("delete", "blocked_non_empty"))
+    except AlbumRevisionConflictError:
+        queue.put(("delete", "revision_conflict"))
+
+
+def test_phase1a_cross_process_album_locking_and_deletion_race(tmp_path):
+    """Verify cross-process serialization and actual worker outcomes for entries, finalization, and deletion races."""
+    import multiprocessing as mp
+
+    root_dir = tmp_path / "mp_tenants"
+    mgr = ProjectStorageManager(root_dir=root_dir)
+    user_id = "user_mp"
+
+    trk = mgr.create_track(user_id=user_id, title="Concurrent Track")
+    wav_bytes = _make_pcm_wav_bytes(0.4)
+    take = mgr.create_take(user_id, trk.id, wav_bytes, "c.wav", ".wav", label="Master", is_master=True)
+
+    # 1. Four processes concurrently add entries to the same album -> all 4 entries and audio copies survive
+    album = mgr.create_album(user_id=user_id, title="Concurrent Entries LP")
+    ctx = mp.get_context("spawn")
+    barrier_add = ctx.Barrier(4)
+    q_add = ctx.Queue()
+    procs_add = [
+        ctx.Process(target=_mp_worker_add_entry, args=(str(root_dir), user_id, album.id, trk.id, take.id, f"Cut {i}", barrier_add, q_add))
+        for i in range(4)
+    ]
+    for p in procs_add:
+        p.start()
+    for p in procs_add:
+        p.join(timeout=15)
+        assert p.exitcode == 0
+
+    add_outcomes = [q_add.get(timeout=5) for _ in range(4)]
+    assert sorted(add_outcomes) == ["added:1", "added:2", "added:3", "added:4"]
+
+    after_add = mgr.get_album(user_id, album.id)
+    assert len(after_add.tracks) == 4
+    assert len({e.id for e in after_add.tracks}) == 4
+    for entry in after_add.tracks:
+        assert mgr.get_album_entry_audio_path(user_id, album.id, entry.id).read_bytes() == wav_bytes
+
+    # 2. Concurrent finalize + update_album across processes -> assert exact worker outcomes
+    barrier_race = ctx.Barrier(2)
+    q_race = ctx.Queue()
+    p_fin = ctx.Process(target=_mp_worker_finalize, args=(str(root_dir), user_id, album.id, after_add.revision, barrier_race, q_race))
+    p_upd = ctx.Process(target=_mp_worker_update_title, args=(str(root_dir), user_id, album.id, "Raced Title", after_add.revision, barrier_race, q_race))
+    p_fin.start()
+    p_upd.start()
+    p_fin.join(timeout=15)
+    p_upd.join(timeout=15)
+    assert p_fin.exitcode == 0 and p_upd.exitcode == 0
+
+    race_outcomes = dict(q_race.get(timeout=5) for _ in range(2))
+    assert race_outcomes["finalize"] in ("finalized", "revision_conflict")
+    assert race_outcomes["update"] in ("updated", "blocked_finalized", "revision_conflict")
+    assert ("finalized" in race_outcomes.values()) or ("updated" in race_outcomes.values())
+
+    # If update won first, finalize cleanly at the new revision
+    cur_album = mgr.get_album(user_id, album.id)
+    if not cur_album.is_finalized:
+        mgr.finalize_album(user_id, album.id, expected_revision=cur_album.revision)
+
+    final_album = mgr.get_album(user_id, album.id)
+    assert final_album.is_finalized is True
+    assert final_album.status == WorkspaceStatus.COMPLETED
+    assert final_album.finalized_at is not None
+
+    # 3. Concurrent finalize + delete_album on another valid draft album -> recorded album cannot be deleted in Phase 1A
+    race_del_album = mgr.create_album(user_id=user_id, title="Finalize vs Delete LP")
+    race_del_album = mgr.add_album_entry(user_id, race_del_album.id, trk.id, expected_revision=race_del_album.revision, take_id=take.id)
+    barrier_fd = ctx.Barrier(2)
+    q_fd = ctx.Queue()
+    p_fin2 = ctx.Process(target=_mp_worker_finalize, args=(str(root_dir), user_id, race_del_album.id, race_del_album.revision, barrier_fd, q_fd))
+    p_del2 = ctx.Process(target=_mp_worker_delete_album, args=(str(root_dir), user_id, race_del_album.id, race_del_album.revision, barrier_fd, q_fd))
+    p_fin2.start()
+    p_del2.start()
+    p_fin2.join(timeout=15)
+    p_del2.join(timeout=15)
+    assert p_fin2.exitcode == 0 and p_del2.exitcode == 0
+
+    fd_outcomes = dict(q_fd.get(timeout=5) for _ in range(2))
+    assert fd_outcomes["finalize"] == "finalized"
+    assert fd_outcomes["delete"] in ("blocked_finalized", "blocked_non_empty")
+    assert mgr.get_album(user_id, race_del_album.id).is_finalized is True
+
+    # 4. Concurrent delete_album vs update_album on an empty unfinalized album -> lockfile stays stable, no phantom dir
+    draft_album = mgr.create_album(user_id=user_id, title="Delete Race LP")
+    barrier_del = ctx.Barrier(2)
+    q_del = ctx.Queue()
+    p_del = ctx.Process(target=_mp_worker_delete_album, args=(str(root_dir), user_id, draft_album.id, draft_album.revision, barrier_del, q_del))
+    p_upd2 = ctx.Process(target=_mp_worker_update_title, args=(str(root_dir), user_id, draft_album.id, "After Delete", draft_album.revision, barrier_del, q_del))
+    p_del.start()
+    p_upd2.start()
+    p_del.join(timeout=15)
+    p_upd2.join(timeout=15)
+    assert p_del.exitcode == 0 and p_upd2.exitcode == 0
+
+    del_outcomes = dict(q_del.get(timeout=5) for _ in range(2))
+    assert del_outcomes["delete"] in ("deleted", "revision_conflict")
+    if del_outcomes["delete"] == "deleted":
+        assert del_outcomes["update"] == "missing"
+        assert mgr.get_album(user_id, draft_album.id) is None
+        assert not mgr._get_album_dir(user_id, draft_album.id).exists()
+    else:
+        assert del_outcomes["update"] == "updated"
+        updated_draft = mgr.get_album(user_id, draft_album.id)
+        assert updated_draft is not None
+        assert mgr.delete_album(user_id, draft_album.id, expected_revision=updated_draft.revision) is True
+        assert mgr.get_album(user_id, draft_album.id) is None
+    assert mgr._get_album_lock_path(user_id, draft_album.id).is_file()
+
+
+def test_phase1a1_implicit_deletion_and_allow_new_entry_id_blocked(custom_storage):
+    """Verify omitted/null take_id cannot clear owned recordings, untrusted _allow_new_entry_id is ignored, and stale revisions fail."""
+    user_id = "user_p1a1"
+    trk = custom_storage.create_track(user_id=user_id, title="Preserved Track")
+    wav_1 = _make_pcm_wav_bytes(0.4)
+    t1 = custom_storage.create_take(user_id, trk.id, wav_1, "p1.wav", ".wav", label="Take 1", is_master=True)
+
+    album = custom_storage.create_album(user_id=user_id, title="Preservation LP")
+    album = custom_storage.add_album_entry(user_id, album.id, trk.id, expected_revision=album.revision, take_id=t1.id)
+    e1 = album.tracks[0]
+
+    # 1. Omitted take_id in bulk update preserves e1's recording and owned audio
+    renamed = custom_storage.update_album(
+        user_id,
+        album.id,
+        {
+            "expected_revision": album.revision,
+            "tracks": [{"id": e1.id, "track_id": trk.id, "track_number": 1, "disc_number": 1, "custom_title": "New Title"}],
+        },
+    )
+    assert renamed.tracks[0].id == e1.id
+    assert renamed.tracks[0].take_id == t1.id
+    assert renamed.tracks[0].has_owned_audio is True
+    assert renamed.tracks[0].custom_title == "New Title"
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e1.id).read_bytes() == wav_1
+
+    # 2. Explicit take_id: None on recorded entry in bulk update is rejected
+    with pytest.raises((ProjectValidationError, AlbumReplacementDisabledError)):
+        custom_storage.update_album(
+            user_id,
+            album.id,
+            {
+                "expected_revision": renamed.revision,
+                "tracks": [{"id": e1.id, "track_id": trk.id, "take_id": None, "track_number": 1, "disc_number": 1}],
+            },
+        )
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e1.id).read_bytes() == wav_1
+
+    # 3. Untrusted _allow_new_entry_id flag in update dict is ignored -> unknown ale_ ID rejected
+    forged_id = generate_album_entry_id()
+    with pytest.raises(ProjectValidationError, match="Unknown album entry identifier"):
+        custom_storage.update_album(
+            user_id,
+            album.id,
+            {
+                "expected_revision": renamed.revision,
+                "tracks": [
+                    {"id": forged_id, "_allow_new_entry_id": True, "track_id": trk.id, "take_id": t1.id, "track_number": 1}
+                ],
+            },
+        )
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e1.id).read_bytes() == wav_1
+
+    # 4. Stale expected_revision raises AlbumRevisionConflictError without removing entries/audio
+    stale_rev = renamed.revision - 1
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.update_album(
+            user_id,
+            album.id,
+            {"expected_revision": stale_rev, "title": "Stale Title", "tracks": []},
+        )
+    assert len(custom_storage.get_album(user_id, album.id).tracks) == 1
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e1.id).read_bytes() == wav_1
+
+    # 5. Omitting expected_revision in update_album always raises ProjectValidationError
+    with pytest.raises(ProjectValidationError, match="expected_revision"):
+        custom_storage.update_album(user_id, album.id, {"tracks": []})
+    assert len(custom_storage.get_album(user_id, album.id).tracks) == 1
+    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e1.id).read_bytes() == wav_1
+
+
+def test_phase1a1_fail_closed_corrupt_manifest_and_partial_delete_error(custom_storage, monkeypatch):
+    """Verify corrupt manifests fail closed (never deleted), malformed finalized manifests stay protected, and partial delete errors raise."""
+    import json
+
+    user_id = "user_corrupt"
+    trk = custom_storage.create_track(user_id=user_id, title="Safe Track")
+    wav_ok = _make_pcm_wav_bytes(0.4)
+    take = custom_storage.create_take(user_id, trk.id, wav_ok, "safe.wav", ".wav", label="Master", is_master=True)
+
+    # 1. Corrupt JSON on draft album -> get_album and delete_album fail closed, preserving entries/
+    draft = custom_storage.create_album(user_id=user_id, title="Corrupt Draft")
+    draft = custom_storage.add_album_entry(user_id, draft.id, trk.id, expected_revision=draft.revision, take_id=take.id)
+    e_id = draft.tracks[0].id
+    draft_dir = custom_storage._get_album_dir(user_id, draft.id)
+    (draft_dir / "album.json").write_text("{corrupt_json", encoding="utf-8")
+
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.get_album(user_id, draft.id)
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.delete_album(user_id, draft.id, expected_revision=1)
+    assert custom_storage.get_album_entry_audio_path(user_id, draft.id, e_id).read_bytes() == wav_ok
+
+    # 2. Finalized album with malformed unrelated field ('year': 'bad_int') -> delete_album still raises AlbumFinalizedError
+    fin = custom_storage.create_album(user_id=user_id, title="Malformed Finalized")
+    fin = custom_storage.add_album_entry(user_id, fin.id, trk.id, expected_revision=fin.revision, take_id=take.id)
+    fin_e_id = fin.tracks[0].id
+    fin = custom_storage.finalize_album(user_id, fin.id, expected_revision=fin.revision)
+    fin_manifest = custom_storage._get_album_dir(user_id, fin.id) / "album.json"
+    raw_fin = json.loads(fin_manifest.read_text(encoding="utf-8"))
+    raw_fin["year"] = "not_a_number"
+    fin_manifest.write_text(json.dumps(raw_fin), encoding="utf-8")
+
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.delete_album(user_id, fin.id, expected_revision=fin.revision)
+    assert custom_storage.get_album_entry_audio_path(user_id, fin.id, fin_e_id).read_bytes() == wav_ok
+
+    # 3. Fault injection on empty-album deletion: failure after album.json is unlinked before os.rmdir(album_dir_name)
+    #    must raise ProjectStorageError, preserve remaining directory evidence, and never report success.
+    import backend.project_storage as ps_mod
+    draft2 = custom_storage.create_album(user_id=user_id, title="Partial Delete LP")
+    draft2_dir = custom_storage._get_album_dir(user_id, draft2.id)
+    draft2_name = draft2_dir.name
+    orig_rmdir = ps_mod.os.rmdir
+
+    def fail_rmdir(path, *args, **kwargs):
+        if Path(path).name == draft2_name:
+            raise PermissionError("Simulated EACCES on os.rmdir(album_dir)")
+        return orig_rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.os, "rmdir", fail_rmdir)
+    with pytest.raises(ProjectStorageError, match="Failed to completely delete album"):
+        custom_storage.delete_album(user_id, draft2.id, expected_revision=draft2.revision)
+    monkeypatch.undo()
+    assert draft2_dir.exists()
+    assert not (draft2_dir / "album.json").exists()
+
+
+def test_phase1a_final_predictive_storage_safeguards(custom_storage, tmp_path):
+    """Verify mandatory revisions, allowlist empty-album deletion, standalone snapshot checks, raw contradiction fail-closed, and read-only path purity."""
+    import json
+
+    user_id = "user_p1a_final"
+    trk = custom_storage.create_track(user_id=user_id, title="Guard Track")
+    wav_ok = _make_pcm_wav_bytes(0.4)
+    take = custom_storage.create_take(user_id, trk.id, wav_ok, "guard.wav", ".wav", label="Master", is_master=True)
+
+    # 1. Read-only operations on missing tenant/album create zero directories
+    missing_user = "never_created_tenant"
+    assert custom_storage.list_albums(missing_user) == []
+    assert custom_storage.get_album(missing_user, "alb_missing000001") is None
+    assert custom_storage.get_album_entry_audio_path(missing_user, "alb_missing000001", "ale_missing000001") is None
+    assert custom_storage.get_album_cover_path(missing_user, "alb_missing000001") is None
+    assert not custom_storage._get_tenant_dir_path(missing_user).exists()
+
+    # 2. Storage-layer missing/stale expected_revision rejected across all mutators
+    alb = custom_storage.create_album(user_id=user_id, title="Revision Guard LP")
+    with pytest.raises(ProjectValidationError):
+        custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=0, take_id=None)
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision + 5, take_id=None)
+
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=None)
+    ph_id = alb.tracks[0].id
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.update_album_entry(user_id, alb.id, ph_id, expected_revision=alb.revision - 1, custom_title="Stale")
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.remove_album_entry(user_id, alb.id, ph_id, expected_revision=alb.revision - 1)
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=alb.revision - 1, extension=".jpg")
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.finalize_album(user_id, alb.id, expected_revision=alb.revision - 1)
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision - 1)
+
+    # 3. Empty-album deletion allowlist rejects unknown files, hidden files, and symlinks
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    stray = alb_dir / ".hidden_artifact"
+    stray.write_bytes(b"keep")
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision)
+    assert (alb_dir / "album.json").is_file()
+    stray.unlink()
+
+    ext_target = tmp_path / "outside.txt"
+    ext_target.write_text("outside", encoding="utf-8")
+    symlink_path = alb_dir / "entries" / "symlink_probe"
+    symlink_path.parent.mkdir(parents=True, exist_ok=True)
+    symlink_path.symlink_to(ext_target)
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision)
+    assert ext_target.read_text(encoding="utf-8") == "outside"
+    symlink_path.unlink()
+    symlink_path.parent.rmdir()
+
+    # Empty placeholder-only album (with no unknown files) deletes cleanly
+    assert custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision) is True
+    assert not alb_dir.exists()
+
+    # 4. Standalone snapshot.json validation during finalize_album
+    fin_alb = custom_storage.create_album(user_id=user_id, title="Snapshot Check LP")
+    fin_alb = custom_storage.add_album_entry(user_id, fin_alb.id, trk.id, expected_revision=fin_alb.revision, take_id=take.id)
+    e_id = fin_alb.tracks[0].id
+    snap_path = custom_storage.get_album_entry_audio_path(user_id, fin_alb.id, e_id).parent / "snapshot.json"
+    orig_snap = snap_path.read_text(encoding="utf-8")
+    tampered_snap = json.loads(orig_snap)
+    tampered_snap["source_take_label"] = "Tampered"
+    snap_path.write_text(json.dumps(tampered_snap), encoding="utf-8")
+    with pytest.raises(AlbumFinalizationError) as exc_snap:
+        custom_storage.finalize_album(user_id, fin_alb.id, expected_revision=fin_alb.revision)
+    assert any("snapshot" in err["reason"].lower() for err in exc_snap.value.errors)
+    snap_path.write_text(orig_snap, encoding="utf-8")
+
+    # 5. Raw contradictory manifest (take_id: null with embedded snapshot) fails closed
+    bad_alb = custom_storage.create_album(user_id=user_id, title="Contradiction LP")
+    bad_manifest = custom_storage._get_album_dir(user_id, bad_alb.id) / "album.json"
+    raw = json.loads(bad_manifest.read_text(encoding="utf-8"))
+    raw["tracks"] = [
+        {
+            "id": generate_album_entry_id(),
+            "track_number": 1,
+            "disc_number": 1,
+            "track_id": trk.id,
+            "take_id": None,
+            "is_placeholder": True,
+            "has_owned_audio": False,
+            "snapshot": {"source_take_id": take.id, "audio_sha256": "abc"},
+        }
+    ]
+    bad_manifest.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.get_album(user_id, bad_alb.id)
+
+
+def _mp_worker_same_rev_writer(root_dir_str: str, user_id: str, album_id: str, expected_rev: int, title: str, barrier, queue) -> None:
+    mgr = ProjectStorageManager(root_dir=Path(root_dir_str))
+    barrier.wait(timeout=10)
+    try:
+        updated = mgr.update_album(user_id, album_id, {"expected_revision": expected_rev, "title": title})
+        queue.put(("ok", updated.revision if updated else None))
+    except AlbumRevisionConflictError:
+        queue.put(("conflict", None))
+
+
+def test_phase1a2_artwork_safety_containment_finalization_and_concurrency(custom_storage, tmp_path, monkeypatch):
+    """Verify Phase 1A.2 fixes: artwork symlink/rollback/preservation, ancestor symlinks, finalization layout & source_track_revision, bulk PATCH placeholder block, malformed revisions, and no-retry concurrent writers."""
+    import json
+    import multiprocessing as mp
+    import backend.project_storage as ps_mod
+
+    user_id = "user_p1a2"
+    trk = custom_storage.create_track(user_id=user_id, title="Artwork Safe Track")
+    wav_ok = _make_pcm_wav_bytes(0.4)
+    take = custom_storage.create_take(user_id, trk.id, wav_ok, "safe.wav", ".wav", label="Master", is_master=True)
+
+    # 1. Pre-existing .tmp_cover.jpg symlink must NOT truncate recording; unknown artifact preserved
+    alb = custom_storage.create_album(user_id=user_id, title="Cover Safety LP")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=take.id)
+    entry_id = alb.tracks[0].id
+    audio_path = custom_storage.get_album_entry_audio_path(user_id, alb.id, entry_id)
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    tmp_symlink = alb_dir / ".tmp_cover.jpg"
+    tmp_symlink.symlink_to(audio_path)
+
+    # 1a. Pre-replace manifest failure (NOT_PUBLISHED) rolls back newly promoted cover, preserves recording
+    orig_fchmod = ps_mod.os.fchmod
+    call_count = 0
+
+    def fail_pre_replace_cover(fd, mode, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        # 1st fchmod is staging cover; 2nd fchmod is .tmp_manifest_
+        if call_count == 2:
+            raise OSError("Simulated pre-replace cover failure")
+        return orig_fchmod(fd, mode, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.os, "fchmod", fail_pre_replace_cover)
+    with pytest.raises(OSError, match="Simulated pre-replace cover failure"):
+        custom_storage.save_album_cover(user_id, alb.id, b"FAKE_JPG_1", expected_revision=alb.revision, extension=".jpg")
+    monkeypatch.undo()
+    assert not (alb_dir / "cover.jpg").exists()
+    assert audio_path.read_bytes() == wav_ok
+    assert tmp_symlink.is_symlink()
+
+    # 1b. Uncertain manifest failure (UNCERTAIN) preserves promoted cover.jpg
+    orig_replace = ps_mod.os.replace
+
+    def fail_uncertain_cover(src, dst, *args, **kwargs):
+        if Path(dst).name == "album.json":
+            orig_replace(src, dst, *args, **kwargs)
+            raise OSError("Simulated uncertain cover publish")
+        return orig_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.os, "replace", fail_uncertain_cover)
+    with pytest.raises(OSError, match="Simulated uncertain cover publish"):
+        custom_storage.save_album_cover(user_id, alb.id, b"FAKE_JPG_COMMITTED", expected_revision=alb.revision, extension=".jpg")
+    monkeypatch.undo()
+    assert (alb_dir / "cover.jpg").read_bytes() == b"FAKE_JPG_COMMITTED"
+
+    # 1c. Replacing existing cover is disabled (409) and preserves existing cover bytes
+    refreshed = custom_storage.get_album(user_id, alb.id)
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.save_album_cover(user_id, alb.id, b"FAKE_JPG_NEW", expected_revision=refreshed.revision, extension=".jpg")
+    assert (alb_dir / "cover.jpg").read_bytes() == b"FAKE_JPG_COMMITTED"
+    tmp_symlink.unlink()
+
+    # 2. Finalization validates source_track_revision and complete root/entry layout
+    snap_path = audio_path.parent / "snapshot.json"
+    orig_snap = snap_path.read_text(encoding="utf-8")
+    tampered = json.loads(orig_snap)
+    tampered["source_track_revision"] = 999
+    snap_path.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(AlbumFinalizationError) as exc_rev:
+        custom_storage.finalize_album(user_id, alb.id, expected_revision=refreshed.revision)
+    assert any("snapshot" in err["reason"].lower() for err in exc_rev.value.errors)
+    snap_path.write_text(orig_snap, encoding="utf-8")
+
+    stray_root = alb_dir / "stray_root.txt"
+    stray_root.write_text("keep", encoding="utf-8")
+    with pytest.raises(AlbumFinalizationError) as exc_root:
+        custom_storage.finalize_album(user_id, alb.id, expected_revision=refreshed.revision)
+    assert any("unexpected album root artifact" in err["reason"].lower() for err in exc_root.value.errors)
+    assert stray_root.is_file()
+    stray_root.unlink()
+
+    extra_entry_file = audio_path.parent / "extra.bin"
+    extra_entry_file.write_bytes(b"extra")
+    with pytest.raises(AlbumFinalizationError) as exc_entry:
+        custom_storage.finalize_album(user_id, alb.id, expected_revision=refreshed.revision)
+    assert any("unexpected artifact" in err["reason"].lower() for err in exc_entry.value.errors)
+    assert extra_entry_file.is_file()
+    extra_entry_file.unlink()
+
+    # 3. Bulk update_album rejects placeholder-to-Take assignment
+    ph_alb = custom_storage.create_album(user_id=user_id, title="Bulk Placeholder LP")
+    ph_alb = custom_storage.add_album_entry(user_id, ph_alb.id, trk.id, expected_revision=ph_alb.revision, take_id=None)
+    ph_entry = ph_alb.tracks[0]
+    with pytest.raises(ProjectValidationError, match="Track/Take assignment"):
+        custom_storage.update_album(
+            user_id,
+            ph_alb.id,
+            {
+                "expected_revision": ph_alb.revision,
+                "tracks": [{**ph_entry.model_dump(), "take_id": take.id}],
+            },
+        )
+    assert custom_storage.get_album(user_id, ph_alb.id).tracks[0].is_placeholder is True
+
+    # 4. Malformed expected_revision types rejected at storage boundary
+    for bad_rev in (True, False, 1.5, 1.0, "1", 0, -1, None):
+        with pytest.raises(ProjectValidationError):
+            custom_storage.update_album(user_id, ph_alb.id, {"expected_revision": bad_rev, "title": "Bad"})
+
+    # 5. Ancestor symlink containment: symlinked entries/ dir fails closed without reading outside
+    outside_dir = tmp_path / "outside_entries"
+    outside_dir.mkdir()
+    sym_alb = custom_storage.create_album(user_id=user_id, title="Symlink Ancestor LP")
+    sym_alb = custom_storage.add_album_entry(user_id, sym_alb.id, trk.id, expected_revision=sym_alb.revision, take_id=take.id)
+    sym_entry_id = sym_alb.tracks[0].id
+    sym_dir = custom_storage._get_album_dir(user_id, sym_alb.id)
+    import shutil as _shutil
+    _shutil.rmtree(sym_dir / "entries")
+    (sym_dir / "entries").symlink_to(outside_dir)
+    assert custom_storage.get_album_entry_audio_path(user_id, sym_alb.id, sym_entry_id) is None
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.open_album_entry_audio_for_read(user_id, sym_alb.id, sym_entry_id)
+    (sym_dir / "entries").unlink()
+
+    # 6. Two concurrent writers retaining the same original revision (no auto-retry): 1 succeeds, 1 conflicts
+    conc_root = tmp_path / "conc_tenants"
+    conc_mgr = ProjectStorageManager(root_dir=conc_root)
+    conc_alb = conc_mgr.create_album(user_id=user_id, title="Same Rev Race")
+    ctx = mp.get_context("spawn")
+    barrier = ctx.Barrier(2)
+    q = ctx.Queue()
+    p1 = ctx.Process(target=_mp_worker_same_rev_writer, args=(str(conc_root), user_id, conc_alb.id, conc_alb.revision, "Writer 1", barrier, q))
+    p2 = ctx.Process(target=_mp_worker_same_rev_writer, args=(str(conc_root), user_id, conc_alb.id, conc_alb.revision, "Writer 2", barrier, q))
+    p1.start()
+    p2.start()
+    p1.join(timeout=15)
+    p2.join(timeout=15)
+    assert p1.exitcode == 0 and p2.exitcode == 0
+    outcomes = sorted([q.get(timeout=5) for _ in range(2)], key=lambda x: x[0])
+    assert outcomes == [("conflict", None), ("ok", 2)]
+
+
+def test_phase1a3_post_pub_artwork_non_finite_snapshots_and_dir_fd_containment(custom_storage, tmp_path, monkeypatch):
+    """Verify Phase 1A.3: post-publication artwork preservation on reload error, non-finite float rejection, and dir_fd write containment."""
+    import json
+    import backend.project_storage as ps_mod
+    from backend.project_models import AlbumEntrySnapshot
+
+    user_id = "user_p1a3"
+    trk = custom_storage.create_track(user_id=user_id, title="P1A3 Track")
+    wav_ok = _make_pcm_wav_bytes(0.4)
+    take = custom_storage.create_take(user_id, trk.id, wav_ok, "p1a3.wav", ".wav", label="Master", is_master=True)
+
+    # 1. Post-publication reload failure in save_album_cover must NOT delete committed cover.jpg
+    alb = custom_storage.create_album(user_id=user_id, title="PostPub Cover LP")
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    orig_read = custom_storage._read_album_unlocked
+    read_calls = 0
+
+    def fail_post_pub_reload(uid, aid, *, protect_finalized=False):
+        nonlocal read_calls
+        read_calls += 1
+        if read_calls == 1:
+            raise OSError("Simulated post-publication reload failure")
+        return orig_read(uid, aid, protect_finalized=protect_finalized)
+
+    monkeypatch.setattr(custom_storage, "_read_album_unlocked", fail_post_pub_reload)
+    with pytest.raises(OSError, match="Simulated post-publication reload failure"):
+        custom_storage.save_album_cover(user_id, alb.id, b"COMMITTED_COVER_BYTES", expected_revision=alb.revision, extension=".jpg")
+    monkeypatch.undo()
+
+    assert (alb_dir / "cover.jpg").read_bytes() == b"COMMITTED_COVER_BYTES"
+    reloaded = custom_storage.get_album(user_id, alb.id)
+    assert reloaded.has_cover is True
+    assert reloaded.revision == 2
+
+    # 2. Non-finite float rejection in _snapshots_semantically_equal across all 3 float fields
+    base_snap = AlbumEntrySnapshot(
+        entry_id="ale_0000000000000001",
+        source_track_id=trk.id,
+        source_track_title="T",
+        source_track_revision=1,
+        source_take_id=take.id,
+        source_take_label="L",
+        source_take_revision=1,
+        source_take_updated_at=100.0,
+        source_filename="f.wav",
+        format="wav",
+        size_bytes=100,
+        duration_seconds=1.5,
+        audio_sha256="a" * 64,
+        copied_at=200.0,
+    )
+    for float_fld in ("source_take_updated_at", "duration_seconds", "copied_at"):
+        # Finite within tolerance (<= 1e-6) -> equal
+        within = base_snap.model_copy(update={float_fld: getattr(base_snap, float_fld) + 5e-7})
+        assert custom_storage._snapshots_semantically_equal(base_snap, within) is True
+        # Finite outside tolerance (> 1e-6) -> not equal
+        outside = base_snap.model_copy(update={float_fld: getattr(base_snap, float_fld) + 2e-6})
+        assert custom_storage._snapshots_semantically_equal(base_snap, outside) is False
+        # NaN / +inf / -inf -> rejected even when both sides match
+        for non_finite in (float("nan"), float("inf"), float("-inf")):
+            bad_a = base_snap.model_copy(update={float_fld: non_finite})
+            bad_b = base_snap.model_copy(update={float_fld: non_finite})
+            assert custom_storage._snapshots_semantically_equal(bad_a, bad_b) is False
+            assert custom_storage._snapshots_semantically_equal(base_snap, bad_b) is False
+
+    # 3. Write-time dir_fd containment: swapping album_dir path to an external symlink after album_dir_fd is opened
+    #    must keep manifest publication strictly inside the original album_dir inode.
+    cont_alb = custom_storage.create_album(user_id=user_id, title="DirFd Containment LP")
+    cont_dir = custom_storage._get_album_dir(user_id, cont_alb.id)
+    orig_inode = os.stat(cont_dir).st_ino
+    external_dir = tmp_path / "external_redirect_target"
+    external_dir.mkdir()
+    backup_dir = tmp_path / "moved_original_album_dir"
+
+    orig_publish_in_dir = ps_mod._publish_manifest_atomic_in_dir
+
+    def swap_path_before_publish(dir_fd, filename, data):
+        cont_dir.rename(backup_dir)
+        cont_dir.symlink_to(external_dir)
+        return orig_publish_in_dir(dir_fd, filename, data)
+
+    monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", swap_path_before_publish)
+    updated = custom_storage.update_album(
+        user_id, cont_alb.id, {"expected_revision": cont_alb.revision, "title": "Confined Write"}
+    )
+    monkeypatch.undo()
+
+    assert updated is not None and updated.title == "Confined Write"
+    assert not (external_dir / "album.json").exists()
+    assert os.stat(backup_dir).st_ino == orig_inode
+    assert json.loads((backup_dir / "album.json").read_text(encoding="utf-8"))["title"] == "Confined Write"
+
+
+def test_phase1a4_transaction_ownership_and_dir_fd_consistency(custom_storage, tmp_path, monkeypatch):
+    """Verify Phase 1A.4 dir_fd ownership: entry swap before promotion/rollback, inode-checked rollback, finalized manifest swap, and empty-entry/album cleanup."""
+    import json
+    import backend.project_storage as ps_mod
+
+    user_id = "user_p1a4"
+    trk = custom_storage.create_track(user_id=user_id, title="P1A4 Track")
+    wav_1 = _make_pcm_wav_bytes(0.4)
+    wav_2 = _make_pcm_wav_bytes(0.7)
+    take = custom_storage.create_take(user_id, trk.id, wav_1, "p1a4.wav", ".wav", label="Master", is_master=True)
+
+    # Protected victim album whose files must NEVER be touched by another transaction's swap/rollback
+    victim_alb = custom_storage.create_album(user_id=user_id, title="Victim LP")
+    victim_alb = custom_storage.add_album_entry(user_id, victim_alb.id, trk.id, expected_revision=victim_alb.revision, take_id=take.id)
+    victim_entry_id = victim_alb.tracks[0].id
+    victim_entry_dir = custom_storage._get_album_entry_dir(user_id, victim_alb.id, victim_entry_id)
+    (victim_entry_dir / "audio.wav").write_bytes(wav_2)
+
+    # 1. Directory replacement after staging (before promotion) on NEW-ENTRY creation (add_album_entry)
+    alb_new = custom_storage.create_album(user_id=user_id, title="New Entry Swap LP")
+    alb_new_dir = custom_storage._get_album_dir(user_id, alb_new.id)
+    moved_new_dir = tmp_path / "moved_new_entry_alb"
+    orig_link = ps_mod.os.link
+    swapped_new = False
+
+    def swap_before_new_promote(src, dst, *args, **kwargs):
+        nonlocal swapped_new
+        if not swapped_new and str(dst) == "audio.wav":
+            swapped_new = True
+            alb_new_dir.rename(moved_new_dir)
+            alb_new_dir.symlink_to(custom_storage._get_album_dir(user_id, victim_alb.id))
+        return orig_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.os, "link", swap_before_new_promote)
+    res_new = custom_storage.add_album_entry(user_id, alb_new.id, trk.id, expected_revision=alb_new.revision, take_id=take.id)
+    monkeypatch.undo()
+    assert res_new is not None and len(res_new.tracks) == 1
+    assert (victim_entry_dir / "audio.wav").read_bytes() == wav_2
+    assert (moved_new_dir / "entries" / ps_mod.get_album_entry_dir_name(res_new.tracks[0].id) / "audio.wav").read_bytes() == wav_1
+
+    # 2. Directory replacement between promotion steps + rollback encountering another transaction's inode on PLACEHOLDER assignment
+    alb_ph = custom_storage.create_album(user_id=user_id, title="Placeholder Swap LP")
+    alb_ph = custom_storage.add_album_entry(user_id, alb_ph.id, trk.id, expected_revision=alb_ph.revision, take_id=None)
+    ph_id = alb_ph.tracks[0].id
+    ph_entry_dir = custom_storage._get_album_entry_dir(user_id, alb_ph.id, ph_id)
+    moved_ph_dir = tmp_path / "moved_ph_alb"
+    alb_ph_dir = custom_storage._get_album_dir(user_id, alb_ph.id)
+
+    orig_publish = ps_mod._publish_manifest_atomic_in_dir
+    link_calls = 0
+
+    def swap_between_promote_and_fail(src, dst, *args, **kwargs):
+        nonlocal link_calls
+        link_calls += 1
+        res = orig_link(src, dst, *args, **kwargs)
+        if link_calls == 1:
+            # Swap album_dir path between audio promotion and snapshot promotion
+            alb_ph_dir.rename(moved_ph_dir)
+            alb_ph_dir.symlink_to(custom_storage._get_album_dir(user_id, victim_alb.id))
+        return res
+
+    def fail_before_manifest_replace(dir_fd, filename, data):
+        # Replace promoted audio.wav in moved_ph_dir with a different file/inode before rollback runs!
+        moved_entry = moved_ph_dir / "entries" / ps_mod.get_album_entry_dir_name(ph_id)
+        (moved_entry / "audio.wav").unlink()
+        (moved_entry / "audio.wav").write_bytes(b"FOREIGN_TX_FILE")
+        raise ps_mod.ManifestPublishError("Simulated pre-publish failure", publish_state=ps_mod.ManifestPublishState.NOT_PUBLISHED)
+
+    monkeypatch.setattr(ps_mod.os, "link", swap_between_promote_and_fail)
+    monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", fail_before_manifest_replace)
+    with pytest.raises(ps_mod.ManifestPublishError, match="Simulated pre-publish failure"):
+        custom_storage.update_album_entry(user_id, alb_ph.id, ph_id, expected_revision=alb_ph.revision, take_id=take.id)
+    monkeypatch.undo()
+
+    moved_entry = moved_ph_dir / "entries" / ps_mod.get_album_entry_dir_name(ph_id)
+    # Rollback MUST preserve FOREIGN_TX_FILE (different inode!) and unlink only our snapshot.json
+    assert (moved_entry / "audio.wav").read_bytes() == b"FOREIGN_TX_FILE"
+    assert not (moved_entry / "snapshot.json").exists()
+    assert (victim_entry_dir / "audio.wav").read_bytes() == wav_2
+
+    # 3. Manifest replacement before descriptor acquisition: swapping draft dir to finalized album dir -> AlbumFinalizedError
+    draft_fin = custom_storage.create_album(user_id=user_id, title="SwapToFinalized LP")
+    draft_fin = custom_storage.add_album_entry(user_id, draft_fin.id, trk.id, expected_revision=draft_fin.revision, take_id=take.id)
+    fin_target = custom_storage.create_album(user_id=user_id, title="AlreadyFinalized LP")
+    fin_target = custom_storage.add_album_entry(user_id, fin_target.id, trk.id, expected_revision=fin_target.revision, take_id=take.id)
+    fin_target = custom_storage.finalize_album(user_id, fin_target.id, expected_revision=fin_target.revision)
+
+    draft_fin_dir = custom_storage._get_album_dir(user_id, draft_fin.id)
+    fin_target_dir = custom_storage._get_album_dir(user_id, fin_target.id)
+    draft_fin_backup = tmp_path / "draft_fin_backup"
+    draft_fin_dir.rename(draft_fin_backup)
+    draft_fin_dir.symlink_to(fin_target_dir)
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.finalize_album(user_id, draft_fin.id, expected_revision=draft_fin.revision)
+    draft_fin_dir.unlink()
+    draft_fin_backup.rename(draft_fin_dir)
+
+    # 4. Empty-entry removal and empty-album deletion succeed via dir_fd even when sibling/unrelated paths exist
+    empty_alb = custom_storage.create_album(user_id=user_id, title="Empty Cleanup LP")
+    empty_alb = custom_storage.add_album_entry(user_id, empty_alb.id, trk.id, expected_revision=empty_alb.revision, take_id=None)
+    e_ph_id = empty_alb.tracks[0].id
+    empty_alb = custom_storage.remove_album_entry(user_id, empty_alb.id, e_ph_id, expected_revision=empty_alb.revision)
+    assert empty_alb.tracks == []
+    assert custom_storage.delete_album(user_id, empty_alb.id, expected_revision=empty_alb.revision) is True
+    assert not custom_storage._get_album_dir_path(user_id, empty_alb.id).exists()
+
+
+def test_phase1a5_manifest_validation_dir_cleanup_and_fd_ownership(custom_storage, tmp_path, monkeypatch):
+    """Verify Phase 1A.5: pre-publication AlbumMetadata validation (1000th entry & invalid metadata), newly created entry_dir cleanup, source-open/snapshot fd cleanup, rejected manifest fd closure, and ro_fd snapshot construction."""
+    import builtins
+    import hashlib
+    import json
+    import backend.project_storage as ps_mod
+
+    user_id = "user_p1a5"
+    trk = custom_storage.create_track(user_id=user_id, title="P1A5 Track")
+    wav_ok = _make_pcm_wav_bytes(0.4)
+    take = custom_storage.create_take(user_id, trk.id, wav_ok, "p1a5.wav", ".wav", label="Master", is_master=True)
+
+    # 1. Pre-publication validation: 1,000th entry exceeds AlbumTrackEntry(track_number le=999)
+    #    Must fail BEFORE audio promotion or album.json publication, and clean up newly created entry_dir.
+    alb_999 = custom_storage.create_album(user_id=user_id, title="Max Tracks LP")
+    alb_999_dir = custom_storage._get_album_dir(user_id, alb_999.id)
+    alb_999 = custom_storage.add_album_entry(user_id, alb_999.id, trk.id, expected_revision=alb_999.revision, take_id=take.id)
+    rec_entry_id = alb_999.tracks[0].id
+
+    # Seed 998 placeholders in manifest (total 999) so the next add_album_entry creates the 1000th entry
+    raw_999 = json.loads((alb_999_dir / "album.json").read_text(encoding="utf-8"))
+    for i in range(2, 1000):
+        raw_999["tracks"].append({
+            "id": generate_album_entry_id(),
+            "track_number": i,
+            "disc_number": 1,
+            "track_id": trk.id,
+            "take_id": None,
+            "is_placeholder": True,
+            "has_owned_audio": False,
+            "snapshot": None,
+        })
+    (alb_999_dir / "album.json").write_text(json.dumps(raw_999), encoding="utf-8")
+    before_entry_dirs = {p.name for p in (alb_999_dir / "entries").iterdir()}
+
+    with pytest.raises(ProjectValidationError, match="Invalid album manifest candidate"):
+        custom_storage.add_album_entry(user_id, alb_999.id, trk.id, expected_revision=alb_999.revision, take_id=take.id)
+
+    after_entry_dirs = {p.name for p in (alb_999_dir / "entries").iterdir()}
+    assert after_entry_dirs == before_entry_dirs
+    assert len(custom_storage.get_album(user_id, alb_999.id).tracks) == 999
+    assert custom_storage.get_album_entry_audio_path(user_id, alb_999.id, rec_entry_id).read_bytes() == wav_ok
+
+    # 1b. Invalid metadata update (empty title violates min_length=1) fails before publication
+    alb_meta = custom_storage.create_album(user_id=user_id, title="Valid Title")
+    with pytest.raises(ProjectValidationError, match="Invalid album manifest candidate"):
+        custom_storage.update_album(user_id, alb_meta.id, {"expected_revision": alb_meta.revision, "title": ""})
+    assert custom_storage.get_album(user_id, alb_meta.id).title == "Valid Title"
+
+    # 2. Newly created entry_dir cleanup + audio_fd closure on source-open PermissionError (no orphan blocking finalization!)
+    alb_fin = custom_storage.create_album(user_id=user_id, title="No Orphan LP")
+    alb_fin = custom_storage.add_album_entry(user_id, alb_fin.id, trk.id, expected_revision=alb_fin.revision, take_id=take.id)
+    src_audio_path = custom_storage.get_take_audio_path(user_id, trk.id, take.id)
+    orig_open = builtins.open
+    fd_count_before = len(os.listdir("/proc/self/fd"))
+
+    def fail_source_open(file, mode="r", *args, **kwargs):
+        if Path(file) == src_audio_path and "rb" in str(mode):
+            raise PermissionError("Simulated EACCES opening source audio")
+        return orig_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", fail_source_open)
+    with pytest.raises(PermissionError, match="Simulated EACCES"):
+        custom_storage.add_album_entry(user_id, alb_fin.id, trk.id, expected_revision=alb_fin.revision, take_id=take.id)
+    monkeypatch.undo()
+
+    fd_count_after = len(os.listdir("/proc/self/fd"))
+    assert fd_count_after <= fd_count_before
+    # Only the 1st entry's dir exists; failed 2nd entry dir was cleaned up so finalization succeeds!
+    assert len(list((custom_storage._get_album_dir(user_id, alb_fin.id) / "entries").iterdir())) == 1
+    finalized = custom_storage.finalize_album(user_id, alb_fin.id, expected_revision=alb_fin.revision)
+    assert finalized.is_finalized is True
+
+    # 3. Snapshot staging failure (json.dump / flush / fsync / fchmod) immediately cleans up staging_snap & created entry_dir
+    alb_snap_fail = custom_storage.create_album(user_id=user_id, title="Snap Fail LP")
+    orig_json_dump = ps_mod.json.dump
+
+    def fail_snap_dump(obj, fp, *args, **kwargs):
+        if isinstance(obj, dict) and "audio_sha256" in obj:
+            raise OSError("Simulated json.dump failure")
+        return orig_json_dump(obj, fp, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.json, "dump", fail_snap_dump)
+    with pytest.raises(OSError, match="Simulated json.dump failure"):
+        custom_storage.add_album_entry(user_id, alb_snap_fail.id, trk.id, expected_revision=alb_snap_fail.revision, take_id=take.id)
+    monkeypatch.undo()
+    snap_entries_dir = custom_storage._get_album_dir(user_id, alb_snap_fail.id) / "entries"
+    assert not snap_entries_dir.exists() or list(snap_entries_dir.iterdir()) == []
+
+    # 4. Rejected nonregular manifest in _read_album_from_dir_fd closes mfd without leaking descriptors
+    alb_bad_m = custom_storage.create_album(user_id=user_id, title="Bad Manifest Type LP")
+    bad_m_dir = custom_storage._get_album_dir(user_id, alb_bad_m.id)
+    (bad_m_dir / "album.json").unlink()
+    (bad_m_dir / "album.json").mkdir()
+    fd_before_m = len(os.listdir("/proc/self/fd"))
+    with pytest.raises(AlbumManifestCorruptError, match="not a regular file"):
+        custom_storage.get_album(user_id, alb_bad_m.id)
+    assert len(os.listdir("/proc/self/fd")) <= fd_before_m
+
+    # 5. Snapshot construction uses retained ro_fd (directory swap before _build_take_snapshot cannot inspect wrong file)
+    alb_ro = custom_storage.create_album(user_id=user_id, title="RoFd Snap LP")
+    alb_ro_dir = custom_storage._get_album_dir(user_id, alb_ro.id)
+    moved_ro_dir = tmp_path / "moved_ro_dir"
+    fake_ext_dir = tmp_path / "fake_ext_dir"
+    fake_ext_dir.mkdir()
+    orig_build_snap = custom_storage._build_take_snapshot
+
+    def swap_before_build_snap(*args, **kwargs):
+        if alb_ro_dir.exists() and not alb_ro_dir.is_symlink():
+            alb_ro_dir.rename(moved_ro_dir)
+            alb_ro_dir.symlink_to(fake_ext_dir)
+        return orig_build_snap(*args, **kwargs)
+
+    monkeypatch.setattr(custom_storage, "_build_take_snapshot", swap_before_build_snap)
+    res_ro = custom_storage.add_album_entry(user_id, alb_ro.id, trk.id, expected_revision=alb_ro.revision, take_id=take.id)
+    monkeypatch.undo()
+    assert res_ro.tracks[0].snapshot.audio_sha256 == hashlib.sha256(wav_ok).hexdigest()
+    assert res_ro.tracks[0].snapshot.size_bytes == len(wav_ok)
+
+
+def test_phase1a6_staging_setup_failures_cleanup_created_dirs(custom_storage: ProjectStorageManager, tmp_path: Path, monkeypatch):
+    """Phase 1A.6 P2-1: Failures after entry_dir/entries creation clean up newly created empty dirs."""
+    import io
+    import wave
+    import backend.project_storage as ps_mod
+
+    user_id = "u_1a6_stage_cleanup"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 800)
+    wav_ok = buf.getvalue()
+
+    trk = custom_storage.create_track(user_id=user_id, title="Stage Cleanup Track")
+    take = custom_storage.create_take(
+        user_id=user_id, track_id=trk.id, audio_bytes=wav_ok, original_filename="take.wav", extension=".wav"
+    )
+
+    # 1. os.open failing when creating .staging_*_audio* cleans up newly created entry_dir
+    alb1 = custom_storage.create_album(user_id=user_id, title="Open Staging Audio Fail")
+    alb1_dir = custom_storage._get_album_dir(user_id, alb1.id)
+    orig_os_open = ps_mod.os.open
+
+    def fail_staging_audio_open(path, flags, *args, **kwargs):
+        if isinstance(path, str) and path.startswith(".staging_") and "_audio" in path:
+            raise OSError("Simulated EACCES creating staging audio file")
+        return orig_os_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.os, "open", fail_staging_audio_open)
+    with pytest.raises(OSError, match="Simulated EACCES creating staging audio file"):
+        custom_storage.add_album_entry(user_id, alb1.id, trk.id, expected_revision=alb1.revision, take_id=take.id)
+    monkeypatch.undo()
+    assert list((alb1_dir / "entries").iterdir()) == []
+    assert custom_storage.get_album(user_id, alb1.id).revision == alb1.revision
+
+    # 2. os.listdir(entry_dir_fd) failure cleans up newly created entry_dir, preserving foreign dir
+    alb2 = custom_storage.create_album(user_id=user_id, title="Listdir Fail")
+    alb2_dir = custom_storage._get_album_dir(user_id, alb2.id)
+    foreign_dir = alb2_dir / "foreign_keep"
+    foreign_dir.mkdir()
+    (foreign_dir / "keep.txt").write_text("keep", encoding="utf-8")
+    orig_listdir = ps_mod.os.listdir
+    listdir_calls = {"n": 0}
+
+    def fail_entry_listdir(arg):
+        if isinstance(arg, int):
+            listdir_calls["n"] += 1
+            if listdir_calls["n"] == 1:
+                raise OSError("Simulated EIO listing entry_dir_fd")
+        return orig_listdir(arg)
+
+    monkeypatch.setattr(ps_mod.os, "listdir", fail_entry_listdir)
+    with pytest.raises(OSError, match="Simulated EIO listing entry_dir_fd"):
+        custom_storage.add_album_entry(user_id, alb2.id, trk.id, expected_revision=alb2.revision, take_id=take.id)
+    monkeypatch.undo()
+    assert list((alb2_dir / "entries").iterdir()) == []
+    assert (foreign_dir / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+    # 3. Entry-directory acquisition failure cleans up newly created entries dir (when entries did not exist)
+    alb3 = custom_storage.create_album(user_id=user_id, title="Entry Dir Acquire Fail")
+    alb3_dir = custom_storage._get_album_dir(user_id, alb3.id)
+    (alb3_dir / "entries").rmdir()
+    orig_tracked = custom_storage._open_or_create_subdir_fd_tracked
+    call_count = {"n": 0}
+
+    def fail_on_entry_subdir(parent_fd, name):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise OSError("Simulated failure acquiring entry_dir")
+        return orig_tracked(parent_fd, name)
+
+    monkeypatch.setattr(custom_storage, "_open_or_create_subdir_fd_tracked", fail_on_entry_subdir)
+    with pytest.raises(OSError, match="Simulated failure acquiring entry_dir"):
+        custom_storage.add_album_entry(user_id, alb3.id, trk.id, expected_revision=alb3.revision, take_id=take.id)
+    monkeypatch.undo()
+    assert not (alb3_dir / "entries").exists()
+
+
+def test_phase1a6_snapshot_metadata_fidelity_and_duration_rounding(custom_storage: ProjectStorageManager, tmp_path: Path):
+    """Phase 1A.6 P2-2 & P2-3: Descriptor snapshot extracts full MP3/WAV/M4A tags & rounds duration to 2 decimals."""
+    import io
+    import wave
+    import shutil
+    from mutagen.id3 import ID3, TIT2, TPE1, TALB, TPE2, TCOM, TCON, TDRC, TRCK, TPOS, TBPM, COMM, USLT
+    from mutagen.wave import WAVE
+    from mutagen.mp4 import MP4
+    from backend.metadata_engine import extract_metadata_and_artwork, extract_metadata_from_fd
+
+    user_id = "u_1a6_snap_fidelity"
+
+    # 1. Tagged WAV (ID3 + 1.234s duration -> rounds to 1.23s consistently)
+    wav_path = tmp_path / "tagged_3dec.wav"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 9872)  # 9872 / 8000 = 1.234s
+    wav_path.write_bytes(buf.getvalue())
+    wv = WAVE(wav_path)
+    wv.add_tags()
+    wv.tags.add(TIT2(encoding=3, text="Wave Title"))
+    wv.tags.add(TPE1(encoding=3, text="Wave Artist"))
+    wv.tags.add(TALB(encoding=3, text="Wave Album"))
+    wv.tags.add(TPE2(encoding=3, text="Wave AlbumArtist"))
+    wv.tags.add(TCOM(encoding=3, text="Wave Composer"))
+    wv.tags.add(TCON(encoding=3, text="Electronic"))
+    wv.tags.add(TDRC(encoding=3, text="2026"))
+    wv.tags.add(TRCK(encoding=3, text="2/10"))
+    wv.tags.add(TPOS(encoding=3, text="1/2"))
+    wv.tags.add(TBPM(encoding=3, text="124"))
+    wv.tags.add(COMM(encoding=3, lang="eng", desc="", text="Wave Comment"))
+    wv.tags.add(USLT(encoding=3, lang="eng", desc="", text="Embedded wave lyrics"))
+    wv.save()
+
+    # 2. Tagged M4A (from tests/fixtures/tone.m4a)
+    m4a_src = Path(__file__).parent / "fixtures" / "tone.m4a"
+    m4a_path = tmp_path / "tagged.m4a"
+    shutil.copy2(m4a_src, m4a_path)
+    mp4 = MP4(m4a_path)
+    mp4["\xa9nam"] = ["M4A Title"]
+    mp4["\xa9ART"] = ["M4A Artist"]
+    mp4["\xa9alb"] = ["M4A Album"]
+    mp4["aART"] = ["M4A AlbumArtist"]
+    mp4["\xa9wrt"] = ["M4A Composer"]
+    mp4["\xa9gen"] = ["Synthwave"]
+    mp4["\xa9day"] = ["2025"]
+    mp4["trkn"] = [(3, 8)]
+    mp4["disk"] = [(1, 1)]
+    mp4["tmpo"] = [118]
+    mp4["\xa9cmt"] = ["M4A Comment"]
+    mp4["\xa9lyr"] = ["M4A Lyrics"]
+    mp4.save()
+
+    # 3. Tagged MP3 (from tests/fixtures/tone.mp3 if present, else minimal ID3 MP3)
+    mp3_fixture = Path(__file__).parent / "fixtures" / "tone.mp3"
+    mp3_path = tmp_path / "tagged.mp3"
+    if mp3_fixture.exists():
+        shutil.copy2(mp3_fixture, mp3_path)
+    else:
+        mp3_path.write_bytes(b"\xff\xfb\x90\x64" + b"\x00" * 413)
+    id3 = ID3()
+    id3.add(TIT2(encoding=3, text="MP3 Title"))
+    id3.add(TPE1(encoding=3, text="MP3 Artist"))
+    id3.add(TALB(encoding=3, text="MP3 Album"))
+    id3.add(TPE2(encoding=3, text="MP3 AlbumArtist"))
+    id3.add(TCOM(encoding=3, text="MP3 Composer"))
+    id3.add(TCON(encoding=3, text="Ambient"))
+    id3.add(TDRC(encoding=3, text="2024"))
+    id3.add(TRCK(encoding=3, text="1/5"))
+    id3.add(TPOS(encoding=3, text="1/1"))
+    id3.add(TBPM(encoding=3, text="95"))
+    id3.add(COMM(encoding=3, lang="eng", desc="", text="MP3 Comment"))
+    id3.add(USLT(encoding=3, lang="eng", desc="", text="MP3 Embedded Lyrics"))
+    id3.save(mp3_path)
+
+    # Compare extract_metadata_from_fd vs extract_metadata_and_artwork for all 3 formats
+    for p in (wav_path, m4a_path, mp3_path):
+        by_path = extract_metadata_and_artwork(p)
+        fd = os.open(p, os.O_RDONLY)
+        try:
+            by_fd = extract_metadata_from_fd(fd, p.suffix)
+        finally:
+            os.close(fd)
+        assert by_fd["metadata"] == by_path["metadata"]
+        assert by_fd["duration"] == by_path["audio_info"]["duration"]
+
+    # Verify snapshot parity, USLT vs attached lyrics precedence, and 2-decimal duration refresh parity
+    trk_wav = custom_storage.create_track(user_id=user_id, title="WAV Track")
+    take_wav = custom_storage.create_take(
+        user_id=user_id, track_id=trk_wav.id, audio_bytes=wav_path.read_bytes(), original_filename="tagged_3dec.wav", extension=".wav"
+    )
+    custom_storage.save_take_lyrics(user_id, trk_wav.id, take_wav.id, "Attached fallback lyrics")
+
+    alb = custom_storage.create_album(user_id=user_id, title="Snapshot Fidelity LP")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk_wav.id, expected_revision=alb.revision, take_id=take_wav.id)
+    snap_wav = alb.tracks[0].snapshot
+    assert snap_wav.duration_seconds == 1.23
+    assert snap_wav.embedded_metadata["title"] == "Wave Title"
+    assert snap_wav.embedded_metadata["artist"] == "Wave Artist"
+    assert snap_wav.embedded_metadata["track_number"] == "2"
+    assert snap_wav.embedded_metadata["total_tracks"] == "10"
+    assert snap_wav.embedded_metadata["bpm"] == "124"
+    # Embedded USLT lyrics must take precedence over attached take lyrics
+    assert snap_wav.embedded_lyrics == "Embedded wave lyrics"
+
+    # Refresh preview on untouched source must report has_changes=False (1.23s == 1.23s)
+    preview = custom_storage.preview_album_entry_refresh(user_id, alb.id, alb.tracks[0].id)
+    assert preview.has_changes is False
+
+
+def test_phase1a6_create_album_validation_and_publish_cleanup(custom_storage: ProjectStorageManager, monkeypatch):
+    """Phase 1A.6 P2-4: create_album validates before mkdir and cleans up only on confirmed NOT_PUBLISHED."""
+    import backend.project_storage as ps_mod
+    from backend.project_storage import ManifestPublishError, ManifestPublishState
+
+    user_id = "u_1a6_create_album"
+    albums_root = custom_storage._get_albums_root(user_id)
+
+    # 1. Whitespace-only title raises ProjectValidationError with zero directories created
+    before_dirs = {p for p in albums_root.iterdir() if p.is_dir()}
+    with pytest.raises(ProjectValidationError):
+        custom_storage.create_album(user_id=user_id, title="   ")
+    assert {p for p in albums_root.iterdir() if p.is_dir()} == before_dirs
+
+    # 2. Pre-replace NOT_PUBLISHED failure cleans up newly created album_dir and entries
+    def fail_not_published(dir_fd, filename, data):
+        raise ManifestPublishError("Simulated pre-replace failure", publish_state=ManifestPublishState.NOT_PUBLISHED)
+
+    monkeypatch.setattr(ps_mod, "_publish_manifest_atomic_in_dir", fail_not_published)
+    with pytest.raises(ManifestPublishError, match="Simulated pre-replace failure"):
+        custom_storage.create_album(user_id=user_id, title="Pre-Replace Fail LP")
+    monkeypatch.undo()
+    assert {p for p in albums_root.iterdir() if p.is_dir()} == before_dirs
+
+    # 3. UNCERTAIN publication preserves album.json and album_dir without deleting
+    orig_replace = ps_mod.os.replace
+
+    def uncertain_after_replace(src, dst, *args, **kwargs):
+        orig_replace(src, dst, *args, **kwargs)
+        raise OSError("Simulated post-replace uncertain error")
+
+    monkeypatch.setattr(ps_mod.os, "replace", uncertain_after_replace)
+    with pytest.raises(ManifestPublishError) as exc_info:
+        custom_storage.create_album(user_id=user_id, title="Uncertain Create LP")
+    monkeypatch.undo()
+    assert exc_info.value.publish_state == ManifestPublishState.UNCERTAIN
+    after_dirs = {p for p in albums_root.iterdir() if p.is_dir()} - before_dirs
+    assert len(after_dirs) == 1
+    created_dir = next(iter(after_dirs))
+    assert (created_dir / "album.json").is_file()
+    assert (created_dir / "entries").is_dir()
+
+
+def test_phase1a6_snapshot_staging_faults_separate(custom_storage: ProjectStorageManager, monkeypatch):
+    """Phase 1A.6 Test Integrity: Separate fault-injection tests for json.dump, flush, fsync, and fchmod."""
+    import io
+    import wave
+    import backend.project_storage as ps_mod
+
+    user_id = "u_1a6_snap_faults"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 800)
+    wav_ok = buf.getvalue()
+
+    trk = custom_storage.create_track(user_id=user_id, title="Fault Track")
+    take = custom_storage.create_take(
+        user_id=user_id, track_id=trk.id, audio_bytes=wav_ok, original_filename="take.wav", extension=".wav"
+    )
+
+    def _setup_album_with_existing_entry(title: str):
+        alb = custom_storage.create_album(user_id=user_id, title=title)
+        alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=take.id)
+        alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+        foreign = alb_dir / "foreign_artifact.txt"
+        foreign.write_text("untouched", encoding="utf-8")
+        return alb, alb_dir, foreign
+
+    def _assert_preserved(alb, alb_dir: Path, foreign: Path, expected_entry_dirs: set):
+        cur = custom_storage.get_album(user_id, alb.id)
+        assert cur.revision == alb.revision
+        assert len(cur.tracks) == 1
+        assert custom_storage.get_album_entry_audio_path(user_id, alb.id, cur.tracks[0].id).read_bytes() == wav_ok
+        assert foreign.read_text(encoding="utf-8") == "untouched"
+        assert {p.name for p in (alb_dir / "entries").iterdir()} == expected_entry_dirs
+
+    # A. json.dump failure
+    alb_a, dir_a, foreign_a = _setup_album_with_existing_entry("Fault Dump LP")
+    exp_a = {p.name for p in (dir_a / "entries").iterdir()}
+    orig_dump = ps_mod.json.dump
+    monkeypatch.setattr(
+        ps_mod.json,
+        "dump",
+        lambda obj, fp, *a, **kw: (_ for _ in ()).throw(OSError("Simulated json.dump fault"))
+        if isinstance(obj, dict) and "audio_sha256" in obj
+        else orig_dump(obj, fp, *a, **kw),
+    )
+    with pytest.raises(OSError, match="Simulated json.dump fault"):
+        custom_storage.add_album_entry(user_id, alb_a.id, trk.id, expected_revision=alb_a.revision, take_id=take.id)
+    monkeypatch.undo()
+    _assert_preserved(alb_a, dir_a, foreign_a, exp_a)
+
+    # B. flush failure on snapshot file object
+    alb_b, dir_b, foreign_b = _setup_album_with_existing_entry("Fault Flush LP")
+    exp_b = {p.name for p in (dir_b / "entries").iterdir()}
+    orig_fdopen = ps_mod.os.fdopen
+
+    class _FailFlushWrapper:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __enter__(self):
+            self._inner.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._inner.__exit__(*args)
+
+        def write(self, data):
+            return self._inner.write(data)
+
+        def flush(self):
+            raise OSError("Simulated flush fault")
+
+        def fileno(self):
+            return self._inner.fileno()
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    def wrap_snap_flush(fd, mode="r", *args, **kwargs):
+        f = orig_fdopen(fd, mode, *args, **kwargs)
+        if mode == "w":
+            return _FailFlushWrapper(f)
+        return f
+
+    monkeypatch.setattr(ps_mod.os, "fdopen", wrap_snap_flush)
+    with pytest.raises(OSError, match="Simulated flush fault"):
+        custom_storage.add_album_entry(user_id, alb_b.id, trk.id, expected_revision=alb_b.revision, take_id=take.id)
+    monkeypatch.undo()
+    _assert_preserved(alb_b, dir_b, foreign_b, exp_b)
+
+    # C. os.fsync failure on snapshot staging fd (fail on 2nd fsync: 1st is audio, 2nd is snapshot)
+    alb_c, dir_c, foreign_c = _setup_album_with_existing_entry("Fault Fsync LP")
+    exp_c = {p.name for p in (dir_c / "entries").iterdir()}
+    orig_fsync = ps_mod.os.fsync
+    fsync_calls = {"n": 0}
+
+    def fail_second_fsync(fd):
+        fsync_calls["n"] += 1
+        if fsync_calls["n"] == 2:
+            raise OSError("Simulated fsync fault")
+        return orig_fsync(fd)
+
+    monkeypatch.setattr(ps_mod.os, "fsync", fail_second_fsync)
+    with pytest.raises(OSError, match="Simulated fsync fault"):
+        custom_storage.add_album_entry(user_id, alb_c.id, trk.id, expected_revision=alb_c.revision, take_id=take.id)
+    monkeypatch.undo()
+    _assert_preserved(alb_c, dir_c, foreign_c, exp_c)
+
+    # D. os.fchmod failure specifically on the staged snapshot descriptor (no global call counting)
+    alb_d, dir_d, foreign_d = _setup_album_with_existing_entry("Fault Fchmod LP")
+    exp_d = {p.name for p in (dir_d / "entries").iterdir()}
+    orig_open_d = ps_mod.os.open
+    orig_close_d = ps_mod.os.close
+    orig_fchmod_d = ps_mod.os.fchmod
+    snap_fds: set[int] = set()
+    fchmod_injected = {"hit": False}
+
+    def track_snap_open(path, flags, *args, **kwargs):
+        fd = orig_open_d(path, flags, *args, **kwargs)
+        if isinstance(path, str) and path.startswith(".staging_") and path.endswith("_snapshot.json"):
+            snap_fds.add(fd)
+        return fd
+
+    def track_snap_close(fd):
+        snap_fds.discard(fd)
+        return orig_close_d(fd)
+
+    def fail_snap_fchmod(fd, mode):
+        if fd in snap_fds:
+            fchmod_injected["hit"] = True
+            raise OSError("Simulated fchmod fault on staged snapshot")
+        return orig_fchmod_d(fd, mode)
+
+    monkeypatch.setattr(ps_mod.os, "open", track_snap_open)
+    monkeypatch.setattr(ps_mod.os, "close", track_snap_close)
+    monkeypatch.setattr(ps_mod.os, "fchmod", fail_snap_fchmod)
+    with pytest.raises(OSError, match="Simulated fchmod fault on staged snapshot"):
+        custom_storage.add_album_entry(user_id, alb_d.id, trk.id, expected_revision=alb_d.revision, take_id=take.id)
+    monkeypatch.undo()
+    assert fchmod_injected["hit"] is True
+    _assert_preserved(alb_d, dir_d, foreign_d, exp_d)
+
+
+def test_phase1a7_subdir_acquisition_exception_safety(custom_storage: ProjectStorageManager, tmp_path: Path, monkeypatch):
+    """Phase 1A.7: _open_or_create_subdir_fd_tracked cleans up newly created empty dir and closes fds on post-mkdir failures."""
+    import backend.project_storage as ps_mod
+    from backend.project_storage import AlbumManifestCorruptError
+
+    parent_dir = tmp_path / "subdir_parent"
+    parent_dir.mkdir(mode=0o700)
+    foreign_existing = parent_dir / "existing_dir"
+    foreign_existing.mkdir(mode=0o700)
+    (foreign_existing / "keep.txt").write_text("keep", encoding="utf-8")
+
+    parent_fd = os.open(parent_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        orig_os_open = ps_mod.os.open
+        orig_os_fstat = ps_mod.os.fstat
+
+        # 1. mkdir succeeds, subsequent os.open fails -> identity cannot be established, dir is preserved, exception propagates
+        open_calls = {"n": 0}
+
+        def fail_second_open(path, flags, *args, **kwargs):
+            if path == "new_child_open_fail":
+                open_calls["n"] += 1
+                if open_calls["n"] == 1:
+                    raise FileNotFoundError("not yet")
+                raise OSError("Simulated EACCES after mkdir")
+            return orig_os_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(ps_mod.os, "open", fail_second_open)
+        with pytest.raises(AlbumManifestCorruptError, match="Ambiguous or symlinked directory"):
+            ProjectStorageManager._open_or_create_subdir_fd_tracked(parent_fd, "new_child_open_fail")
+        monkeypatch.undo()
+        assert (parent_dir / "new_child_open_fail").is_dir()
+        assert (foreign_existing / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+        # 2. mkdir + os.open succeed, subsequent os.fstat fails -> fd is closed and dir is preserved (no identity)
+        fd_count_before = len(os.listdir("/proc/self/fd"))
+
+        def fail_fstat(fd):
+            raise OSError("Simulated fstat failure after mkdir+open")
+
+        monkeypatch.setattr(ps_mod.os, "fstat", fail_fstat)
+        with pytest.raises(OSError, match="Simulated fstat failure after mkdir\\+open"):
+            ProjectStorageManager._open_or_create_subdir_fd_tracked(parent_fd, "new_child_fstat_fail")
+        monkeypatch.undo()
+        assert len(os.listdir("/proc/self/fd")) <= fd_count_before
+        assert (parent_dir / "new_child_fstat_fail").is_dir()
+
+        # 3. Pre-existing dir: os.open succeeds, os.fstat fails -> fd is closed, pre-existing dir is NOT removed
+        fd_count_before_existing = len(os.listdir("/proc/self/fd"))
+        monkeypatch.setattr(ps_mod.os, "fstat", fail_fstat)
+        with pytest.raises(OSError, match="Simulated fstat failure after mkdir\\+open"):
+            ProjectStorageManager._open_or_create_subdir_fd_tracked(parent_fd, "existing_dir")
+        monkeypatch.undo()
+        assert len(os.listdir("/proc/self/fd")) <= fd_count_before_existing
+        assert (foreign_existing / "keep.txt").read_text(encoding="utf-8") == "keep"
+    finally:
+        os.close(parent_fd)
+
+
+def test_phase1a7_deterministic_legacy_album_entry_identity(custom_storage: ProjectStorageManager):
+    """Phase 1A.7: Legacy album normalization uses deterministic IDs consistently across GET, list, and mutations."""
+    import io
+    import json
+    import wave
+
+    user_id = "u_1a7_legacy"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 800)
+    wav_ok = buf.getvalue()
+
+    trk1 = custom_storage.create_track(user_id=user_id, title="Track One")
+    take1 = custom_storage.create_take(
+        user_id=user_id, track_id=trk1.id, audio_bytes=wav_ok, original_filename="t1.wav", extension=".wav"
+    )
+    trk2 = custom_storage.create_track(user_id=user_id, title="Track Two")
+    take2 = custom_storage.create_take(
+        user_id=user_id, track_id=trk2.id, audio_bytes=wav_ok, original_filename="t2.wav", extension=".wav"
+    )
+
+    alb = custom_storage.create_album(user_id=user_id, title="Legacy LP")
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    manifest_path = alb_dir / "album.json"
+
+    # Write a legacy manifest lacking entry 'id's, with duplicate references to trk1 and one trk2 placeholder
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["tracks"] = [
+        {"track_number": 1, "disc_number": 1, "track_id": trk1.id, "take_id": None, "custom_title": None},
+        {"track_number": 2, "disc_number": 1, "track_id": trk1.id, "take_id": None, "custom_title": None},
+        {"track_number": 3, "disc_number": 1, "track_id": trk2.id, "take_id": None, "custom_title": None},
+    ]
+    raw["track_ids"] = [trk1.id, trk1.id, trk2.id]
+    raw_bytes_before = json.dumps(raw, indent=2).encode("utf-8")
+    manifest_path.write_bytes(raw_bytes_before)
+
+    # 1. Repeated GETs return identical deterministic IDs, duplicate Track refs stay distinct, and manifest is not rewritten
+    get1 = custom_storage.get_album(user_id, alb.id)
+    get2 = custom_storage.get_album(user_id, alb.id)
+    assert manifest_path.read_bytes() == raw_bytes_before
+    ids1 = [e.id for e in get1.tracks]
+    ids2 = [e.id for e in get2.tracks]
+    assert ids1 == ids2
+    assert len(set(ids1)) == 3  # Duplicate trk1 entries retain distinct identities
+
+    # 2. Listing and detail views agree on entry identity
+    listed = [a for a in custom_storage.list_albums(user_id) if a.id == alb.id][0]
+    assert [e.id for e in listed.tracks] == ids1
+    assert manifest_path.read_bytes() == raw_bytes_before
+
+    # 3. Direct initial Take assignment on a legacy entry WITHOUT first saving Album headers
+    assigned = custom_storage.update_album_entry(
+        user_id,
+        alb.id,
+        ids1[0],
+        expected_revision=get1.revision,
+        take_id=take1.id,
+    )
+    assert [e.id for e in assigned.tracks] == ids1
+    assert assigned.tracks[0].has_owned_audio is True
+    assert assigned.tracks[0].snapshot is not None
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, ids1[0]).read_bytes() == wav_ok
+
+    # 4. Entry metadata change + reordering/sequencing preserves unrelated entries and existing recording
+    reordered = custom_storage.update_album(
+        user_id,
+        alb.id,
+        {
+            "expected_revision": assigned.revision,
+            "tracks": [
+                {"id": ids1[2], "track_id": trk2.id, "take_id": None, "track_number": 1, "disc_number": 1, "custom_title": "Renamed Intro"},
+                {"id": ids1[0], "track_id": trk1.id, "take_id": take1.id, "track_number": 2, "disc_number": 1},
+                {"id": ids1[1], "track_id": trk1.id, "take_id": None, "track_number": 3, "disc_number": 1},
+            ],
+        },
+    )
+    assert [e.id for e in reordered.tracks] == [ids1[2], ids1[0], ids1[1]]
+    assert reordered.tracks[0].custom_title == "Renamed Intro"
+    assert reordered.tracks[1].has_owned_audio is True
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, ids1[0]).read_bytes() == wav_ok
+
+    # 5. Placeholder removal preserves unrelated entries and existing recording
+    removed = custom_storage.remove_album_entry(user_id, alb.id, ids1[1], expected_revision=reordered.revision)
+    assert [e.id for e in removed.tracks] == [ids1[2], ids1[0]]
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, ids1[0]).read_bytes() == wav_ok
+
+    # 6. Adding a new entry to the legacy Album preserves existing entries and recordings
+    added = custom_storage.add_album_entry(
+        user_id, alb.id, trk2.id, expected_revision=removed.revision, take_id=take2.id
+    )
+    assert len(added.tracks) == 3
+    assert added.tracks[0].id == ids1[2]
+    assert added.tracks[1].id == ids1[0]
+    assert added.tracks[2].id not in set(ids1)
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, ids1[0]).read_bytes() == wav_ok
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, added.tracks[2].id).read_bytes() == wav_ok
+
+
+def test_phase1a8_persisted_entry_id_protection_and_duplicate_rejection(custom_storage: ProjectStorageManager):
+    """Phase 1A.8: Persisted entry IDs are reserved before legacy ID generation; duplicate persisted IDs fail closed."""
+    import io
+    import json
+    import wave
+    from backend.project_storage import AlbumManifestCorruptError
+
+    user_id = "u_1a8_persisted_ids"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 800)
+    wav_ok = buf.getvalue()
+
+    trk1 = custom_storage.create_track(user_id=user_id, title="Track One")
+    take1 = custom_storage.create_take(
+        user_id=user_id, track_id=trk1.id, audio_bytes=wav_ok, original_filename="t1.wav", extension=".wav"
+    )
+    trk2 = custom_storage.create_track(user_id=user_id, title="Track Two")
+    take2 = custom_storage.create_take(
+        user_id=user_id, track_id=trk2.id, audio_bytes=wav_ok, original_filename="t2.wav", extension=".wav"
+    )
+
+    alb = custom_storage.create_album(user_id=user_id, title="Collision Protection LP")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk1.id, expected_revision=alb.revision, take_id=take1.id)
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    manifest_path = alb_dir / "album.json"
+
+    # Force persisted entry's ID to equal the deterministic candidate of a preceding missing-ID entry at idx=0
+    colliding_id = generate_deterministic_legacy_entry_id(alb.id, 0, trk1.id, None)
+    old_entry_dir = alb_dir / "entries" / get_album_entry_dir_name(alb.tracks[0].id)
+    new_entry_dir = alb_dir / "entries" / get_album_entry_dir_name(colliding_id)
+    old_entry_dir.rename(new_entry_dir)
+
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    recorded_entry = dict(raw["tracks"][0])
+    recorded_entry["id"] = colliding_id
+    recorded_entry["track_number"] = 2
+    if recorded_entry.get("snapshot"):
+        recorded_entry["snapshot"]["entry_id"] = colliding_id
+    raw["tracks"] = [
+        {"track_number": 1, "disc_number": 1, "track_id": trk1.id, "take_id": None, "custom_title": None},
+        recorded_entry,
+    ]
+    raw["track_ids"] = [trk1.id, trk1.id]
+    raw_bytes = json.dumps(raw, indent=2).encode("utf-8")
+    manifest_path.write_bytes(raw_bytes)
+
+    # 1. Preceding missing-ID entry must NOT claim colliding_id; persisted entry keeps colliding_id & owned audio
+    g1 = custom_storage.get_album(user_id, alb.id)
+    g2 = custom_storage.get_album(user_id, alb.id)
+    assert manifest_path.read_bytes() == raw_bytes
+    assert [e.id for e in g1.tracks] == [e.id for e in g2.tracks]
+    assert g1.tracks[1].id == colliding_id
+    assert g1.tracks[1].has_owned_audio is True
+    assert g1.tracks[0].id != colliding_id
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, colliding_id).read_bytes() == wav_ok
+    assert (new_entry_dir / "snapshot.json").is_file()
+
+    # 2. Listing and detail views agree on entry identities
+    listed = [a for a in custom_storage.list_albums(user_id) if a.id == alb.id][0]
+    assert [e.id for e in listed.tracks] == [e.id for e in g1.tracks]
+
+    # 3. Adding a new entry before any legacy header save preserves both entries and colliding_id's recording
+    added = custom_storage.add_album_entry(
+        user_id, alb.id, trk2.id, expected_revision=g1.revision, take_id=take2.id
+    )
+    assert added.tracks[0].id == g1.tracks[0].id
+    assert added.tracks[1].id == colliding_id
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, colliding_id).read_bytes() == wav_ok
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, added.tracks[2].id).read_bytes() == wav_ok
+
+    # 4. Duplicate persisted entry IDs fail closed without rewriting manifest or deleting recordings
+    dup_raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    dup_entry = dict(dup_raw["tracks"][1])
+    dup_raw["tracks"].append(dup_entry)
+    dup_bytes = json.dumps(dup_raw, indent=2).encode("utf-8")
+    manifest_path.write_bytes(dup_bytes)
+
+    with pytest.raises(AlbumManifestCorruptError, match="failed validation"):
+        custom_storage.get_album(user_id, alb.id)
+    assert manifest_path.read_bytes() == dup_bytes
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, colliding_id).read_bytes() == wav_ok
+
+
+def test_phase1a8_verified_directory_ownership_cleanup(custom_storage: ProjectStorageManager, tmp_path: Path, monkeypatch):
+    """Phase 1A.8: Directory cleanup requires verified (st_dev, st_ino); replaced/unverified dirs are preserved."""
+    import backend.project_storage as ps_mod
+
+    parent_dir = tmp_path / "ownership_parent"
+    parent_dir.mkdir(mode=0o700)
+    unverified_dir = parent_dir / "unverified_empty"
+    unverified_dir.mkdir(mode=0o700)
+    unrelated_dir = parent_dir / "unrelated_keep"
+    unrelated_dir.mkdir(mode=0o700)
+    (unrelated_dir / "recording.wav").write_bytes(b"RIFFKEEP")
+
+    parent_fd = os.open(parent_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        # 1. expected_id=None never authorizes removal
+        ProjectStorageManager._cleanup_newly_created_subdir(parent_fd, "unverified_empty", None)
+        assert unverified_dir.is_dir()
+
+        # 2. Replacing newly created dir with a different empty dir before cleanup preserves the replacement dir
+        orig_fchmod = ps_mod.os.fchmod
+        fd_count_before = len(os.listdir("/proc/self/fd"))
+
+        def replace_dir_then_abort(fd, mode):
+            target = parent_dir / "swapped_dir"
+            if target.exists():
+                target.rename(parent_dir / "old_created_backup")
+                target.mkdir(mode=0o700)
+                raise KeyboardInterrupt("Simulated abort after dir replacement")
+            return orig_fchmod(fd, mode)
+
+        monkeypatch.setattr(ps_mod.os, "fchmod", replace_dir_then_abort)
+        with pytest.raises(KeyboardInterrupt, match="Simulated abort after dir replacement"):
+            ProjectStorageManager._open_or_create_subdir_fd_tracked(parent_fd, "swapped_dir")
+        monkeypatch.undo()
+        assert len(os.listdir("/proc/self/fd")) <= fd_count_before
+        assert (parent_dir / "swapped_dir").is_dir()
+        assert (unrelated_dir / "recording.wav").read_bytes() == b"RIFFKEEP"
+
+        # 3. Confirmed transaction-owned empty dir (matching st_dev, st_ino) IS cleaned up on post-fstat failure
+        def abort_after_fstat(fd, mode):
+            raise KeyboardInterrupt("Simulated abort with verified ownership")
+
+        monkeypatch.setattr(ps_mod.os, "fchmod", abort_after_fstat)
+        with pytest.raises(KeyboardInterrupt, match="Simulated abort with verified ownership"):
+            ProjectStorageManager._open_or_create_subdir_fd_tracked(parent_fd, "verified_owned_dir")
+        monkeypatch.undo()
+        assert len(os.listdir("/proc/self/fd")) <= fd_count_before
+        assert not (parent_dir / "verified_owned_dir").exists()
+        assert (unrelated_dir / "recording.wav").read_bytes() == b"RIFFKEEP"
+    finally:
+        os.close(parent_fd)
+
+
+
+
+
 
 
 

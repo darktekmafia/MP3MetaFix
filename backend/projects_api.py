@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import stat
 import urllib.parse
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -10,6 +11,7 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -18,6 +20,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse, FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 
 from backend.config import (
@@ -57,9 +60,13 @@ from backend.project_models import (
 )
 from backend.project_storage import (
     project_storage_manager,
+    ProjectStorageError,
     ProjectStorageQuotaExceeded,
     ProjectValidationError,
     AlbumFinalizedError,
+    AlbumReplacementDisabledError,
+    AlbumRevisionConflictError,
+    AlbumManifestCorruptError,
     AlbumRefreshConflictError,
     AlbumFinalizationError,
 )
@@ -112,105 +119,231 @@ def require_auth(request: Request) -> Dict[str, Any]:
 
 # --- HTTP 206 Range Streaming Helper ---
 
-def serve_audio_range_stream(audio_path: Path, request: Request) -> Response:
+def _parse_strict_positive_revision(raw: str) -> int:
+    """Strictly parse positive integer expected_revision from query/form strings (rejects bool/float/non-digits)."""
+    if not isinstance(raw, str) or not raw.isascii() or not raw.isdigit():
+        raise HTTPException(status_code=422, detail="expected_revision must be a positive integer.")
+    val = int(raw)
+    if val < 1:
+        raise HTTPException(status_code=422, detail="expected_revision must be >= 1.")
+    return val
+
+
+class _FdStreamResource:
+    """Owns a pre-opened file descriptor and guarantees idempotent, deterministic cleanup."""
+
+    def __init__(self, fd: int):
+        self._fd: Optional[int] = fd
+        self._raw_fd: Optional[int] = fd
+        self._file = None
+
+    def close(self) -> None:
+        f = self._file
+        raw_fd = self._raw_fd
+        self._file = None
+        self._raw_fd = None
+        fd = self._fd
+        self._fd = None
+        if f is not None:
+            try:
+                f.close()
+                return
+            except Exception:
+                pass
+        target_fd = raw_fd if raw_fd is not None else fd
+        if target_fd is not None:
+            try:
+                os.close(target_fd)
+            except OSError:
+                pass
+
+    def iter_chunks(self, start: int = 0, chunk_length: Optional[int] = None):
+        fd = self._fd
+        if fd is None:
+            return
+        self._fd = None
+        f = os.fdopen(fd, "rb")
+        self._file = f
+        try:
+            if start > 0:
+                f.seek(start)
+            if chunk_length is None:
+                while chunk := f.read(64 * 1024):
+                    yield chunk
+            else:
+                bytes_left = chunk_length
+                while bytes_left > 0:
+                    read_size = min(64 * 1024, bytes_left)
+                    data = f.read(read_size)
+                    if not data:
+                        break
+                    bytes_left -= len(data)
+                    yield data
+        finally:
+            self.close()
+
+    def __del__(self):
+        self.close()
+
+
+class _OwnedFdStreamingResponse(StreamingResponse):
+    """StreamingResponse that deterministically closes its _FdStreamResource on any ASGI exit path."""
+
+    def __init__(self, *args, resource: _FdStreamResource, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._fd_resource = resource
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._fd_resource.close()
+
+
+def serve_audio_range_stream(
+    audio_path: Path,
+    request: Request,
+    *,
+    preopened_resource: Optional[_FdStreamResource] = None,
+    preopened_size: Optional[int] = None,
+) -> Response:
     """Deterministic HTTP 206 Partial Content range audio streaming."""
-    if not audio_path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found.")
-
-    file_size = audio_path.stat().st_size
-    range_header = request.headers.get("range")
-    mime_type = audio_format(audio_path)["mime_type"]
-
-    def full_iterator():
-        with open(audio_path, "rb") as f:
-            while chunk := f.read(64 * 1024):
-                yield chunk
-
-    # If no Range header or non-bytes unit, serve full file (HTTP 200)
-    if not range_header or not range_header.startswith("bytes="):
-        headers = {
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(file_size),
-            "Content-Type": mime_type,
-        }
-        return StreamingResponse(full_iterator(), status_code=200, headers=headers)
-
-    if file_size == 0:
-        return Response(
-            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
-            headers={"Content-Range": "bytes */0"},
-        )
-
-    raw_ranges = range_header[6:].strip()
-    if not raw_ranges or "," in raw_ranges or "-" not in raw_ranges:
-        return Response(
-            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
-            headers={"Content-Range": f"bytes */{file_size}"},
-        )
-
-    parts = raw_ranges.split("-", 1)
-    start_str = parts[0].strip()
-    end_str = parts[1].strip()
-
     try:
-        if start_str and end_str:
-            start = int(start_str)
-            end = int(end_str)
-            if start < 0 or end < 0 or start > end or start >= file_size:
-                return Response(
-                    status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
-                    headers={"Content-Range": f"bytes */{file_size}"},
-                )
-            end = min(end, file_size - 1)
-        elif start_str and not end_str:
-            start = int(start_str)
-            if start < 0 or start >= file_size:
-                return Response(
-                    status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
-                    headers={"Content-Range": f"bytes */{file_size}"},
-                )
-            end = file_size - 1
-        elif not start_str and end_str:
-            suffix_len = int(end_str)
-            if suffix_len <= 0:
-                return Response(
-                    status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
-                    headers={"Content-Range": f"bytes */{file_size}"},
-                )
-            start = max(0, file_size - suffix_len)
-            end = file_size - 1
+        if preopened_resource is not None:
+            file_size = int(preopened_size if preopened_size is not None else 0)
         else:
+            if not audio_path.is_file():
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found.")
+            file_size = audio_path.stat().st_size
+
+        range_header = request.headers.get("range")
+        mime_type = audio_format(audio_path)["mime_type"]
+
+        def _close_preopened():
+            if preopened_resource is not None:
+                preopened_resource.close()
+
+        def full_iterator():
+            if preopened_resource is not None:
+                yield from preopened_resource.iter_chunks()
+                return
+            with open(audio_path, "rb") as f:
+                while chunk := f.read(64 * 1024):
+                    yield chunk
+
+        # If no Range header or non-bytes unit, serve full file (HTTP 200)
+        if not range_header or not range_header.startswith("bytes="):
+            headers = {
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_size),
+                "Content-Type": mime_type,
+            }
+            if preopened_resource is not None:
+                return _OwnedFdStreamingResponse(
+                    full_iterator(),
+                    status_code=200,
+                    headers=headers,
+                    resource=preopened_resource,
+                )
+            return StreamingResponse(full_iterator(), status_code=200, headers=headers)
+
+        if file_size == 0:
+            _close_preopened()
+            return Response(
+                status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                headers={"Content-Range": "bytes */0"},
+            )
+
+        raw_ranges = range_header[6:].strip()
+        if not raw_ranges or "," in raw_ranges or "-" not in raw_ranges:
+            _close_preopened()
             return Response(
                 status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
                 headers={"Content-Range": f"bytes */{file_size}"},
             )
-    except ValueError:
-        return Response(
-            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
-            headers={"Content-Range": f"bytes */{file_size}"},
-        )
 
-    chunk_length = end - start + 1
+        parts = raw_ranges.split("-", 1)
+        start_str = parts[0].strip()
+        end_str = parts[1].strip()
 
-    def range_iterator():
-        with open(audio_path, "rb") as f:
-            f.seek(start)
-            bytes_left = chunk_length
-            while bytes_left > 0:
-                read_size = min(64 * 1024, bytes_left)
-                data = f.read(read_size)
-                if not data:
-                    break
-                bytes_left -= len(data)
-                yield data
+        try:
+            if start_str and end_str:
+                start = int(start_str)
+                end = int(end_str)
+                if start < 0 or end < 0 or start > end or start >= file_size:
+                    _close_preopened()
+                    return Response(
+                        status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                        headers={"Content-Range": f"bytes */{file_size}"},
+                    )
+                end = min(end, file_size - 1)
+            elif start_str and not end_str:
+                start = int(start_str)
+                if start < 0 or start >= file_size:
+                    _close_preopened()
+                    return Response(
+                        status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                        headers={"Content-Range": f"bytes */{file_size}"},
+                    )
+                end = file_size - 1
+            elif not start_str and end_str:
+                suffix_len = int(end_str)
+                if suffix_len <= 0:
+                    _close_preopened()
+                    return Response(
+                        status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                        headers={"Content-Range": f"bytes */{file_size}"},
+                    )
+                start = max(0, file_size - suffix_len)
+                end = file_size - 1
+            else:
+                _close_preopened()
+                return Response(
+                    status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                    headers={"Content-Range": f"bytes */{file_size}"},
+                )
+        except ValueError:
+            _close_preopened()
+            return Response(
+                status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
 
-    headers = {
-        "Content-Range": f"bytes {start}-{end}/{file_size}",
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(chunk_length),
-        "Content-Type": mime_type,
-    }
-    return StreamingResponse(range_iterator(), status_code=206, headers=headers)
+        chunk_length = end - start + 1
+
+        def range_iterator():
+            if preopened_resource is not None:
+                yield from preopened_resource.iter_chunks(start=start, chunk_length=chunk_length)
+                return
+            with open(audio_path, "rb") as f:
+                f.seek(start)
+                bytes_left = chunk_length
+                while bytes_left > 0:
+                    read_size = min(64 * 1024, bytes_left)
+                    data = f.read(read_size)
+                    if not data:
+                        break
+                    bytes_left -= len(data)
+                    yield data
+
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(chunk_length),
+            "Content-Type": mime_type,
+        }
+        if preopened_resource is not None:
+            return _OwnedFdStreamingResponse(
+                range_iterator(),
+                status_code=206,
+                headers=headers,
+                resource=preopened_resource,
+            )
+        return StreamingResponse(range_iterator(), status_code=206, headers=headers)
+    except BaseException:
+        if preopened_resource is not None:
+            preopened_resource.close()
+        raise
 
 
 # --- Storage Quota Endpoints ---
@@ -646,16 +779,24 @@ async def create_album(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+def _get_album_or_http(user_id: str, album_id: str) -> AlbumMetadata:
+    """Fetch album or raise 404/422 cleanly, failing closed on corrupt manifests."""
+    try:
+        album = project_storage_manager.get_album(user_id, album_id)
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not album:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    return album
+
+
 @projects_router.get("/albums/{album_id}", response_model=AlbumMetadata)
 async def get_album(
     album_id: str,
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Retrieve details and tracklist for an album project."""
-    album = project_storage_manager.get_album(user["id"], album_id)
-    if not album:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
-    return album
+    return _get_album_or_http(user["id"], album_id)
 
 
 @projects_router.patch("/albums/{album_id}", response_model=AlbumMetadata)
@@ -665,31 +806,42 @@ async def update_album(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Update album details or sequenced tracklist."""
-    album = project_storage_manager.get_album(user["id"], album_id)
-    if not album:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    _get_album_or_http(user["id"], album_id)
 
     updates = payload.model_dump(exclude_unset=True)
     try:
         updated = project_storage_manager.update_album(user["id"], album_id, updates)
-    except AlbumFinalizedError as e:
+    except (AlbumFinalizedError, AlbumReplacementDisabledError, AlbumRevisionConflictError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except ProjectValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ProjectStorageQuotaExceeded as e:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
     if not updated:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update album.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
     return updated
 
 
 @projects_router.delete("/albums/{album_id}")
 async def delete_album(
     album_id: str,
+    expected_revision: str = Query(...),
     user: Dict[str, Any] = Depends(require_auth),
 ):
-    """Delete an album workspace (does not delete individual tracks)."""
-    success = project_storage_manager.delete_album(user["id"], album_id)
+    """Delete an unfinished empty album workspace (does not delete individual tracks)."""
+    rev = _parse_strict_positive_revision(expected_revision)
+    try:
+        success = project_storage_manager.delete_album(
+            user["id"], album_id, expected_revision=rev
+        )
+    except (AlbumFinalizedError, AlbumRevisionConflictError, AlbumReplacementDisabledError) as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except ProjectStorageError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
     return {"status": "deleted", "id": album_id}
@@ -702,22 +854,23 @@ async def add_album_entry(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Add a Track Workspace entry (explicit Take copy or placeholder) to an unfinished album."""
-    album = project_storage_manager.get_album(user["id"], album_id)
-    if not album:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    _get_album_or_http(user["id"], album_id)
 
     try:
         updated = project_storage_manager.add_album_entry(
             user_id=user["id"],
             album_id=album_id,
             track_id=payload.track_id,
+            expected_revision=payload.expected_revision,
             take_id=payload.take_id,
             disc_number=payload.disc_number,
             track_number=payload.track_number,
             custom_title=payload.custom_title,
         )
-    except AlbumFinalizedError as e:
+    except (AlbumFinalizedError, AlbumReplacementDisabledError, AlbumRevisionConflictError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except ProjectValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ProjectStorageQuotaExceeded as e:
@@ -736,22 +889,23 @@ async def update_album_entry(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Update an unfinished album entry's selected Take, placeholder state, or entry metadata."""
-    album = project_storage_manager.get_album(user["id"], album_id)
-    if not album:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    _get_album_or_http(user["id"], album_id)
 
     try:
         updated = project_storage_manager.update_album_entry(
             user_id=user["id"],
             album_id=album_id,
             entry_id=entry_id,
+            expected_revision=payload.expected_revision,
             take_id=payload.take_id,
             clear_take_to_placeholder=payload.clear_take_to_placeholder,
             disc_number=payload.disc_number,
             custom_title=payload.custom_title,
         )
-    except AlbumFinalizedError as e:
+    except (AlbumFinalizedError, AlbumReplacementDisabledError, AlbumRevisionConflictError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except ProjectValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ProjectStorageQuotaExceeded as e:
@@ -766,17 +920,21 @@ async def update_album_entry(
 async def remove_album_entry(
     album_id: str,
     entry_id: str,
+    expected_revision: str = Query(...),
     user: Dict[str, Any] = Depends(require_auth),
 ):
-    """Remove an entry from an unfinished album and clean up its album-owned audio copy."""
-    album = project_storage_manager.get_album(user["id"], album_id)
-    if not album:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    """Remove an empty placeholder entry from an unfinished album."""
+    rev = _parse_strict_positive_revision(expected_revision)
+    _get_album_or_http(user["id"], album_id)
 
     try:
-        updated = project_storage_manager.remove_album_entry(user["id"], album_id, entry_id)
-    except AlbumFinalizedError as e:
+        updated = project_storage_manager.remove_album_entry(
+            user["id"], album_id, entry_id, expected_revision=rev
+        )
+    except (AlbumFinalizedError, AlbumReplacementDisabledError, AlbumRevisionConflictError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except ProjectValidationError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
@@ -792,11 +950,19 @@ async def stream_album_entry_audio(
     request: Request,
     user: Dict[str, Any] = Depends(require_auth),
 ):
-    """Stream an album entry's owned audio copy using HTTP 206 Partial Content range requests."""
-    audio_path = project_storage_manager.get_album_entry_audio_path(user["id"], album_id, entry_id)
-    if not audio_path:
+    """Stream an album entry's owned audio copy using HTTP 206 Partial Content range requests (side-effect-free)."""
+    try:
+        opened = project_storage_manager.open_album_entry_audio_for_read(user["id"], album_id, entry_id)
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except (FileNotFoundError, OSError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album entry audio copy not found.")
-    return serve_audio_range_stream(audio_path, request)
+    if opened is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album entry audio copy not found.")
+
+    _, audio_path, fd, file_size = opened
+    resource = _FdStreamResource(fd)
+    return serve_audio_range_stream(audio_path, request, preopened_resource=resource, preopened_size=file_size)
 
 
 @projects_router.get("/albums/{album_id}/entries/{entry_id}/download")
@@ -805,26 +971,35 @@ async def download_album_entry_audio(
     entry_id: str,
     user: Dict[str, Any] = Depends(require_auth),
 ):
-    """Download an album entry's owned audio copy with RFC 5987 filename headers."""
-    album = project_storage_manager.get_album(user["id"], album_id)
-    if not album:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
-    entry = next((t for t in album.tracks if t.id == entry_id), None)
-    audio_path = project_storage_manager.get_album_entry_audio_path(user["id"], album_id, entry_id)
-    if not entry or not audio_path:
+    """Download an album entry's owned audio copy with RFC 5987 filename headers (side-effect-free)."""
+    try:
+        opened = project_storage_manager.open_album_entry_audio_for_read(user["id"], album_id, entry_id)
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except (FileNotFoundError, OSError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album entry audio copy not found.")
+    if opened is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album entry audio copy not found.")
 
-    orig_name = (entry.snapshot.source_filename if entry.snapshot else None) or f"track_{entry.track_number}{audio_path.suffix}"
-    ascii_name = orig_name.encode("ascii", "ignore").decode("ascii") or f"track_{entry.track_number}{audio_path.suffix}"
-    encoded_name = urllib.parse.quote(orig_name)
-    headers = {
-        "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
-    }
-    return FileResponse(
-        path=audio_path,
-        media_type=audio_format(audio_path)["mime_type"],
-        headers=headers,
-    )
+    entry, audio_path, fd, file_size = opened
+    resource = _FdStreamResource(fd)
+    try:
+        orig_name = (entry.snapshot.source_filename if entry.snapshot else None) or f"track_{entry.track_number}{audio_path.suffix}"
+        ascii_name = orig_name.encode("ascii", "ignore").decode("ascii") or f"track_{entry.track_number}{audio_path.suffix}"
+        encoded_name = urllib.parse.quote(orig_name)
+        headers = {
+            "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}',
+            "Content-Length": str(file_size),
+        }
+        return _OwnedFdStreamingResponse(
+            resource.iter_chunks(),
+            media_type=audio_format(audio_path)["mime_type"],
+            headers=headers,
+            resource=resource,
+        )
+    except BaseException:
+        resource.close()
+        raise
 
 
 @projects_router.get("/albums/{album_id}/entries/{entry_id}/refresh-preview", response_model=AlbumEntryRefreshPreviewResponse)
@@ -834,9 +1009,7 @@ async def preview_album_entry_refresh(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Return a read-only comparison between the album-owned copy and latest source take."""
-    album = project_storage_manager.get_album(user["id"], album_id)
-    if not album:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    album = _get_album_or_http(user["id"], album_id)
 
     try:
         preview = project_storage_manager.preview_album_entry_refresh(user["id"], album_id, entry_id)
@@ -858,9 +1031,7 @@ async def confirm_album_entry_refresh(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Confirm replacing an album entry's owned copy from its source take if the previewed version still matches."""
-    album = project_storage_manager.get_album(user["id"], album_id)
-    if not album:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    album = _get_album_or_http(user["id"], album_id)
 
     try:
         updated = project_storage_manager.confirm_album_entry_refresh(
@@ -871,7 +1042,7 @@ async def confirm_album_entry_refresh(
             expected_source_audio_sha256=payload.expected_source_audio_sha256,
             expected_source_updated_at=payload.expected_source_updated_at,
         )
-    except (AlbumFinalizedError, AlbumRefreshConflictError) as e:
+    except (AlbumFinalizedError, AlbumRefreshConflictError, AlbumReplacementDisabledError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except ProjectValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -886,17 +1057,21 @@ async def confirm_album_entry_refresh(
 @projects_router.post("/albums/{album_id}/finalize", response_model=AlbumMetadata)
 async def finalize_album(
     album_id: str,
+    expected_revision: str = Query(...),
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Validate all album recordings and atomically mark an album release as finalized and immutable."""
-    album = project_storage_manager.get_album(user["id"], album_id)
-    if not album:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    rev = _parse_strict_positive_revision(expected_revision)
+    _get_album_or_http(user["id"], album_id)
 
     try:
-        finalized = project_storage_manager.finalize_album(user["id"], album_id)
-    except AlbumFinalizedError as e:
+        finalized = project_storage_manager.finalize_album(
+            user["id"], album_id, expected_revision=rev
+        )
+    except (AlbumFinalizedError, AlbumRevisionConflictError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except AlbumFinalizationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"message": str(e), "errors": e.errors})
 
@@ -908,23 +1083,31 @@ async def finalize_album(
 @projects_router.post("/albums/{album_id}/artwork")
 async def upload_album_artwork(
     album_id: str,
+    expected_revision: str = Form(...),
     file: UploadFile = File(...),
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Upload and normalize master album cover artwork."""
-    album = project_storage_manager.get_album(user["id"], album_id)
-    if not album:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album workspace not found.")
+    rev = _parse_strict_positive_revision(expected_revision)
+    _get_album_or_http(user["id"], album_id)
 
     img_data = await file.read()
     clean_bytes, mime_type = validate_and_normalize_image(img_data, MAX_ARTWORK_SIZE_BYTES)
     ext = ".png" if mime_type == "image/png" else ".jpg"
 
     try:
-        project_storage_manager.save_album_cover(user["id"], album_id, clean_bytes, extension=ext)
-        return {"status": "saved", "mime_type": mime_type}
-    except AlbumFinalizedError as e:
+        updated_album = project_storage_manager.save_album_cover(
+            user["id"],
+            album_id,
+            clean_bytes,
+            expected_revision=rev,
+            extension=ext,
+        )
+        return {"status": "saved", "mime_type": mime_type, "album": updated_album}
+    except (AlbumFinalizedError, AlbumRevisionConflictError, AlbumReplacementDisabledError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except ProjectStorageQuotaExceeded as e:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
 
@@ -934,12 +1117,29 @@ async def get_album_artwork(
     album_id: str,
     user: Dict[str, Any] = Depends(require_auth),
 ):
-    """Serve master album cover artwork."""
-    cover_path = project_storage_manager.get_album_cover_path(user["id"], album_id)
-    if not cover_path or not cover_path.is_file():
+    """Serve master album cover artwork (side-effect-free)."""
+    try:
+        opened = project_storage_manager.open_album_cover_for_read(user["id"], album_id)
+    except AlbumManifestCorruptError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except (FileNotFoundError, OSError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album artwork not found.")
-    mime_type = "image/png" if cover_path.suffix.lower() == ".png" else "image/jpeg"
-    return FileResponse(path=cover_path, media_type=mime_type)
+    if opened is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album artwork not found.")
+
+    cover_path, fd, file_size = opened
+    resource = _FdStreamResource(fd)
+    try:
+        mime_type = "image/png" if cover_path.suffix.lower() == ".png" else "image/jpeg"
+        return _OwnedFdStreamingResponse(
+            resource.iter_chunks(),
+            media_type=mime_type,
+            headers={"Content-Length": str(file_size)},
+            resource=resource,
+        )
+    except BaseException:
+        resource.close()
+        raise
 
 
 # --- Promotion / Ingestion from `/app` Ephemeral Session ---

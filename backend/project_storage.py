@@ -6,14 +6,22 @@ cryptographic path hashing and strict POSIX 0700 filesystem isolation.
 
 import os
 import json
+import math
+import stat
 import uuid
 import time
 import shutil
 import hashlib
 import difflib
 import logging
+import secrets
+import tempfile
+import threading
+from contextlib import contextmanager
+from enum import Enum
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Callable
+from pydantic import ValidationError
 
 from backend.config import (
     STORAGE_DIR,
@@ -111,6 +119,114 @@ class AlbumFinalizedError(ProjectStorageError):
     pass
 
 
+class AlbumReplacementDisabledError(ProjectStorageError):
+    """Raised when attempting to replace/refresh existing album-owned audio while Phase 1B is pending."""
+    pass
+
+
+class AlbumRevisionConflictError(ProjectStorageError):
+    """Raised when expected_revision is stale or omitted on a destructive bulk album update."""
+    pass
+
+
+class AlbumManifestCorruptError(ProjectStorageError):
+    """Raised when an existing album.json manifest cannot be read or validated."""
+    pass
+
+
+class ManifestPublishState(str, Enum):
+    NOT_PUBLISHED = "not_published"
+    PUBLISHED = "published"
+    UNCERTAIN = "uncertain"
+
+
+class ManifestPublishError(ProjectStorageError):
+    """Wraps an error during manifest publication with explicit publication certainty."""
+
+    def __init__(self, message: str, publish_state: ManifestPublishState, cause: Optional[Exception] = None):
+        super().__init__(message)
+        self.publish_state = publish_state
+        self.cause = cause
+
+
+def _publish_manifest_atomic_in_dir(dir_fd: int, filename: str, data: Dict[str, Any]) -> None:
+    """Write and atomically replace a manifest JSON file strictly inside a validated dir_fd."""
+    publish_state = ManifestPublishState.NOT_PUBLISHED
+    tmp_name = f".tmp_manifest_{secrets.token_hex(8)}.json"
+    tmp_created = False
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(tmp_name, flags, 0o600, dir_fd=dir_fd)
+        tmp_created = True
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+                os.fchmod(f.fileno(), 0o600)
+        except Exception:
+            if tmp_created:
+                try:
+                    os.unlink(tmp_name, dir_fd=dir_fd)
+                    tmp_created = False
+                except Exception:
+                    pass
+            raise
+
+        publish_state = ManifestPublishState.UNCERTAIN
+        os.replace(tmp_name, filename, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        tmp_created = False
+        publish_state = ManifestPublishState.PUBLISHED
+    except ManifestPublishError:
+        raise
+    except Exception as e:
+        if publish_state == ManifestPublishState.NOT_PUBLISHED and tmp_created:
+            try:
+                os.unlink(tmp_name, dir_fd=dir_fd)
+            except Exception:
+                pass
+        raise ManifestPublishError(str(e), publish_state=publish_state, cause=e) from e
+
+
+def _publish_manifest_atomic(manifest_path: Path, data: Dict[str, Any]) -> None:
+    """Write and atomically replace a manifest JSON file, tracking whether os.replace may have run."""
+    publish_state = ManifestPublishState.NOT_PUBLISHED
+    tmp_path: Optional[Path] = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(manifest_path.parent),
+            prefix=".tmp_manifest_",
+            suffix=".json",
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(tmp_path, 0o600)
+        except Exception:
+            if tmp_path and tmp_path.exists():
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise
+
+        publish_state = ManifestPublishState.UNCERTAIN
+        os.replace(str(tmp_path), str(manifest_path))
+        publish_state = ManifestPublishState.PUBLISHED
+    except ManifestPublishError:
+        raise
+    except Exception as e:
+        if publish_state == ManifestPublishState.NOT_PUBLISHED and tmp_path and tmp_path.exists():
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        raise ManifestPublishError(str(e), publish_state=publish_state, cause=e) from e
+
+
 class AlbumRefreshConflictError(ProjectStorageError):
     """Raised when source take state changed after preview or source is unavailable."""
     pass
@@ -129,6 +245,7 @@ class ProjectStorageManager:
 
     def __init__(self, root_dir: Path = TENANTS_DIR):
         self.root_dir = root_dir
+        self._thread_local = threading.local()
         self.root_dir.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(self.root_dir, 0o700)
@@ -146,25 +263,47 @@ class ProjectStorageManager:
             pass
         return directory
 
+    def _get_tenant_dir_path(self, user_id: str) -> Path:
+        """Pure path computation for a tenant directory (does not create directories)."""
+        return self.root_dir / get_tenant_storage_dir_name(user_id)
+
     def get_tenant_dir(self, user_id: str) -> Path:
         """Return isolated directory for a given user/tenant."""
-        dir_name = get_tenant_storage_dir_name(user_id)
-        tdir = self.root_dir / dir_name
-        return self._ensure_dir_0700(tdir)
+        return self._ensure_dir_0700(self._get_tenant_dir_path(user_id))
+
+    def _get_tracks_root_path(self, user_id: str) -> Path:
+        """Pure path computation for a tenant's tracks root (does not create directories)."""
+        return self._get_tenant_dir_path(user_id) / "tracks"
 
     def _get_tracks_root(self, user_id: str) -> Path:
         tdir = self.get_tenant_dir(user_id)
         return self._ensure_dir_0700(tdir / "tracks")
 
+    def _get_albums_root_path(self, user_id: str) -> Path:
+        """Pure path computation for a tenant's albums root (does not create directories)."""
+        return self._get_tenant_dir_path(user_id) / "albums"
+
     def _get_albums_root(self, user_id: str) -> Path:
         tdir = self.get_tenant_dir(user_id)
         return self._ensure_dir_0700(tdir / "albums")
+
+    def _get_track_dir_path(self, user_id: str, track_id: str) -> Path:
+        """Pure path computation for a track directory (does not create directories)."""
+        if not is_valid_project_id(track_id, expected_prefix="trk"):
+            raise ValueError("Invalid track identifier format.")
+        return self._get_tracks_root_path(user_id) / get_track_dir_name(track_id)
 
     def _get_track_dir(self, user_id: str, track_id: str) -> Path:
         if not is_valid_project_id(track_id, expected_prefix="trk"):
             raise ValueError("Invalid track identifier format.")
         dir_name = get_track_dir_name(track_id)
         return self._get_tracks_root(user_id) / dir_name
+
+    def _get_take_dir_path(self, user_id: str, track_id: str, take_id: str) -> Path:
+        """Pure path computation for a take directory (does not create directories)."""
+        if not is_valid_project_id(take_id, expected_prefix="tak"):
+            raise ValueError("Invalid take identifier format.")
+        return self._get_track_dir_path(user_id, track_id) / "takes" / get_take_dir_name(take_id)
 
     def _get_take_dir(self, user_id: str, track_id: str, take_id: str) -> Path:
         if not is_valid_project_id(take_id, expected_prefix="tak"):
@@ -173,6 +312,243 @@ class ProjectStorageManager:
         takes_root = self._ensure_dir_0700(track_dir / "takes")
         dir_name = get_take_dir_name(take_id)
         return takes_root / dir_name
+
+    def _verify_ancestors_nofollow(self, rel_parts: List[str], *, allow_missing: bool = True) -> bool:
+        """Verify every existing ancestor component under self.root_dir is a real non-symlink directory."""
+        if not self.root_dir.exists():
+            return False if allow_missing else self._raise_corrupt_path("Storage root is missing.")
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            cur_fd = os.open(self.root_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError as e:
+            raise AlbumManifestCorruptError(f"Storage root is invalid: {e}") from e
+        try:
+            for part in rel_parts:
+                if not part or "/" in part or "\\" in part or part in (".", ".."):
+                    raise AlbumManifestCorruptError("Invalid path component in storage hierarchy.")
+                try:
+                    next_fd = os.open(part, dir_flags, dir_fd=cur_fd)
+                except FileNotFoundError:
+                    if allow_missing:
+                        return False
+                    raise AlbumManifestCorruptError(f"Required storage directory '{part}' is missing.")
+                except OSError as e:
+                    raise AlbumManifestCorruptError(
+                        f"Ambiguous or symlinked directory '{part}' in album storage hierarchy."
+                    ) from e
+                os.close(cur_fd)
+                cur_fd = next_fd
+            return True
+        finally:
+            try:
+                os.close(cur_fd)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _raise_corrupt_path(msg: str) -> bool:
+        raise AlbumManifestCorruptError(msg)
+
+    def _open_albums_root_fd_nofollow(self, user_id: str) -> Optional[int]:
+        """Traverse [tenant_hash, 'albums'] under self.root_dir with O_NOFOLLOW and return albums_root dir_fd."""
+        rel_parts = [get_tenant_storage_dir_name(user_id), "albums"]
+        if not self.root_dir.exists():
+            return None
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            cur_fd = os.open(self.root_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError as e:
+            raise AlbumManifestCorruptError(f"Storage root is invalid: {e}") from e
+        try:
+            for part in rel_parts:
+                try:
+                    next_fd = os.open(part, dir_flags, dir_fd=cur_fd)
+                except FileNotFoundError:
+                    os.close(cur_fd)
+                    return None
+                except OSError as e:
+                    os.close(cur_fd)
+                    raise AlbumManifestCorruptError(
+                        f"Ambiguous or symlinked directory '{part}' in album storage hierarchy."
+                    ) from e
+                os.close(cur_fd)
+                cur_fd = next_fd
+            return cur_fd
+        except BaseException:
+            try:
+                os.close(cur_fd)
+            except OSError:
+                pass
+            raise
+
+    def _open_album_dir_fd_nofollow(self, user_id: str, album_id: str) -> Optional[int]:
+        """Traverse [tenant_hash, 'albums', album_hash] under self.root_dir with O_NOFOLLOW and return album dir_fd."""
+        rel_parts = [
+            get_tenant_storage_dir_name(user_id),
+            "albums",
+            get_album_dir_name(album_id),
+        ]
+        if not self.root_dir.exists():
+            return None
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            cur_fd = os.open(self.root_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError as e:
+            raise AlbumManifestCorruptError(f"Storage root is invalid: {e}") from e
+        try:
+            for part in rel_parts:
+                try:
+                    next_fd = os.open(part, dir_flags, dir_fd=cur_fd)
+                except FileNotFoundError:
+                    os.close(cur_fd)
+                    return None
+                except OSError as e:
+                    os.close(cur_fd)
+                    raise AlbumManifestCorruptError(
+                        f"Ambiguous or symlinked directory '{part}' in album storage hierarchy."
+                    ) from e
+                os.close(cur_fd)
+                cur_fd = next_fd
+            return cur_fd
+        except BaseException:
+            try:
+                os.close(cur_fd)
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def _cleanup_newly_created_subdir(parent_fd: int, name: str, expected_id: Optional[Tuple[int, int]] = None) -> None:
+        """Remove a newly created empty subdirectory only when its (st_dev, st_ino) identity is verified."""
+        if expected_id is None:
+            return
+        try:
+            lst = os.lstat(name, dir_fd=parent_fd)
+            if not stat.S_ISDIR(lst.st_mode):
+                return
+            if (lst.st_dev, lst.st_ino) != expected_id:
+                return
+            os.rmdir(name, dir_fd=parent_fd)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _open_or_create_subdir_fd_tracked(parent_fd: int, name: str) -> Tuple[int, bool, Tuple[int, int]]:
+        """Open or create a subdirectory relative to parent_fd without following symlinks, returning (fd, created, (dev, ino))."""
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(name, dir_flags, dir_fd=parent_fd)
+        except FileNotFoundError:
+            created = False
+            try:
+                os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+                created = True
+            except FileExistsError:
+                created = False
+
+            fd: Optional[int] = None
+            expected_id: Optional[Tuple[int, int]] = None
+            try:
+                try:
+                    fd = os.open(name, dir_flags, dir_fd=parent_fd)
+                except OSError as e:
+                    raise AlbumManifestCorruptError(
+                        f"Ambiguous or symlinked directory '{name}' in album storage hierarchy."
+                    ) from e
+                st = os.fstat(fd)
+                expected_id = (st.st_dev, st.st_ino)
+                try:
+                    os.fchmod(fd, 0o700)
+                except OSError:
+                    pass
+                return fd, created, expected_id
+            except BaseException:
+                if fd is not None:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                if created and expected_id is not None:
+                    ProjectStorageManager._cleanup_newly_created_subdir(parent_fd, name, expected_id)
+                raise
+        except OSError as e:
+            raise AlbumManifestCorruptError(
+                f"Ambiguous or symlinked directory '{name}' in album storage hierarchy."
+            ) from e
+
+        try:
+            st = os.fstat(fd)
+            return fd, False, (st.st_dev, st.st_ino)
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def _open_or_create_subdir_fd_nofollow(parent_fd: int, name: str) -> int:
+        fd, _, _ = ProjectStorageManager._open_or_create_subdir_fd_tracked(parent_fd, name)
+        return fd
+
+    def _open_file_under_root_nofollow(self, dir_parts: List[str], filename: str) -> Optional[tuple[int, int]]:
+        """Traverse directories under self.root_dir with O_NOFOLLOW and open filename as a regular file."""
+        if not filename or "/" in filename or "\\" in filename or filename in (".", ".."):
+            return None
+        if not self.root_dir.exists():
+            return None
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            cur_fd = os.open(self.root_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError:
+            return None
+        try:
+            for part in dir_parts:
+                if not part or "/" in part or "\\" in part or part in (".", ".."):
+                    return None
+                try:
+                    next_fd = os.open(part, dir_flags, dir_fd=cur_fd)
+                except FileNotFoundError:
+                    return None
+                except OSError as e:
+                    raise AlbumManifestCorruptError(
+                        f"Ambiguous or symlinked directory '{part}' in album storage hierarchy."
+                    ) from e
+                os.close(cur_fd)
+                cur_fd = next_fd
+
+            try:
+                file_fd = os.open(filename, file_flags, dir_fd=cur_fd)
+            except FileNotFoundError:
+                return None
+            except OSError as e:
+                raise AlbumManifestCorruptError(
+                    f"Target file '{filename}' is a symlink or unreadable."
+                ) from e
+            try:
+                st = os.fstat(file_fd)
+                if not stat.S_ISREG(st.st_mode):
+                    os.close(file_fd)
+                    raise AlbumManifestCorruptError(f"Target '{filename}' is not a regular file.")
+                return file_fd, st.st_size
+            except BaseException:
+                try:
+                    os.close(file_fd)
+                except OSError:
+                    pass
+                raise
+        finally:
+            try:
+                os.close(cur_fd)
+            except OSError:
+                pass
+
+    def _get_album_dir_path(self, user_id: str, album_id: str) -> Path:
+        """Pure path computation for an album directory (does not create directories)."""
+        if not is_valid_project_id(album_id, expected_prefix="alb"):
+            raise ValueError("Invalid album identifier format.")
+        return self._get_albums_root_path(user_id) / get_album_dir_name(album_id)
 
     def _get_album_dir(self, user_id: str, album_id: str) -> Path:
         if not is_valid_project_id(album_id, expected_prefix="alb"):
@@ -289,25 +665,23 @@ class ProjectStorageManager:
         return track_meta
 
     def get_track(self, user_id: str, track_id: str) -> Optional[TrackMetadata]:
-        """Retrieve track metadata by ID."""
+        """Retrieve track metadata by ID (side-effect-free)."""
         try:
-            track_dir = self._get_track_dir(user_id, track_id)
+            track_dir = self._get_track_dir_path(user_id, track_id)
         except ValueError:
             return None
         manifest_path = track_dir / "track.json"
-        if not manifest_path.is_file():
+        if not manifest_path.is_file() or manifest_path.is_symlink():
             return None
         try:
-            with file_lock(manifest_path):
-                import json
-                with open(manifest_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
             # Synchronize active take count
             takes_dir = track_dir / "takes"
             actual_count = 0
-            if takes_dir.exists():
+            if takes_dir.is_dir() and not takes_dir.is_symlink():
                 for item in takes_dir.iterdir():
-                    if item.is_dir() and (item / "take.json").is_file():
+                    if item.is_dir() and not item.is_symlink() and (item / "take.json").is_file():
                         actual_count += 1
             data["takes_count"] = actual_count
             return TrackMetadata(**data)
@@ -601,16 +975,15 @@ class ProjectStorageManager:
         return take_meta
 
     def get_take(self, user_id: str, track_id: str, take_id: str) -> Optional[TakeMetadata]:
-        """Retrieve take metadata."""
+        """Retrieve take metadata (side-effect-free)."""
         try:
-            take_dir = self._get_take_dir(user_id, track_id, take_id)
+            take_dir = self._get_take_dir_path(user_id, track_id, take_id)
         except ValueError:
             return None
         manifest_path = take_dir / "take.json"
-        if not manifest_path.is_file():
+        if not manifest_path.is_file() or manifest_path.is_symlink():
             return None
         try:
-            import json
             with open(manifest_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             return TakeMetadata(**data)
@@ -619,14 +992,14 @@ class ProjectStorageManager:
             return None
 
     def list_takes(self, user_id: str, track_id: str) -> List[TakeMetadata]:
-        """List all takes in a track workspace."""
+        """List all takes in a track workspace (side-effect-free)."""
         try:
-            track_dir = self._get_track_dir(user_id, track_id)
+            track_dir = self._get_track_dir_path(user_id, track_id)
         except ValueError:
             return []
         takes_root = track_dir / "takes"
         results = []
-        if not takes_root.exists():
+        if not takes_root.is_dir() or takes_root.is_symlink():
             return results
 
         for item in takes_root.iterdir():
@@ -871,11 +1244,11 @@ class ProjectStorageManager:
             return False
 
     def get_take_audio_path(self, user_id: str, track_id: str, take_id: str) -> Optional[Path]:
-        """Return path to take's master audio file."""
+        """Return path to take's master audio file (side-effect-free)."""
         take = self.get_take(user_id, track_id, take_id)
         if not take:
             return None
-        take_dir = self._get_take_dir(user_id, track_id, take_id)
+        take_dir = self._get_take_dir_path(user_id, track_id, take_id)
         for ext in AUDIO_FORMATS:
             audio_path = take_dir / f"audio{ext}"
             if audio_path.is_file() and not audio_path.is_symlink():
@@ -1078,9 +1451,19 @@ class ProjectStorageManager:
 
     # --- Album Workspace & Entry Recording Ownership Management ---
 
+    def _get_album_entries_root_path(self, user_id: str, album_id: str) -> Path:
+        """Pure path computation for an album's entries root (does not create directories)."""
+        return self._get_album_dir_path(user_id, album_id) / "entries"
+
     def _get_album_entries_root(self, user_id: str, album_id: str) -> Path:
         album_dir = self._get_album_dir(user_id, album_id)
         return self._ensure_dir_0700(album_dir / "entries")
+
+    def _get_album_entry_dir_path(self, user_id: str, album_id: str, entry_id: str) -> Path:
+        """Pure path computation for an album entry directory (does not create directories)."""
+        if not is_valid_project_id(entry_id, expected_prefix="ale"):
+            raise ValueError("Invalid album entry identifier format.")
+        return self._get_album_entries_root_path(user_id, album_id) / get_album_entry_dir_name(entry_id)
 
     def _get_album_entry_dir(self, user_id: str, album_id: str, entry_id: str) -> Path:
         if not is_valid_project_id(entry_id, expected_prefix="ale"):
@@ -1088,19 +1471,367 @@ class ProjectStorageManager:
         entries_root = self._get_album_entries_root(user_id, album_id)
         return entries_root / get_album_entry_dir_name(entry_id)
 
-    def get_album_entry_audio_path(self, user_id: str, album_id: str, entry_id: str) -> Optional[Path]:
-        """Return path to an album entry's owned audio copy if it exists."""
+    def _entry_has_filesystem_artifacts(self, user_id: str, album_id: str, entry_id: str) -> bool:
+        """Non-following fail-closed check for any file, symlink, or artifact in an entry directory."""
         try:
-            entry_dir = self._get_album_entry_dir(user_id, album_id, entry_id)
+            entry_dir = self._get_album_entry_dir_path(user_id, album_id, entry_id)
+            if not entry_dir.exists() and not entry_dir.is_symlink():
+                return False
+            st = os.lstat(entry_dir)
+            if not stat.S_ISDIR(st.st_mode):
+                return True
+            return any(entry_dir.iterdir())
+        except OSError:
+            return True
+        except ValueError:
+            return True
+
+    def get_album_entry_audio_path(self, user_id: str, album_id: str, entry_id: str) -> Optional[Path]:
+        """Return path to an album entry's owned audio copy if it exists (side-effect-free, non-following)."""
+        try:
+            if not is_valid_project_id(album_id, expected_prefix="alb") or not is_valid_project_id(entry_id, expected_prefix="ale"):
+                return None
+            rel_parts = [
+                get_tenant_storage_dir_name(user_id),
+                "albums",
+                get_album_dir_name(album_id),
+                "entries",
+                get_album_entry_dir_name(entry_id),
+            ]
+            if not self._verify_ancestors_nofollow(rel_parts, allow_missing=True):
+                return None
+            entry_dir = self._get_album_entry_dir_path(user_id, album_id, entry_id)
+        except (ValueError, AlbumManifestCorruptError):
+            return None
+        try:
+            for ext in AUDIO_FORMATS:
+                audio_path = entry_dir / f"audio{ext}"
+                if audio_path.is_file() and not audio_path.is_symlink():
+                    return audio_path
+        except OSError:
+            return None
+        return None
+
+    def open_album_entry_audio_for_read(
+        self, user_id: str, album_id: str, entry_id: str
+    ) -> Optional[tuple[AlbumTrackEntry, Path, int, int]]:
+        """Validate manifest and entry membership, then open entry audio fd without creating dirs/locks."""
+        if not is_valid_project_id(album_id, expected_prefix="alb") or not is_valid_project_id(entry_id, expected_prefix="ale"):
+            return None
+        album = self.get_album(user_id, album_id)
+        if not album:
+            return None
+        entry = next((t for t in album.tracks if t.id == entry_id), None)
+        if not entry or entry.is_placeholder:
+            return None
+        rel_parts = [
+            get_tenant_storage_dir_name(user_id),
+            "albums",
+            get_album_dir_name(album_id),
+            "entries",
+            get_album_entry_dir_name(entry_id),
+        ]
+        if not self._verify_ancestors_nofollow(rel_parts, allow_missing=True):
+            return None
+        if not entry.has_owned_audio:
+            return None
+        entry_dir = self._get_album_entry_dir_path(user_id, album_id, entry_id)
+        for ext in AUDIO_FORMATS:
+            filename = f"audio{ext}"
+            opened = self._open_file_under_root_nofollow(rel_parts, filename)
+            if opened is not None:
+                fd, size = opened
+                return entry, entry_dir / filename, fd, size
+        return None
+
+    def open_album_cover_for_read(self, user_id: str, album_id: str) -> Optional[tuple[Path, int, int]]:
+        """Validate album manifest and open cover fd without creating directories or lockfiles."""
+        if not is_valid_project_id(album_id, expected_prefix="alb"):
+            return None
+        album = self.get_album(user_id, album_id)
+        if not album:
+            return None
+        rel_parts = [
+            get_tenant_storage_dir_name(user_id),
+            "albums",
+            get_album_dir_name(album_id),
+        ]
+        if not self._verify_ancestors_nofollow(rel_parts, allow_missing=True):
+            return None
+        album_dir = self._get_album_dir_path(user_id, album_id)
+        for ext in (".jpg", ".jpeg", ".png"):
+            filename = f"cover{ext}"
+            opened = self._open_file_under_root_nofollow(rel_parts, filename)
+            if opened is not None:
+                fd, size = opened
+                return album_dir / filename, fd, size
+        return None
+
+    def _get_album_lock_path(self, user_id: str, album_id: str) -> Path:
+        if not is_valid_project_id(album_id, expected_prefix="alb"):
+            raise ValueError("Invalid album identifier format.")
+        return self._get_albums_root(user_id) / f".{get_album_dir_name(album_id)}.lock"
+
+    @contextmanager
+    def _album_lock(self, user_id: str, album_id: str):
+        """Acquire an inode-stable, cross-process, re-entrancy-safe lock for an album.
+
+        Stored outside album_dir so manifest atomic_json replacements and album deletions
+        never swap or unlink the lock inode while other operations are waiting on it.
+        """
+        lock_path = self._get_album_lock_path(user_id, album_id)
+        held = getattr(self._thread_local, "album_locks", None)
+        if held is None:
+            held = {}
+            self._thread_local.album_locks = held
+        key = str(lock_path)
+        depth = held.get(key, 0)
+        if depth > 0:
+            held[key] = depth + 1
+            try:
+                yield lock_path
+            finally:
+                held[key] = depth
+            return
+
+        with file_lock(lock_path):
+            held[key] = 1
+            try:
+                yield lock_path
+            finally:
+                held.pop(key, None)
+
+    def _inspect_raw_album_manifest(self, raw_data: Any, album_id: str, *, protect_finalized: bool = False) -> None:
+        """Inspect raw album.json before normalization to preserve finalized protections and reject contradictory state."""
+        if not isinstance(raw_data, dict):
+            raise AlbumManifestCorruptError(
+                f"Album manifest '{album_id}' has invalid structure; refusing operation to preserve existing data."
+            )
+
+        is_raw_finalized = bool(raw_data.get("is_finalized", False)) or (
+            raw_data.get("status") == WorkspaceStatus.COMPLETED.value
+        )
+        raw_tracks = raw_data.get("tracks")
+        if raw_tracks is not None:
+            if not isinstance(raw_tracks, list):
+                if protect_finalized and is_raw_finalized:
+                    raise AlbumFinalizedError("Finalized albums are immutable and cannot be modified or deleted.")
+                raise AlbumManifestCorruptError(
+                    f"Album manifest '{album_id}' has invalid tracks list; refusing operation to preserve existing data."
+                )
+            for item in raw_tracks:
+                if not isinstance(item, dict):
+                    if protect_finalized and is_raw_finalized:
+                        raise AlbumFinalizedError("Finalized albums are immutable and cannot be modified or deleted.")
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' contains malformed track entry; refusing operation to preserve existing data."
+                    )
+                if item.get("take_id") is None and (item.get("snapshot") is not None or bool(item.get("has_owned_audio", False))):
+                    if protect_finalized and is_raw_finalized:
+                        raise AlbumFinalizedError("Finalized albums are immutable and cannot be modified or deleted.")
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' contains contradictory placeholder/snapshot data; refusing operation to preserve existing data."
+                    )
+
+    @staticmethod
+    def _normalize_album_entries_shared(album_id: str, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Normalize album entry dicts with two-pass persisted ID reservation and deterministic legacy derivation."""
+        raw_tracks = data.get("tracks")
+        raw_track_ids = data.get("track_ids")
+        if not raw_tracks and raw_track_ids:
+            raw_tracks = [
+                {"track_number": i + 1, "disc_number": 1, "track_id": tid, "take_id": None, "custom_title": None}
+                for i, tid in enumerate(raw_track_ids)
+            ]
+
+        if not isinstance(raw_tracks, list):
+            return []
+
+        persisted_ids: set[str] = set()
+        for item in raw_tracks:
+            if not isinstance(item, dict):
+                continue
+            eid = item.get("id")
+            if isinstance(eid, str) and is_valid_project_id(eid, expected_prefix="ale"):
+                if eid in persisted_ids:
+                    raise AlbumManifestCorruptError(
+                        f"Album manifest '{album_id}' contains duplicate persisted entry identifier '{eid}'."
+                    )
+                persisted_ids.add(eid)
+
+        seen_ids: set[str] = set(persisted_ids)
+        norm_tracks: List[Dict[str, Any]] = []
+        for idx, item in enumerate(raw_tracks):
+            if not isinstance(item, dict):
+                continue
+            entry = dict(item)
+            eid = entry.get("id")
+            if not (isinstance(eid, str) and is_valid_project_id(eid, expected_prefix="ale")):
+                tid = str(entry.get("track_id") or "")
+                take_id = entry.get("take_id")
+                candidate = generate_deterministic_legacy_entry_id(album_id, idx, tid, take_id)
+                salt_idx = idx
+                while candidate in seen_ids:
+                    salt_idx += 100000
+                    candidate = generate_deterministic_legacy_entry_id(album_id, salt_idx, tid, take_id)
+                seen_ids.add(candidate)
+                entry["id"] = candidate
+
+            entry["track_number"] = int(entry.get("track_number") or (idx + 1))
+            entry["disc_number"] = int(entry.get("disc_number") or 1)
+            if entry.get("take_id") is None:
+                entry["is_placeholder"] = True
+                entry["has_owned_audio"] = False
+                entry["snapshot"] = None
+            else:
+                entry["is_placeholder"] = False
+            norm_tracks.append(entry)
+
+        return norm_tracks
+
+    def _normalize_album_data_from_dir_fd(
+        self, album_dir_fd: int, data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Non-destructively normalize album manifest using validated album_dir_fd."""
+        album_id = str(data.get("id") or "")
+        has_cover = False
+        for cov_name in ("cover.jpg", "cover.png"):
+            try:
+                st = os.lstat(cov_name, dir_fd=album_dir_fd)
+                if stat.S_ISREG(st.st_mode):
+                    has_cover = True
+                    break
+            except FileNotFoundError:
+                continue
+        data["has_cover"] = has_cover
+        status_val = data.get("status", WorkspaceStatus.DRAFT.value)
+        data["is_finalized"] = bool(data.get("is_finalized", False)) or (status_val == WorkspaceStatus.COMPLETED.value)
+
+        entries_fd: Optional[int] = None
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
+        except FileNotFoundError:
+            entries_fd = None
+        except OSError as e:
+            raise AlbumManifestCorruptError("Album 'entries' directory is invalid or a symlink.") from e
+
+        try:
+            norm_tracks = self._normalize_album_entries_shared(album_id, data)
+            for norm_item in norm_tracks:
+                if not norm_item["is_placeholder"]:
+                    has_owned = False
+                    if entries_fd is not None and is_valid_project_id(norm_item["id"], expected_prefix="ale"):
+                        ehash = get_album_entry_dir_name(norm_item["id"])
+                        try:
+                            efd = os.open(ehash, dir_flags, dir_fd=entries_fd)
+                        except FileNotFoundError:
+                            efd = None
+                        except OSError as e:
+                            raise AlbumManifestCorruptError(
+                                f"Entry directory '{ehash}' is invalid or a symlink."
+                            ) from e
+                        if efd is not None:
+                            try:
+                                for ext in AUDIO_FORMATS:
+                                    try:
+                                        ast = os.lstat(f"audio{ext}", dir_fd=efd)
+                                        if stat.S_ISREG(ast.st_mode):
+                                            has_owned = True
+                                            break
+                                    except FileNotFoundError:
+                                        continue
+                            finally:
+                                os.close(efd)
+                    norm_item["has_owned_audio"] = has_owned
+
+            data["tracks"] = norm_tracks
+            data["track_ids"] = [t["track_id"] for t in norm_tracks if t.get("track_id")]
+            return data
+        finally:
+            if entries_fd is not None:
+                try:
+                    os.close(entries_fd)
+                except OSError:
+                    pass
+
+    def _read_album_from_dir_fd(
+        self,
+        album_id: str,
+        album_dir_fd: int,
+        *,
+        protect_finalized: bool = False,
+    ) -> Optional[Tuple[AlbumMetadata, Dict[str, Any], os.stat_result]]:
+        """Read, inspect, normalize, and validate album.json strictly through album_dir_fd."""
+        try:
+            mfd = os.open("album.json", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=album_dir_fd)
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            raise AlbumManifestCorruptError(
+                f"Album manifest '{album_id}' is a symlink or unreadable; refusing operation to preserve existing data."
+            ) from e
+
+        mfd_owned = True
+        try:
+            manifest_st = os.fstat(mfd)
+            if not stat.S_ISREG(manifest_st.st_mode):
+                raise AlbumManifestCorruptError(f"Album manifest '{album_id}' is not a regular file.")
+            f = os.fdopen(mfd, "r", encoding="utf-8")
+            mfd_owned = False
+            with f:
+                raw_data = json.load(f)
+        except AlbumManifestCorruptError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to read/parse album manifest {album_id}: {e}")
+            raise AlbumManifestCorruptError(
+                f"Album manifest '{album_id}' is unreadable or invalid; refusing operation to preserve existing data."
+            ) from e
+        finally:
+            if mfd_owned:
+                try:
+                    os.close(mfd)
+                except OSError:
+                    pass
+
+        self._inspect_raw_album_manifest(raw_data, album_id, protect_finalized=protect_finalized)
+
+        if protect_finalized and (
+            bool(raw_data.get("is_finalized", False))
+            or raw_data.get("status") == WorkspaceStatus.COMPLETED.value
+        ):
+            try:
+                norm_data = self._normalize_album_data_from_dir_fd(album_dir_fd, dict(raw_data))
+                return AlbumMetadata(**norm_data), norm_data, manifest_st
+            except Exception as e:
+                raise AlbumFinalizedError("Finalized albums are immutable and cannot be modified or deleted.") from e
+
+        try:
+            norm_data = self._normalize_album_data_from_dir_fd(album_dir_fd, dict(raw_data))
+            return AlbumMetadata(**norm_data), norm_data, manifest_st
+        except Exception as e:
+            logger.error(f"Failed to validate album manifest {album_id}: {e}")
+            raise AlbumManifestCorruptError(
+                f"Album manifest '{album_id}' failed validation; refusing operation to preserve existing data."
+            ) from e
+
+    def _read_album_unlocked(self, user_id: str, album_id: str, *, protect_finalized: bool = False) -> Optional[AlbumMetadata]:
+        """Read and normalize album.json, failing closed with AlbumManifestCorruptError if invalid."""
+        try:
+            album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
         except ValueError:
             return None
-        if not entry_dir.is_dir() or entry_dir.is_symlink():
+        if album_dir_fd is None:
             return None
-        for ext in AUDIO_FORMATS:
-            audio_path = entry_dir / f"audio{ext}"
-            if audio_path.is_file() and not audio_path.is_symlink():
-                return audio_path
-        return None
+        try:
+            loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=protect_finalized)
+            return loaded[0] if loaded is not None else None
+        finally:
+            try:
+                os.close(album_dir_fd)
+            except OSError:
+                pass
 
     @staticmethod
     def _is_album_finalized(album: AlbumMetadata) -> bool:
@@ -1112,32 +1843,69 @@ class ProjectStorageManager:
         entry_id: str,
         track: TrackMetadata,
         take: TakeMetadata,
-        audio_path: Path,
+        audio_path: Optional[Path] = None,
         copied_at: Optional[float] = None,
+        *,
+        audio_fd: Optional[int] = None,
+        audio_ext: Optional[str] = None,
     ) -> AlbumEntrySnapshot:
-        """Build a backend-authoritative provenance and metadata snapshot from a source take audio file."""
-        sha256 = _compute_file_sha256(audio_path)
-        size_bytes = audio_path.stat().st_size
-        duration = _probe_audio_duration(audio_path)
-        if duration <= 0.0:
-            duration = float(take.duration_seconds or 0.0)
-
+        """Build a backend-authoritative provenance and metadata snapshot from a retained audio fd or path."""
         embedded_meta: Dict[str, Any] = {}
         embedded_lyrics: Optional[str] = None
-        try:
-            from backend.metadata_engine import extract_metadata_and_artwork
-            parsed = extract_metadata_and_artwork(audio_path)
-            raw_meta = parsed.get("metadata", {}) if isinstance(parsed, dict) else {}
-            for k, v in raw_meta.items():
-                if k == "lyrics":
-                    if v:
-                        embedded_lyrics = str(v)
-                elif k == "synced_lyrics":
-                    continue
-                elif v not in (None, ""):
-                    embedded_meta[k] = v
-        except Exception as e:
-            logger.debug(f"Metadata snapshot extraction skipped for {audio_path.name}: {e}")
+        duration = 0.0
+
+        if audio_fd is not None:
+            ast = os.fstat(audio_fd)
+            size_bytes = ast.st_size
+            os.lseek(audio_fd, 0, os.SEEK_SET)
+            h = hashlib.sha256()
+            while True:
+                chunk = os.read(audio_fd, 65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+            sha256 = h.hexdigest()
+            fmt_ext = (audio_ext or f".{take.format}").lower()
+            try:
+                from backend.metadata_engine import extract_metadata_from_fd
+                parsed = extract_metadata_from_fd(audio_fd, fmt_ext)
+                duration = float(parsed.get("duration") or 0.0)
+                raw_meta = parsed.get("metadata", {}) if isinstance(parsed, dict) else {}
+                for k, v in raw_meta.items():
+                    if k == "lyrics":
+                        if v:
+                            embedded_lyrics = str(v)
+                    elif k == "synced_lyrics":
+                        continue
+                    elif v not in (None, ""):
+                        embedded_meta[k] = v
+            except Exception as e:
+                logger.debug(f"Metadata snapshot extraction skipped for descriptor: {e}")
+            if duration <= 0.0:
+                duration = float(take.duration_seconds or 0.0)
+            fmt_str = fmt_ext.lstrip(".").lower() or take.format
+        else:
+            assert audio_path is not None
+            sha256 = _compute_file_sha256(audio_path)
+            size_bytes = audio_path.stat().st_size
+            duration = _probe_audio_duration(audio_path)
+            if duration <= 0.0:
+                duration = float(take.duration_seconds or 0.0)
+            try:
+                from backend.metadata_engine import extract_metadata_and_artwork
+                parsed = extract_metadata_and_artwork(audio_path)
+                raw_meta = parsed.get("metadata", {}) if isinstance(parsed, dict) else {}
+                for k, v in raw_meta.items():
+                    if k == "lyrics":
+                        if v:
+                            embedded_lyrics = str(v)
+                    elif k == "synced_lyrics":
+                        continue
+                    elif v not in (None, ""):
+                        embedded_meta[k] = v
+            except Exception as e:
+                logger.debug(f"Metadata snapshot extraction skipped for {audio_path.name}: {e}")
+            fmt_str = audio_path.suffix.lstrip(".").lower() or take.format
 
         # Fall back to attached synchronized take lyrics if embedded USLT lyrics are absent
         if not embedded_lyrics:
@@ -1157,7 +1925,7 @@ class ProjectStorageManager:
             source_take_revision=take.revision,
             source_take_updated_at=float(take.updated_at or 0.0),
             source_filename=take.filename,
-            format=audio_path.suffix.lstrip(".").lower() or take.format,
+            format=fmt_str,
             size_bytes=size_bytes,
             duration_seconds=duration,
             audio_sha256=sha256,
@@ -1176,8 +1944,10 @@ class ProjectStorageManager:
         entry_id: str,
         track_id: str,
         take_id: str,
-    ) -> Tuple[AlbumEntrySnapshot, Callable[[], None], Callable[[], None], Callable[[], None]]:
-        """Stage an independent audio copy and snapshot before committing manifest changes."""
+        *,
+        album_dir_fd: int,
+    ) -> Tuple[AlbumEntrySnapshot, Callable[[], None], Callable[[], None], Callable[[bool], None]]:
+        """Stage and promote an independent audio copy and snapshot strictly via retained dir_fds."""
         track = self.get_track(user_id, track_id)
         if not track:
             raise ProjectValidationError(f"Track workspace '{track_id}' not found.")
@@ -1197,85 +1967,216 @@ class ProjectStorageManager:
         if ext not in AUDIO_FORMATS:
             raise ProjectValidationError(f"Unsupported source audio format '{ext}'.")
 
-        existing_audio = self.get_album_entry_audio_path(user_id, album_id, entry_id)
-        existing_size = existing_audio.stat().st_size if (existing_audio and existing_audio.is_file()) else 0
-        self.ensure_quota_available(user_id, max(0, source_size - existing_size))
+        self.ensure_quota_available(user_id, source_size)
 
-        entry_dir = self._ensure_dir_0700(self._get_album_entry_dir(user_id, album_id, entry_id))
-        stage_token = uuid.uuid4().hex[:12]
-        staging_audio = entry_dir / f".staging_{stage_token}_audio{ext}"
-        staging_snap = entry_dir / f".staging_{stage_token}_snapshot.json"
-        dest_audio = entry_dir / f"audio{ext}"
-        dest_snap = entry_dir / "snapshot.json"
-        backup_records: List[Tuple[Path, Path]] = []
-        state = {"committed": False}
+        entries_fd, created_entries_dir, entries_dir_id = self._open_or_create_subdir_fd_tracked(album_dir_fd, "entries")
+        try:
+            entry_dir_hash = get_album_entry_dir_name(entry_id)
+            entry_dir_fd, created_entry_dir, entry_dir_id = self._open_or_create_subdir_fd_tracked(
+                entries_fd, entry_dir_hash
+            )
+        except BaseException:
+            if created_entries_dir:
+                try:
+                    cur_est = os.fstat(entries_fd)
+                    if (cur_est.st_dev, cur_est.st_ino) == entries_dir_id and len(os.listdir(entries_fd)) == 0:
+                        os.rmdir("entries", dir_fd=album_dir_fd)
+                except OSError:
+                    pass
+            raise
+        finally:
+            try:
+                os.close(entries_fd)
+            except OSError:
+                pass
+
+        fd_closed = False
+
+        def _close_entry_fd() -> None:
+            nonlocal fd_closed
+            if not fd_closed:
+                fd_closed = True
+                try:
+                    os.close(entry_dir_fd)
+                except OSError:
+                    pass
+
+        def _cleanup_created_dirs() -> None:
+            if not created_entry_dir and not created_entries_dir:
+                return
+            dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                cur_entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
+            except OSError:
+                return
+            try:
+                cur_est = os.fstat(cur_entries_fd)
+                if (cur_est.st_dev, cur_est.st_ino) != entries_dir_id:
+                    return
+                if created_entry_dir:
+                    try:
+                        sub_st = os.lstat(entry_dir_hash, dir_fd=cur_entries_fd)
+                        if stat.S_ISDIR(sub_st.st_mode) and (sub_st.st_dev, sub_st.st_ino) == entry_dir_id:
+                            sub_fd = os.open(entry_dir_hash, dir_flags, dir_fd=cur_entries_fd)
+                            try:
+                                is_empty = (len(os.listdir(sub_fd)) == 0)
+                            finally:
+                                os.close(sub_fd)
+                            if is_empty:
+                                os.rmdir(entry_dir_hash, dir_fd=cur_entries_fd)
+                    except OSError:
+                        pass
+                entries_empty = (len(os.listdir(cur_entries_fd)) == 0)
+            finally:
+                try:
+                    os.close(cur_entries_fd)
+                except OSError:
+                    pass
+            if created_entries_dir and entries_empty:
+                try:
+                    os.rmdir("entries", dir_fd=album_dir_fd)
+                except OSError:
+                    pass
 
         try:
-            with open(source_audio, "rb") as src, open(staging_audio, "wb") as dst:
-                shutil.copyfileobj(src, dst, length=64 * 1024)
+            existing_items = os.listdir(entry_dir_fd)
+            if existing_items:
+                raise AlbumReplacementDisabledError(
+                    "Destination album entry already contains existing audio, snapshots, or recovery artifacts."
+                )
+
+            stage_token = uuid.uuid4().hex[:12]
+            staging_audio_name = f".staging_{stage_token}_audio{ext}"
+            staging_snap_name = f".staging_{stage_token}_snapshot.json"
+            dest_audio_name = f"audio{ext}"
+            dest_snap_name = "snapshot.json"
+
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            audio_fd = os.open(staging_audio_name, flags, 0o600, dir_fd=entry_dir_fd)
+            staging_audio_id: Optional[Tuple[int, int]] = None
+            staging_snap_id: Optional[Tuple[int, int]] = None
+            promoted_files: List[Tuple[str, int, int]] = []
+
             try:
-                os.chmod(staging_audio, 0o600)
-            except Exception:
-                pass
-
-            if not staging_audio.is_file() or staging_audio.stat().st_size != source_size:
-                raise ProjectStorageError("Staged album audio copy failed byte-count verification.")
-
-            snapshot = self._build_take_snapshot(user_id, entry_id, track, take, staging_audio)
-            atomic_json(staging_snap, snapshot.model_dump())
-        except Exception:
-            for p in (staging_audio, staging_snap):
-                if p.exists():
+                try:
+                    ast_init = os.fstat(audio_fd)
+                    staging_audio_id = (ast_init.st_dev, ast_init.st_ino)
+                    dst = os.fdopen(audio_fd, "wb")
+                except BaseException:
                     try:
-                        p.unlink(missing_ok=True)
-                    except Exception:
+                        os.close(audio_fd)
+                    except OSError:
                         pass
+                    raise
+
+                with dst:
+                    with open(source_audio, "rb") as src:
+                        shutil.copyfileobj(src, dst, length=64 * 1024)
+                    dst.flush()
+                    os.fsync(dst.fileno())
+                    os.fchmod(dst.fileno(), 0o600)
+                    ast = os.fstat(dst.fileno())
+                    staging_audio_id = (ast.st_dev, ast.st_ino)
+                    if ast.st_size != source_size:
+                        raise ProjectStorageError("Staged album audio copy failed byte-count verification.")
+
+                ro_fd = os.open(staging_audio_name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=entry_dir_fd)
+                try:
+                    ro_st = os.fstat(ro_fd)
+                    if (ro_st.st_dev, ro_st.st_ino) != staging_audio_id:
+                        raise ProjectStorageError("Staged audio file identity changed before snapshot construction.")
+                    snapshot = self._build_take_snapshot(
+                        user_id, entry_id, track, take, audio_fd=ro_fd, audio_ext=ext
+                    )
+                finally:
+                    try:
+                        os.close(ro_fd)
+                    except OSError:
+                        pass
+
+                snap_fd = os.open(staging_snap_name, flags, 0o600, dir_fd=entry_dir_fd)
+                try:
+                    sst_init = os.fstat(snap_fd)
+                    staging_snap_id = (sst_init.st_dev, sst_init.st_ino)
+                    sf = os.fdopen(snap_fd, "w", encoding="utf-8")
+                except BaseException:
+                    try:
+                        os.close(snap_fd)
+                    except OSError:
+                        pass
+                    raise
+
+                with sf:
+                    json.dump(snapshot.model_dump(), sf, indent=2)
+                    sf.flush()
+                    os.fsync(sf.fileno())
+                    os.fchmod(sf.fileno(), 0o600)
+                    sst = os.fstat(sf.fileno())
+                    staging_snap_id = (sst.st_dev, sst.st_ino)
+            except Exception:
+                for sname, expected_id in ((staging_audio_name, staging_audio_id), (staging_snap_name, staging_snap_id)):
+                    if expected_id is not None:
+                        try:
+                            cur_st = os.lstat(sname, dir_fd=entry_dir_fd)
+                            if stat.S_ISREG(cur_st.st_mode) and (cur_st.st_dev, cur_st.st_ino) == expected_id:
+                                os.unlink(sname, dir_fd=entry_dir_fd)
+                        except Exception:
+                            pass
+                _close_entry_fd()
+                _cleanup_created_dirs()
+                raise
+
+            def _promote_one(src_name: str, dst_name: str, expected_id: Tuple[int, int]) -> None:
+                cur_st = os.lstat(src_name, dir_fd=entry_dir_fd)
+                if not stat.S_ISREG(cur_st.st_mode) or (cur_st.st_dev, cur_st.st_ino) != expected_id:
+                    raise ProjectStorageError(f"Staged file '{src_name}' changed identity before promotion.")
+                # os.link atomically fails with FileExistsError if dst_name already exists (never overwrites)
+                os.link(src_name, dst_name, src_dir_fd=entry_dir_fd, dst_dir_fd=entry_dir_fd)
+                promoted_files.append((dst_name, expected_id[0], expected_id[1]))
+                os.unlink(src_name, dir_fd=entry_dir_fd)
+
+            def commit_staged() -> None:
+                if fd_closed:
+                    raise ProjectStorageError("Entry directory descriptor closed before promotion.")
+                _promote_one(staging_audio_name, dest_audio_name, staging_audio_id)
+                _promote_one(staging_snap_name, dest_snap_name, staging_snap_id)
+
+            def cleanup_backups() -> None:
+                _close_entry_fd()
+
+            def rollback_staged(allow_promoted_unlink: bool = True) -> None:
+                try:
+                    if not fd_closed:
+                        for sname, expected_id in ((staging_audio_name, staging_audio_id), (staging_snap_name, staging_snap_id)):
+                            if expected_id is not None:
+                                try:
+                                    cur_st = os.lstat(sname, dir_fd=entry_dir_fd)
+                                    if stat.S_ISREG(cur_st.st_mode) and (cur_st.st_dev, cur_st.st_ino) == expected_id:
+                                        os.unlink(sname, dir_fd=entry_dir_fd)
+                                except FileNotFoundError:
+                                    pass
+                                except Exception:
+                                    pass
+                        if allow_promoted_unlink:
+                            for fname, exp_dev, exp_ino in reversed(promoted_files):
+                                try:
+                                    cur_st = os.lstat(fname, dir_fd=entry_dir_fd)
+                                    if stat.S_ISREG(cur_st.st_mode) and (cur_st.st_dev, cur_st.st_ino) == (exp_dev, exp_ino):
+                                        os.unlink(fname, dir_fd=entry_dir_fd)
+                                except FileNotFoundError:
+                                    pass
+                                except Exception:
+                                    pass
+                finally:
+                    _close_entry_fd()
+                    if allow_promoted_unlink:
+                        _cleanup_created_dirs()
+
+            return snapshot, commit_staged, cleanup_backups, rollback_staged
+        except BaseException:
+            _close_entry_fd()
+            _cleanup_created_dirs()
             raise
-
-        def commit_staged() -> None:
-            for old_ext in AUDIO_FORMATS:
-                old_audio = entry_dir / f"audio{old_ext}"
-                if old_audio.is_file():
-                    bak_audio = entry_dir / f".backup_{stage_token}_audio{old_ext}"
-                    os.replace(old_audio, bak_audio)
-                    backup_records.append((old_audio, bak_audio))
-            if dest_snap.is_file():
-                bak_snap = entry_dir / f".backup_{stage_token}_snapshot.json"
-                os.replace(dest_snap, bak_snap)
-                backup_records.append((dest_snap, bak_snap))
-
-            os.replace(staging_audio, dest_audio)
-            os.replace(staging_snap, dest_snap)
-            try:
-                os.chmod(dest_audio, 0o600)
-            except Exception:
-                pass
-            state["committed"] = True
-
-        def cleanup_backups() -> None:
-            for _, bak_path in backup_records:
-                try:
-                    bak_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-        def rollback_staged() -> None:
-            for p in (staging_audio, staging_snap):
-                try:
-                    p.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            if state["committed"]:
-                for p in (dest_audio, dest_snap):
-                    try:
-                        p.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                for orig_path, bak_path in reversed(backup_records):
-                    if bak_path.exists():
-                        os.replace(bak_path, orig_path)
-
-        return snapshot, commit_staged, cleanup_backups, rollback_staged
 
     def _normalize_album_data(self, user_id: str, album_dir: Path, data: Dict[str, Any]) -> Dict[str, Any]:
         """Non-destructively normalize legacy and current album manifests when reading from disk."""
@@ -1284,41 +2185,35 @@ class ProjectStorageManager:
         status_val = data.get("status", WorkspaceStatus.DRAFT.value)
         data["is_finalized"] = bool(data.get("is_finalized", False)) or (status_val == WorkspaceStatus.COMPLETED.value)
 
-        raw_tracks = data.get("tracks")
-        raw_track_ids = data.get("track_ids")
-        if not raw_tracks and raw_track_ids:
-            raw_tracks = [
-                {"track_number": i + 1, "disc_number": 1, "track_id": tid, "take_id": None, "custom_title": None}
-                for i, tid in enumerate(raw_track_ids)
-            ]
-
-        norm_tracks: List[Dict[str, Any]] = []
-        if isinstance(raw_tracks, list):
-            for idx, item in enumerate(raw_tracks):
-                if not isinstance(item, dict):
-                    continue
-                entry = dict(item)
-                tid = entry.get("track_id", "")
-                take_id = entry.get("take_id")
-                eid = entry.get("id")
-                if not eid or not is_valid_project_id(eid, expected_prefix="ale"):
-                    eid = generate_deterministic_legacy_entry_id(album_id, idx, tid, take_id)
-                entry["id"] = eid
-                entry["track_number"] = int(entry.get("track_number") or (idx + 1))
-                entry["disc_number"] = int(entry.get("disc_number") or 1)
-                if take_id is None:
-                    entry["is_placeholder"] = True
-                    entry["has_owned_audio"] = False
-                    entry["snapshot"] = None
-                else:
-                    entry["is_placeholder"] = False
-                    owned_audio = self.get_album_entry_audio_path(user_id, album_id, eid)
-                    entry["has_owned_audio"] = bool(owned_audio is not None and entry.get("snapshot") is not None)
-                norm_tracks.append(entry)
+        norm_tracks = self._normalize_album_entries_shared(album_id, data)
+        for entry in norm_tracks:
+            if not entry["is_placeholder"]:
+                owned_audio = self.get_album_entry_audio_path(user_id, album_id, entry["id"])
+                entry["has_owned_audio"] = bool(owned_audio is not None and entry.get("snapshot") is not None)
 
         data["tracks"] = norm_tracks
-        data["track_ids"] = [t["track_id"] for t in norm_tracks]
+        data["track_ids"] = [t["track_id"] for t in norm_tracks if t.get("track_id")]
         return data
+
+    @staticmethod
+    def _rmdir_if_created_empty(parent_fd: int, name: str, expected_id: Optional[Tuple[int, int]]) -> None:
+        """Remove a newly created, empty, identity-verified subdirectory relative to parent_fd."""
+        if expected_id is None:
+            return
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            sub_st = os.lstat(name, dir_fd=parent_fd)
+            if not stat.S_ISDIR(sub_st.st_mode) or (sub_st.st_dev, sub_st.st_ino) != expected_id:
+                return
+            sub_fd = os.open(name, dir_flags, dir_fd=parent_fd)
+            try:
+                is_empty = (len(os.listdir(sub_fd)) == 0)
+            finally:
+                os.close(sub_fd)
+            if is_empty:
+                os.rmdir(name, dir_fd=parent_fd)
+        except OSError:
+            pass
 
     def create_album(
         self,
@@ -1335,74 +2230,105 @@ class ProjectStorageManager:
             raise ProjectValidationError("Cannot create an empty album directly in completed/finalized status.")
 
         album_id = generate_album_id()
-        album_dir = self._get_album_dir(user_id, album_id)
-        self._ensure_dir_0700(album_dir)
-        self._ensure_dir_0700(album_dir / "entries")
-
         now = time.time()
-        album_meta = AlbumMetadata(
-            id=album_id,
-            title=title.strip(),
-            album_artist=album_artist.strip() if album_artist else None,
-            year=year,
-            genre=genre.strip() if genre else None,
-            credits=credits,
-            status=status,
-            is_finalized=False,
-            finalized_at=None,
-            revision=1,
-            revisions=[
-                RevisionEntry(
-                    revision=1,
-                    timestamp=now,
-                    change_summary="Initial album creation",
-                    changed_fields=[],
-                )
-            ],
-            has_cover=False,
-            tracks=[],
-            created_at=now,
-            updated_at=now,
-        )
+        try:
+            album_meta = AlbumMetadata(
+                id=album_id,
+                title=title.strip() if isinstance(title, str) else title,
+                album_artist=album_artist.strip() if album_artist else None,
+                year=year,
+                genre=genre.strip() if genre else None,
+                credits=credits,
+                status=status,
+                is_finalized=False,
+                finalized_at=None,
+                revision=1,
+                revisions=[
+                    RevisionEntry(
+                        revision=1,
+                        timestamp=now,
+                        change_summary="Initial album creation",
+                        changed_fields=[],
+                    )
+                ],
+                has_cover=False,
+                tracks=[],
+                created_at=now,
+                updated_at=now,
+            )
+        except ValidationError as e:
+            raise ProjectValidationError(f"Invalid album metadata: {e}") from e
 
-        manifest_path = album_dir / "album.json"
-        with file_lock(manifest_path):
-            atomic_json(manifest_path, album_meta.model_dump())
+        self._get_albums_root(user_id)
+        album_hash = get_album_dir_name(album_id)
+        with self._album_lock(user_id, album_id):
+            albums_root_fd = self._open_albums_root_fd_nofollow(user_id)
+            if albums_root_fd is None:
+                raise ProjectStorageError("Albums storage root could not be opened.")
+            album_dir_fd: Optional[int] = None
+            created_album_dir = False
+            album_dir_id: Optional[Tuple[int, int]] = None
+            created_entries_dir = False
+            entries_dir_id: Optional[Tuple[int, int]] = None
+            published_or_uncertain = False
+            try:
+                album_dir_fd, created_album_dir, album_dir_id = self._open_or_create_subdir_fd_tracked(
+                    albums_root_fd, album_hash
+                )
+                entries_fd, created_entries_dir, entries_dir_id = self._open_or_create_subdir_fd_tracked(
+                    album_dir_fd, "entries"
+                )
+                try:
+                    os.close(entries_fd)
+                except OSError:
+                    pass
+
+                try:
+                    _publish_manifest_atomic_in_dir(album_dir_fd, "album.json", album_meta.model_dump())
+                    published_or_uncertain = True
+                except ManifestPublishError as e:
+                    if e.publish_state != ManifestPublishState.NOT_PUBLISHED:
+                        published_or_uncertain = True
+                    raise
+            except BaseException:
+                if not published_or_uncertain:
+                    if album_dir_fd is not None and created_entries_dir:
+                        self._rmdir_if_created_empty(album_dir_fd, "entries", entries_dir_id)
+                    if created_album_dir:
+                        self._rmdir_if_created_empty(albums_root_fd, album_hash, album_dir_id)
+                raise
+            finally:
+                if album_dir_fd is not None:
+                    try:
+                        os.close(album_dir_fd)
+                    except OSError:
+                        pass
+                try:
+                    os.close(albums_root_fd)
+                except OSError:
+                    pass
 
         return album_meta
 
     def get_album(self, user_id: str, album_id: str) -> Optional[AlbumMetadata]:
-        """Retrieve album metadata."""
-        try:
-            album_dir = self._get_album_dir(user_id, album_id)
-        except ValueError:
-            return None
-        manifest_path = album_dir / "album.json"
-        if not manifest_path.is_file():
-            return None
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            data = self._normalize_album_data(user_id, album_dir, data)
-            return AlbumMetadata(**data)
-        except Exception as e:
-            logger.error(f"Failed to read album manifest {album_id}: {e}")
-            return None
+        """Retrieve album metadata, failing closed if an existing manifest is corrupt."""
+        return self._read_album_unlocked(user_id, album_id)
 
     def list_albums(self, user_id: str, status: Optional[WorkspaceStatus] = None) -> List[AlbumMetadata]:
-        """List all album workspaces for a user."""
-        albums_root = self._get_albums_root(user_id)
+        """List all album workspaces for a user (side-effect-free)."""
+        albums_root = self._get_albums_root_path(user_id)
         results = []
-        if not albums_root.exists():
+        if not albums_root.exists() or albums_root.is_symlink() or not albums_root.is_dir():
             return results
 
         for item in albums_root.iterdir():
-            if item.is_dir():
+            if item.is_dir() and not item.is_symlink() and not item.name.startswith("."):
                 manifest_path = item / "album.json"
-                if manifest_path.is_file():
+                if manifest_path.is_file() and not manifest_path.is_symlink():
                     try:
                         with open(manifest_path, "r", encoding="utf-8") as f:
                             data = json.load(f)
+                        self._inspect_raw_album_manifest(data, item.name)
                         data = self._normalize_album_data(user_id, item, data)
                         meta = AlbumMetadata(**data)
                         if status is None or meta.status == status:
@@ -1429,41 +2355,130 @@ class ProjectStorageManager:
 
         track_id = item.get("track_id")
         take_id = item.get("take_id")
-        for candidate in unmatched_existing:
-            if candidate.track_id == track_id and candidate.take_id == take_id:
-                unmatched_existing.remove(candidate)
-                return candidate
+        exact_matches = [c for c in unmatched_existing if c.track_id == track_id and c.take_id == take_id]
+        if len(exact_matches) == 1:
+            matched = exact_matches[0]
+            unmatched_existing.remove(matched)
+            return matched
+        if len(exact_matches) > 1:
+            raise ProjectValidationError(
+                f"Ambiguous tracklist entry for track '{track_id}' and take '{take_id}'; provide explicit album entry IDs."
+            )
 
         track_matches = [c for c in unmatched_existing if c.track_id == track_id]
         if len(track_matches) == 1:
             matched = track_matches[0]
             unmatched_existing.remove(matched)
             return matched
+        if len(track_matches) > 1:
+            raise ProjectValidationError(
+                f"Ambiguous tracklist entry for track '{track_id}'; provide explicit album entry IDs."
+            )
 
         return None
+
+    @staticmethod
+    def _validate_expected_revision(expected_revision: Any) -> int:
+        if isinstance(expected_revision, bool) or not isinstance(expected_revision, int) or expected_revision < 1:
+            raise ProjectValidationError("A valid positive integer 'expected_revision' precondition is required.")
+        return expected_revision
 
     def update_album(
         self,
         user_id: str,
         album_id: str,
         updates: Dict[str, Any],
+        expected_revision: Optional[int] = None,
         change_summary: Optional[str] = None,
     ) -> Optional[AlbumMetadata]:
-        """Update album details or sequenced tracklist with strict validation, staged audio ownership, and revision tracking."""
-        album = self.get_album(user_id, album_id)
-        if not album:
+        """Update album details or sequenced tracklist under stable cross-process album locking."""
+        payload = dict(updates)
+        rev = expected_revision if expected_revision is not None else payload.pop("expected_revision", None)
+        rev = self._validate_expected_revision(rev)
+        try:
+            self._get_album_dir_path(user_id, album_id)
+        except ValueError:
             return None
+        with self._album_lock(user_id, album_id):
+            return self._update_album_locked(
+                user_id,
+                album_id,
+                payload,
+                expected_revision=rev,
+                change_summary=change_summary,
+            )
 
-        if self._is_album_finalized(album):
-            raise AlbumFinalizedError("Finalized albums are immutable and cannot be modified.")
+    def _update_album_locked(
+        self,
+        user_id: str,
+        album_id: str,
+        updates: Dict[str, Any],
+        expected_revision: int,
+        change_summary: Optional[str] = None,
+        *,
+        allow_new_entry_id: Optional[str] = None,
+        allow_remove_entry_id: Optional[str] = None,
+        allow_entry_take_assignment: bool = False,
+    ) -> Optional[AlbumMetadata]:
+        """Update album details or sequenced tracklist (caller must hold _album_lock)."""
+        expected_revision = self._validate_expected_revision(expected_revision)
+        try:
+            album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
+        except ValueError:
+            return None
+        if album_dir_fd is None:
+            return None
+        try:
+            loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True)
+            if not loaded:
+                return None
+            album, data, _ = loaded
 
-        if updates.get("status") in (WorkspaceStatus.COMPLETED, WorkspaceStatus.COMPLETED.value):
-            raise ProjectValidationError("Albums must be finalized via the dedicated finalization endpoint.")
+            if self._is_album_finalized(album):
+                raise AlbumFinalizedError("Finalized albums are immutable and cannot be modified.")
 
-        album_dir = self._get_album_dir(user_id, album_id)
-        manifest_path = album_dir / "album.json"
+            updates.pop("expected_revision", None)
+            if int(expected_revision) != int(album.revision):
+                raise AlbumRevisionConflictError(
+                    f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+                )
 
-        data = album.model_dump()
+            if updates.get("status") in (WorkspaceStatus.COMPLETED, WorkspaceStatus.COMPLETED.value):
+                raise ProjectValidationError("Albums must be finalized via the dedicated finalization endpoint.")
+
+            return self._update_album_locked_with_fd(
+                album_dir_fd=album_dir_fd,
+                user_id=user_id,
+                album_id=album_id,
+                album=album,
+                data=data,
+                updates=updates,
+                change_summary=change_summary,
+                allow_new_entry_id=allow_new_entry_id,
+                allow_remove_entry_id=allow_remove_entry_id,
+                allow_entry_take_assignment=allow_entry_take_assignment,
+            )
+        finally:
+            try:
+                os.close(album_dir_fd)
+            except OSError:
+                pass
+
+    def _update_album_locked_with_fd(
+        self,
+        *,
+        album_dir_fd: int,
+        user_id: str,
+        album_id: str,
+        album: AlbumMetadata,
+        data: Dict[str, Any],
+        updates: Dict[str, Any],
+        change_summary: Optional[str] = None,
+        allow_new_entry_id: Optional[str] = None,
+        allow_remove_entry_id: Optional[str] = None,
+        allow_entry_take_assignment: bool = False,
+    ) -> Optional[AlbumMetadata]:
+        data = dict(data)
         summary_text = updates.pop("change_summary", None) or change_summary
         changed_fields: List[str] = []
 
@@ -1491,10 +2506,23 @@ class ProjectStorageManager:
                     raw_list.append(item.model_dump())
             track_list_input = raw_list
         elif "track_ids" in updates and updates["track_ids"] is not None:
-            track_list_input = [
-                {"track_number": i + 1, "disc_number": 1, "track_id": tid, "take_id": None, "custom_title": None}
-                for i, tid in enumerate(updates["track_ids"])
-            ]
+            from collections import Counter
+            legacy_ids = list(updates["track_ids"])
+            existing_by_tid: Dict[str, List[AlbumTrackEntry]] = {}
+            for existing_entry in album.tracks:
+                existing_by_tid.setdefault(existing_entry.track_id, []).append(existing_entry)
+            existing_counts = Counter(e.track_id for e in album.tracks)
+            incoming_counts = Counter(legacy_ids)
+            if existing_counts != incoming_counts:
+                raise ProjectValidationError(
+                    "Bulk legacy track_ids updates must preserve the exact existing track set; use add_album_entry or remove_album_entry."
+                )
+
+            track_list_input = []
+            for i, tid in enumerate(legacy_ids):
+                preserved = existing_by_tid[tid].pop(0).model_dump()
+                preserved["track_number"] = i + 1
+                track_list_input.append(preserved)
 
         if track_list_input is not None:
             existing_by_id = {e.id: e for e in album.tracks if e.id}
@@ -1511,21 +2539,72 @@ class ProjectStorageManager:
 
             try:
                 for i, item in enumerate(track_list_input):
+                    item.pop("_allow_new_entry_id", None)
                     track_id = item.get("track_id")
                     if not track_id or not is_valid_project_id(track_id, expected_prefix="trk"):
                         raise ProjectValidationError(f"Invalid track identifier '{track_id}' at position {i + 1}.")
 
-                    take_id = item.get("take_id")
-                    if take_id is not None and not is_valid_project_id(take_id, expected_prefix="tak"):
-                        raise ProjectValidationError(f"Invalid take identifier '{take_id}' at position {i + 1}.")
+                    take_id_provided = ("take_id" in item)
+                    raw_take_id = item.get("take_id")
+                    if raw_take_id is not None and not is_valid_project_id(raw_take_id, expected_prefix="tak"):
+                        raise ProjectValidationError(f"Invalid take identifier '{raw_take_id}' at position {i + 1}.")
 
                     req_id = item.get("id")
-                    if req_id is not None and not is_valid_project_id(req_id, expected_prefix="ale"):
-                        raise ProjectValidationError(f"Invalid album entry identifier '{req_id}'.")
+                    is_authorized_new_entry = bool(allow_new_entry_id is not None and req_id == allow_new_entry_id)
+                    if req_id is not None:
+                        if not is_valid_project_id(req_id, expected_prefix="ale"):
+                            raise ProjectValidationError(f"Invalid album entry identifier '{req_id}'.")
+                        if not is_authorized_new_entry and req_id not in existing_by_id:
+                            raise ProjectValidationError(f"Unknown album entry identifier '{req_id}'.")
 
-                    matched = self._resolve_existing_entry_for_item(item, existing_by_id, unmatched_existing)
+                    if is_authorized_new_entry:
+                        matched = None
+                    else:
+                        matched = self._resolve_existing_entry_for_item(item, existing_by_id, unmatched_existing)
+                        if allow_new_entry_id is None and allow_remove_entry_id is None and matched is None:
+                            raise ProjectValidationError(
+                                "Adding entries via bulk album update is not allowed; use add_album_entry."
+                            )
+
+                    if matched is not None:
+                        has_existing_recording = bool(
+                            matched.take_id is not None
+                            or matched.has_owned_audio
+                            or matched.snapshot is not None
+                            or self._entry_has_filesystem_artifacts(user_id, album_id, matched.id)
+                        )
+                        is_bulk_patch = (
+                            allow_new_entry_id is None
+                            and allow_remove_entry_id is None
+                            and not allow_entry_take_assignment
+                        )
+                        if not take_id_provided:
+                            take_id = matched.take_id
+                        elif raw_take_id is None:
+                            if has_existing_recording:
+                                raise AlbumReplacementDisabledError(
+                                    "Clearing an existing recording to a placeholder is temporarily disabled in Phase 1A."
+                                )
+                            take_id = None
+                        else:
+                            if has_existing_recording and (raw_take_id != matched.take_id or track_id != matched.track_id):
+                                raise AlbumReplacementDisabledError(
+                                    "Replacing existing album-owned audio is temporarily disabled while audio-replacement safety upgrades are in progress."
+                                )
+                            if is_bulk_patch and raw_take_id != matched.take_id:
+                                raise ProjectValidationError(
+                                    "Track/Take assignment changes are not allowed in bulk album updates; use add_album_entry or update_album_entry."
+                                )
+                            take_id = raw_take_id
+                    else:
+                        take_id = raw_take_id
+
                     same_track = bool(matched and matched.track_id == track_id)
                     same_recording = bool(same_track and matched.take_id == take_id)
+                    if matched is not None and not same_track:
+                        raise ProjectValidationError(
+                            "Changing an entry's source track via bulk update is not allowed."
+                        )
 
                     if not same_track:
                         track = self.get_track(user_id, track_id)
@@ -1544,6 +2623,15 @@ class ProjectStorageManager:
                     if entry_id in seen_entry_ids:
                         raise ProjectValidationError(f"Duplicate album entry identifier '{entry_id}'.")
                     seen_entry_ids.add(entry_id)
+
+                    has_existing_audio = bool(
+                        matched
+                        and (matched.has_owned_audio or self.get_album_entry_audio_path(user_id, album_id, entry_id) is not None)
+                    )
+                    if take_id is not None and has_existing_audio and not same_recording:
+                        raise AlbumReplacementDisabledError(
+                            "Replacing existing album-owned audio is temporarily disabled while audio-replacement safety upgrades are in progress."
+                        )
 
                     disc_num = int(item.get("disc_number") or 1)
                     custom_title = item.get("custom_title")
@@ -1573,7 +2661,7 @@ class ProjectStorageManager:
                             has_owned = False
                         else:
                             snap, commit_fn, cleanup_fn, rollback_fn = self._stage_entry_audio_copy(
-                                user_id, album_id, entry_id, track_id, take_id
+                                user_id, album_id, entry_id, track_id, take_id, album_dir_fd=album_dir_fd
                             )
                             staged_commits.append(commit_fn)
                             staged_cleanups.append(cleanup_fn)
@@ -1592,16 +2680,31 @@ class ProjectStorageManager:
                             "has_owned_audio": has_owned,
                             "snapshot": snap_dict,
                         })
-            except Exception:
+            except Exception as e:
+                allow_unlink = not isinstance(e, ManifestPublishError) or e.publish_state == ManifestPublishState.NOT_PUBLISHED
                 for rb in reversed(staged_rollbacks):
                     try:
-                        rb()
+                        rb(allow_promoted_unlink=allow_unlink)
                     except Exception:
                         pass
                 raise
 
             for old_entry in album.tracks:
                 if old_entry.id and old_entry.id not in seen_entry_ids:
+                    if old_entry.id != allow_remove_entry_id:
+                        has_old_recording = bool(
+                            old_entry.has_owned_audio
+                            or old_entry.take_id is not None
+                            or old_entry.snapshot is not None
+                            or self._entry_has_filesystem_artifacts(user_id, album_id, old_entry.id)
+                        )
+                        if has_old_recording:
+                            raise AlbumReplacementDisabledError(
+                                "Removing recorded entries is temporarily disabled in Phase 1A."
+                            )
+                        raise ProjectValidationError(
+                            "Removing entries via bulk album update is not allowed; use remove_album_entry."
+                        )
                     obsolete_entry_dirs.append(old_entry.id)
 
             if data.get("tracks") != norm_tracks or staged_commits:
@@ -1625,120 +2728,234 @@ class ProjectStorageManager:
         data["updated_at"] = time.time()
 
         try:
-            with file_lock(manifest_path):
-                for commit_fn in staged_commits:
-                    commit_fn()
-                atomic_json(manifest_path, data)
+            validated_album = AlbumMetadata(**data)
+        except Exception as e:
+            for rb in reversed(staged_rollbacks):
+                try:
+                    rb(allow_promoted_unlink=True)
+                except Exception as rb_err:
+                    logger.error(f"Rollback failed after manifest validation error: {rb_err}")
+            raise ProjectValidationError(f"Invalid album manifest candidate: {e}") from e
+
+        try:
+            for commit_fn in staged_commits:
+                commit_fn()
+            _publish_manifest_atomic_in_dir(album_dir_fd, "album.json", data)
+        except ManifestPublishError as mpe:
+            allow_unlink = (mpe.publish_state == ManifestPublishState.NOT_PUBLISHED)
+            for rb in reversed(staged_rollbacks):
+                try:
+                    rb(allow_promoted_unlink=allow_unlink)
+                except Exception as rb_err:
+                    logger.error(f"Rollback failed after manifest error ({mpe.publish_state}): {rb_err}")
+            raise (mpe.cause or mpe)
         except Exception:
             for rb in reversed(staged_rollbacks):
                 try:
-                    rb()
-                except Exception:
-                    pass
+                    rb(allow_promoted_unlink=True)
+                except Exception as rb_err:
+                    logger.error(f"Rollback failed prior to manifest publish: {rb_err}")
             raise
 
         for cleanup_fn in staged_cleanups:
             cleanup_fn()
 
-        for old_eid in set(obsolete_entry_dirs):
+        if obsolete_entry_dirs:
+            dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
             try:
-                old_dir = self._get_album_entry_dir(user_id, album_id, old_eid)
-                if old_dir.exists():
-                    shutil.rmtree(old_dir, ignore_errors=True)
-            except Exception as e:
-                logger.warning(f"Failed cleaning obsolete entry directory {old_eid}: {e}")
+                entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
+            except OSError:
+                entries_fd = None
+            if entries_fd is not None:
+                try:
+                    for old_eid in set(obsolete_entry_dirs):
+                        try:
+                            ehash = get_album_entry_dir_name(old_eid)
+                            sub_fd = os.open(ehash, dir_flags, dir_fd=entries_fd)
+                            try:
+                                is_empty = (len(os.listdir(sub_fd)) == 0)
+                            finally:
+                                os.close(sub_fd)
+                            if is_empty:
+                                os.rmdir(ehash, dir_fd=entries_fd)
+                        except FileNotFoundError:
+                            pass
+                        except Exception as e:
+                            logger.warning(f"Failed removing empty obsolete entry directory {old_eid}: {e}")
+                finally:
+                    os.close(entries_fd)
 
-        return self.get_album(user_id, album_id)
+        return validated_album
 
     def add_album_entry(
         self,
         user_id: str,
         album_id: str,
         track_id: str,
+        expected_revision: int,
         take_id: Optional[str] = None,
         disc_number: int = 1,
         track_number: Optional[int] = None,
         custom_title: Optional[str] = None,
     ) -> Optional[AlbumMetadata]:
         """Add a track entry (with explicit take or as placeholder) to an unfinished album."""
-        album = self.get_album(user_id, album_id)
-        if not album:
+        expected_revision = self._validate_expected_revision(expected_revision)
+        try:
+            self._get_album_dir_path(user_id, album_id)
+        except ValueError:
             return None
-        if self._is_album_finalized(album):
-            raise AlbumFinalizedError("Cannot add tracks to a finalized album.")
 
-        new_entry = {
-            "id": generate_album_entry_id(),
-            "disc_number": disc_number,
-            "track_id": track_id,
-            "take_id": take_id,
-            "custom_title": custom_title,
-        }
-        tracks = [t.model_dump() for t in album.tracks]
-        if track_number is not None and 1 <= track_number <= len(tracks) + 1:
-            tracks.insert(track_number - 1, new_entry)
-        else:
-            tracks.append(new_entry)
+        with self._album_lock(user_id, album_id):
+            album = self._read_album_unlocked(user_id, album_id, protect_finalized=True)
+            if not album:
+                return None
+            if self._is_album_finalized(album):
+                raise AlbumFinalizedError("Cannot add tracks to a finalized album.")
+            if int(expected_revision) != int(album.revision):
+                raise AlbumRevisionConflictError(
+                    f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+                )
 
-        summary = f"Added track entry ({'placeholder' if take_id is None else take_id})"
-        return self.update_album(user_id, album_id, {"tracks": tracks}, change_summary=summary)
+            new_entry_id = generate_album_entry_id()
+            new_entry = {
+                "id": new_entry_id,
+                "disc_number": disc_number,
+                "track_id": track_id,
+                "take_id": take_id,
+                "custom_title": custom_title,
+            }
+            tracks = [t.model_dump() for t in album.tracks]
+            if track_number is not None and 1 <= track_number <= len(tracks) + 1:
+                tracks.insert(track_number - 1, new_entry)
+            else:
+                tracks.append(new_entry)
+
+            summary = f"Added track entry ({'placeholder' if take_id is None else take_id})"
+            return self._update_album_locked(
+                user_id,
+                album_id,
+                {"tracks": tracks},
+                expected_revision=expected_revision,
+                change_summary=summary,
+                allow_new_entry_id=new_entry_id,
+            )
 
     def update_album_entry(
         self,
         user_id: str,
         album_id: str,
         entry_id: str,
+        expected_revision: int,
         take_id: Optional[str] = None,
         clear_take_to_placeholder: bool = False,
         disc_number: Optional[int] = None,
         custom_title: Optional[str] = None,
     ) -> Optional[AlbumMetadata]:
-        """Change an existing entry's selected take, placeholder state, or metadata without changing entry identity."""
-        album = self.get_album(user_id, album_id)
-        if not album:
+        """Update an entry's metadata or perform initial assignment to an empty placeholder."""
+        expected_revision = self._validate_expected_revision(expected_revision)
+        try:
+            self._get_album_dir_path(user_id, album_id)
+        except ValueError:
             return None
-        if self._is_album_finalized(album):
-            raise AlbumFinalizedError("Cannot modify entries of a finalized album.")
 
-        tracks = [t.model_dump() for t in album.tracks]
-        target = next((t for t in tracks if t.get("id") == entry_id), None)
-        if not target:
-            raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
+        with self._album_lock(user_id, album_id):
+            album = self._read_album_unlocked(user_id, album_id, protect_finalized=True)
+            if not album:
+                return None
+            if self._is_album_finalized(album):
+                raise AlbumFinalizedError("Cannot modify entries of a finalized album.")
+            if int(expected_revision) != int(album.revision):
+                raise AlbumRevisionConflictError(
+                    f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+                )
 
-        if clear_take_to_placeholder:
-            target["take_id"] = None
-        elif take_id is not None:
-            target["take_id"] = take_id
-        if disc_number is not None:
-            target["disc_number"] = disc_number
-        if custom_title is not None:
-            target["custom_title"] = custom_title or None
+            tracks = [t.model_dump() for t in album.tracks]
+            target = next((t for t in tracks if t.get("id") == entry_id), None)
+            if not target:
+                raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
 
-        return self.update_album(
-            user_id,
-            album_id,
-            {"tracks": tracks},
-            change_summary=f"Updated album entry {entry_id}",
-        )
+            has_existing_recording = bool(
+                target.get("take_id") is not None
+                or target.get("has_owned_audio")
+                or target.get("snapshot") is not None
+                or self._entry_has_filesystem_artifacts(user_id, album_id, entry_id)
+            )
+            if clear_take_to_placeholder:
+                if has_existing_recording:
+                    raise AlbumReplacementDisabledError(
+                        "Clearing an existing recording to a placeholder is temporarily disabled in Phase 1A."
+                    )
+                target["take_id"] = None
+            elif take_id is not None:
+                if has_existing_recording and take_id != target.get("take_id"):
+                    raise AlbumReplacementDisabledError(
+                        "Replacing existing album-owned audio is temporarily disabled while audio-replacement safety upgrades are in progress."
+                    )
+                target["take_id"] = take_id
 
-    def remove_album_entry(self, user_id: str, album_id: str, entry_id: str) -> Optional[AlbumMetadata]:
-        """Remove an album entry and clean up its album-owned audio copy without altering source takes."""
-        album = self.get_album(user_id, album_id)
-        if not album:
+            if disc_number is not None:
+                target["disc_number"] = disc_number
+            if custom_title is not None:
+                target["custom_title"] = custom_title or None
+
+            return self._update_album_locked(
+                user_id,
+                album_id,
+                {"tracks": tracks},
+                expected_revision=expected_revision,
+                change_summary=f"Updated album entry {entry_id}",
+                allow_entry_take_assignment=True,
+            )
+
+    def remove_album_entry(
+        self,
+        user_id: str,
+        album_id: str,
+        entry_id: str,
+        expected_revision: int,
+    ) -> Optional[AlbumMetadata]:
+        """Remove an empty placeholder album entry (recorded/occupied entries are disabled in Phase 1A)."""
+        expected_revision = self._validate_expected_revision(expected_revision)
+        try:
+            self._get_album_dir_path(user_id, album_id)
+        except ValueError:
             return None
-        if self._is_album_finalized(album):
-            raise AlbumFinalizedError("Cannot remove entries from a finalized album.")
 
-        remaining = [t.model_dump() for t in album.tracks if t.id != entry_id]
-        if len(remaining) == len(album.tracks):
-            raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
+        with self._album_lock(user_id, album_id):
+            album = self._read_album_unlocked(user_id, album_id, protect_finalized=True)
+            if not album:
+                return None
+            if self._is_album_finalized(album):
+                raise AlbumFinalizedError("Cannot remove entries from a finalized album.")
+            if int(expected_revision) != int(album.revision):
+                raise AlbumRevisionConflictError(
+                    f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+                )
 
-        return self.update_album(
-            user_id,
-            album_id,
-            {"tracks": remaining},
-            change_summary=f"Removed album entry {entry_id}",
-        )
+            target = next((t for t in album.tracks if t.id == entry_id), None)
+            if not target:
+                raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
+
+            has_existing_recording = bool(
+                target.take_id is not None
+                or target.has_owned_audio
+                or target.snapshot is not None
+                or self._entry_has_filesystem_artifacts(user_id, album_id, entry_id)
+            )
+            if has_existing_recording:
+                raise AlbumReplacementDisabledError(
+                    "Removing entries with recordings or existing artifacts is temporarily disabled in Phase 1A."
+                )
+
+            remaining = [t.model_dump() for t in album.tracks if t.id != entry_id]
+            return self._update_album_locked(
+                user_id,
+                album_id,
+                {"tracks": remaining},
+                expected_revision=expected_revision,
+                change_summary=f"Removed album entry {entry_id}",
+                allow_remove_entry_id=entry_id,
+            )
 
     def preview_album_entry_refresh(
         self,
@@ -1856,264 +3073,512 @@ class ProjectStorageManager:
         expected_source_audio_sha256: str,
         expected_source_updated_at: Optional[float] = None,
     ) -> Optional[AlbumMetadata]:
-        """Explicitly replace an album entry's owned copy from its source take after verifying version match."""
-        album = self.get_album(user_id, album_id)
-        if not album:
-            return None
-        if self._is_album_finalized(album):
-            raise AlbumFinalizedError("Cannot refresh entries of a finalized album.")
-
-        entry = next((t for t in album.tracks if t.id == entry_id), None)
-        if not entry:
-            raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
-        if entry.is_placeholder or not entry.take_id:
-            raise ProjectValidationError("Cannot refresh a placeholder entry with no selected take.")
-
-        track = self.get_track(user_id, entry.track_id)
-        take = self.get_take(user_id, entry.track_id, entry.take_id)
-        source_audio = self.get_take_audio_path(user_id, entry.track_id, entry.take_id)
-        if not track or not take or not source_audio or not source_audio.is_file():
-            raise AlbumRefreshConflictError(
-                "Source track or take has been deleted or is unavailable. Existing album recording preserved."
-            )
-
-        current_sha = _compute_file_sha256(source_audio)
-        if take.revision != expected_source_revision or current_sha != expected_source_audio_sha256:
-            raise AlbumRefreshConflictError(
-                "Source take changed since preview was generated. Request a new refresh preview before confirming."
-            )
-        if expected_source_updated_at is not None and abs(float(take.updated_at or 0.0) - expected_source_updated_at) > 1e-4:
-            raise AlbumRefreshConflictError(
-                "Source take changed since preview was generated. Request a new refresh preview before confirming."
-            )
-
-        snap, commit_fn, cleanup_fn, rollback_fn = self._stage_entry_audio_copy(
-            user_id, album_id, entry_id, entry.track_id, entry.take_id
-        )
-
-        album_dir = self._get_album_dir(user_id, album_id)
-        manifest_path = album_dir / "album.json"
-        data = album.model_dump()
-        for t in data.get("tracks", []):
-            if t.get("id") == entry_id:
-                t["has_owned_audio"] = True
-                t["is_placeholder"] = False
-                t["snapshot"] = snap.model_dump()
-                break
-
-        new_rev = int(data.get("revision", 1)) + 1
-        now = time.time()
-        data["revision"] = new_rev
-        data["updated_at"] = now
-        if "revisions" not in data or not isinstance(data["revisions"], list):
-            data["revisions"] = []
-        data["revisions"].append({
-            "revision": new_rev,
-            "timestamp": now,
-            "change_summary": f"Refreshed album entry #{entry.track_number} from source take {take.label}",
-            "changed_fields": ["tracks"],
-        })
-
+        """Temporarily block refreshing existing album-owned audio until Phase 1B replacement safety is complete."""
         try:
-            with file_lock(manifest_path):
-                commit_fn()
-                atomic_json(manifest_path, data)
-        except Exception:
-            rollback_fn()
-            raise
-
-        cleanup_fn()
-        return self.get_album(user_id, album_id)
-
-    def finalize_album(self, user_id: str, album_id: str) -> Optional[AlbumMetadata]:
-        """Validate all recorded entries and storage integrity before atomically locking an album release."""
-        album = self.get_album(user_id, album_id)
-        if not album:
+            self._get_album_dir(user_id, album_id)
+        except ValueError:
             return None
-        if self._is_album_finalized(album):
-            raise AlbumFinalizedError("Album is already finalized.")
 
-        errors: List[Dict[str, Any]] = []
-        if not album.tracks:
-            errors.append({
-                "entry_id": None,
-                "track_number": None,
-                "track_id": None,
-                "reason": "Album must contain at least one recorded entry before finalization.",
-            })
+        with self._album_lock(user_id, album_id):
+            album = self._read_album_unlocked(user_id, album_id)
+            if not album:
+                return None
+            if self._is_album_finalized(album):
+                raise AlbumFinalizedError("Cannot refresh entries of a finalized album.")
 
-        album_dir = self._get_album_dir(user_id, album_id)
-        entries_root = album_dir / "entries"
-        manifest_entry_ids = set()
-
-        for entry in album.tracks:
-            manifest_entry_ids.add(entry.id)
+            entry = next((t for t in album.tracks if t.id == entry_id), None)
+            if not entry:
+                raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
             if entry.is_placeholder or not entry.take_id:
-                errors.append({
-                    "entry_id": entry.id,
-                    "track_number": entry.track_number,
-                    "track_id": entry.track_id,
-                    "reason": f"Track #{entry.track_number} (entry {entry.id}) is a placeholder with no selected take.",
-                })
-                continue
+                raise ProjectValidationError("Cannot refresh a placeholder entry with no selected take.")
 
+            raise AlbumReplacementDisabledError(
+                "Refreshing existing album-owned audio from a source take is temporarily disabled while audio-replacement safety upgrades are in progress."
+            )
+
+    @staticmethod
+    def _snapshots_semantically_equal(a: AlbumEntrySnapshot, b: AlbumEntrySnapshot) -> bool:
+        exact_fields = (
+            "entry_id",
+            "source_track_id",
+            "source_track_title",
+            "source_track_artist",
+            "source_track_revision",
+            "source_take_id",
+            "source_take_label",
+            "source_take_revision",
+            "source_filename",
+            "format",
+            "size_bytes",
+            "audio_sha256",
+            "embedded_metadata",
+            "embedded_lyrics",
+            "take_notes",
+            "take_prompt",
+            "take_style_tags",
+        )
+        for fld in exact_fields:
+            if getattr(a, fld) != getattr(b, fld):
+                return False
+        for float_fld in ("source_take_updated_at", "duration_seconds", "copied_at"):
+            raw_a = getattr(a, float_fld)
+            raw_b = getattr(b, float_fld)
             try:
-                entry_dir = self._get_album_entry_dir(user_id, album_id, entry.id)
-            except ValueError:
-                errors.append({
-                    "entry_id": entry.id,
-                    "track_number": entry.track_number,
-                    "track_id": entry.track_id,
-                    "reason": f"Track #{entry.track_number} has an invalid entry identifier.",
-                })
-                continue
+                va = 0.0 if raw_a is None else float(raw_a)
+                vb = 0.0 if raw_b is None else float(raw_b)
+            except (TypeError, ValueError):
+                return False
+            if not (math.isfinite(va) and math.isfinite(vb)):
+                return False
+            if abs(va - vb) > 1e-6:
+                return False
+        return True
 
-            if entry_dir.is_dir():
-                incomplete = [
-                    p.name for p in entry_dir.iterdir()
-                    if p.name.startswith((".staging_", ".tmp_", ".backup_"))
-                ]
-                if incomplete:
-                    errors.append({
-                        "entry_id": entry.id,
-                        "track_number": entry.track_number,
-                        "track_id": entry.track_id,
-                        "reason": f"Track #{entry.track_number} (entry {entry.id}) has incomplete recording transfer files.",
-                    })
+    def finalize_album(self, user_id: str, album_id: str, expected_revision: int) -> Optional[AlbumMetadata]:
+        """Validate all recorded entries, standalone snapshots, and storage integrity via album_dir_fd before locking."""
+        expected_revision = self._validate_expected_revision(expected_revision)
+        try:
+            self._get_album_dir_path(user_id, album_id)
+        except ValueError:
+            return None
 
-            audio_path = self.get_album_entry_audio_path(user_id, album_id, entry.id)
-            if not audio_path or not entry.has_owned_audio or entry.snapshot is None:
-                errors.append({
-                    "entry_id": entry.id,
-                    "track_number": entry.track_number,
-                    "track_id": entry.track_id,
-                    "reason": f"Track #{entry.track_number} (entry {entry.id}) is missing its album-owned audio copy or metadata snapshot.",
-                })
-                continue
-
+        with self._album_lock(user_id, album_id):
+            album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
+            if album_dir_fd is None:
+                return None
             try:
-                file_size = audio_path.stat().st_size
-                if file_size < 32:
-                    raise ValueError("Audio file is empty or truncated (< 32 bytes).")
-                with open(audio_path, "rb") as f:
-                    header = f.read(64)
-                ext = audio_path.suffix.lower()
-                if not matches_audio_header(header, ext):
-                    raise ValueError("Audio file header does not match container format.")
-                if ext in (".wav", ".m4a"):
-                    validate_audio_container(audio_path)
-                if file_size != entry.snapshot.size_bytes or _compute_file_sha256(audio_path) != entry.snapshot.audio_sha256:
-                    raise ValueError("Album audio copy checksum or size does not match snapshot.")
-            except Exception as e:
-                errors.append({
-                    "entry_id": entry.id,
-                    "track_number": entry.track_number,
-                    "track_id": entry.track_id,
-                    "reason": f"Track #{entry.track_number} (entry {entry.id}) failed audio integrity check: {e}",
-                })
+                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True)
+                if not loaded:
+                    return None
+                album, data, _ = loaded
 
-        if entries_root.is_dir():
-            expected_dirs = {get_album_entry_dir_name(eid) for eid in manifest_entry_ids if eid}
-            for item in entries_root.iterdir():
-                if item.is_dir() and item.name not in expected_dirs and any(item.iterdir()):
+                if self._is_album_finalized(album):
+                    raise AlbumFinalizedError("Album is already finalized.")
+                if int(expected_revision) != int(album.revision):
+                    raise AlbumRevisionConflictError(
+                        f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+                    )
+
+                errors: List[Dict[str, Any]] = []
+                if not album.tracks:
                     errors.append({
                         "entry_id": None,
                         "track_number": None,
                         "track_id": None,
-                        "reason": f"Album storage directory '{item.name}' is inconsistent with the manifest.",
+                        "reason": "Album must contain at least one recorded entry before finalization.",
                     })
 
-        if errors:
-            raise AlbumFinalizationError(
-                "Album cannot be finalized: " + " ".join(e["reason"] for e in errors),
-                errors=errors,
-            )
+                dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+                file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                entries_fd: Optional[int] = None
+                try:
+                    entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
+                except FileNotFoundError:
+                    entries_fd = None
+                except OSError:
+                    errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Album entries root is not a regular directory."})
 
-        manifest_path = album_dir / "album.json"
-        now = time.time()
-        with file_lock(manifest_path):
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            data = self._normalize_album_data(user_id, album_dir, data)
-            new_rev = int(data.get("revision", 1)) + 1
-            data["status"] = WorkspaceStatus.COMPLETED.value
-            data["is_finalized"] = True
-            data["finalized_at"] = now
-            data["revision"] = new_rev
-            data["updated_at"] = now
-            if "revisions" not in data or not isinstance(data["revisions"], list):
-                data["revisions"] = []
-            data["revisions"].append({
-                "revision": new_rev,
-                "timestamp": now,
-                "change_summary": "Finalized album release",
-                "changed_fields": ["status", "is_finalized", "finalized_at"],
-            })
-            atomic_json(manifest_path, data)
+                try:
+                    manifest_entry_ids = set()
+                    for entry in album.tracks:
+                        manifest_entry_ids.add(entry.id)
+                        if entry.is_placeholder or not entry.take_id:
+                            errors.append({
+                                "entry_id": entry.id,
+                                "track_number": entry.track_number,
+                                "track_id": entry.track_id,
+                                "reason": f"Track #{entry.track_number} (entry {entry.id}) is a placeholder with no selected take.",
+                            })
+                            continue
 
-        return self.get_album(user_id, album_id)
+                        if not entry.id or not is_valid_project_id(entry.id, expected_prefix="ale"):
+                            errors.append({
+                                "entry_id": entry.id,
+                                "track_number": entry.track_number,
+                                "track_id": entry.track_id,
+                                "reason": f"Track #{entry.track_number} has an invalid entry identifier.",
+                            })
+                            continue
 
-    def delete_album(self, user_id: str, album_id: str) -> bool:
-        """Delete an album project (does not delete referenced tracks)."""
+                        if entries_fd is None or not entry.has_owned_audio or entry.snapshot is None:
+                            errors.append({
+                                "entry_id": entry.id,
+                                "track_number": entry.track_number,
+                                "track_id": entry.track_id,
+                                "reason": f"Track #{entry.track_number} (entry {entry.id}) is missing its album-owned audio copy or metadata snapshot.",
+                            })
+                            continue
+
+                        ehash = get_album_entry_dir_name(entry.id)
+                        entry_fd: Optional[int] = None
+                        try:
+                            entry_fd = os.open(ehash, dir_flags, dir_fd=entries_fd)
+                            audio_name: Optional[str] = None
+                            for ext in AUDIO_FORMATS:
+                                cand = f"audio{ext}"
+                                try:
+                                    cst = os.lstat(cand, dir_fd=entry_fd)
+                                    if stat.S_ISREG(cst.st_mode):
+                                        audio_name = cand
+                                        break
+                                except FileNotFoundError:
+                                    continue
+                            if not audio_name:
+                                raise ValueError("Album-owned audio file is missing or not a regular file.")
+
+                            expected_entry_files = {"snapshot.json", audio_name}
+                            for cname in os.listdir(entry_fd):
+                                if cname.startswith((".staging_", ".tmp_", ".backup_")):
+                                    raise ValueError("Incomplete recording transfer files present in entry directory.")
+                                if cname not in expected_entry_files:
+                                    raise ValueError(f"Unexpected artifact '{cname}' present in entry directory.")
+                                cst = os.lstat(cname, dir_fd=entry_fd)
+                                if not stat.S_ISREG(cst.st_mode):
+                                    raise ValueError(f"Entry artifact '{cname}' is not a regular file.")
+
+                            afd = os.open(audio_name, file_flags, dir_fd=entry_fd)
+                            try:
+                                ast = os.fstat(afd)
+                                if ast.st_size < 32:
+                                    raise ValueError("Audio file is empty or truncated (< 32 bytes).")
+                                h = hashlib.sha256()
+                                first_chunk = os.read(afd, 64)
+                                h.update(first_chunk)
+                                ext = os.path.splitext(audio_name)[1].lower()
+                                if not matches_audio_header(first_chunk, ext):
+                                    raise ValueError("Audio file header does not match container format.")
+                                while True:
+                                    chunk = os.read(afd, 65536)
+                                    if not chunk:
+                                        break
+                                    h.update(chunk)
+                                if ext == ".wav":
+                                    import wave
+                                    os.lseek(afd, 0, os.SEEK_SET)
+                                    dup_fd = os.dup(afd)
+                                    with os.fdopen(dup_fd, "rb") as wf:
+                                        with wave.open(wf, "rb") as wv:
+                                            if wv.getnchannels() <= 0 or wv.getframerate() <= 0:
+                                                raise ValueError("Invalid WAV container parameters.")
+                                elif ext == ".m4a":
+                                    import mutagen.mp4
+                                    os.lseek(afd, 0, os.SEEK_SET)
+                                    dup_fd = os.dup(afd)
+                                    with os.fdopen(dup_fd, "rb") as mf:
+                                        mutagen.mp4.MP4(mf)
+                                if ast.st_size != entry.snapshot.size_bytes or h.hexdigest() != entry.snapshot.audio_sha256:
+                                    raise ValueError("Album audio copy checksum or size does not match snapshot.")
+                            finally:
+                                os.close(afd)
+
+                            sfd = os.open("snapshot.json", file_flags, dir_fd=entry_fd)
+                            try:
+                                with os.fdopen(sfd, "r", encoding="utf-8") as sf:
+                                    disk_snap = AlbumEntrySnapshot(**json.load(sf))
+                            except Exception as se:
+                                raise ValueError(f"Standalone snapshot.json is missing or invalid: {se}") from se
+
+                            if (
+                                disk_snap.entry_id != entry.id
+                                or disk_snap.source_track_id != entry.track_id
+                                or disk_snap.source_take_id != entry.take_id
+                            ):
+                                raise ValueError("Standalone snapshot.json entry/track/take identity mismatch.")
+                            if not self._snapshots_semantically_equal(disk_snap, entry.snapshot):
+                                raise ValueError("Standalone snapshot.json does not match committed manifest snapshot.")
+                        except Exception as e:
+                            errors.append({
+                                "entry_id": entry.id,
+                                "track_number": entry.track_number,
+                                "track_id": entry.track_id,
+                                "reason": f"Track #{entry.track_number} (entry {entry.id}) failed integrity check: {e}",
+                            })
+                        finally:
+                            if entry_fd is not None:
+                                try:
+                                    os.close(entry_fd)
+                                except OSError:
+                                    pass
+
+                    allowed_cover_names = {"cover.jpg", "cover.jpeg", "cover.png", "cover.webp"} if album.has_cover else set()
+                    seen_covers = []
+                    for rname in os.listdir(album_dir_fd):
+                        rst = os.lstat(rname, dir_fd=album_dir_fd)
+                        if rname == "album.json":
+                            if not stat.S_ISREG(rst.st_mode):
+                                errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Album manifest is not a regular file."})
+                        elif rname == "entries":
+                            if not stat.S_ISDIR(rst.st_mode):
+                                errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Album entries root is not a regular directory."})
+                        elif rname in allowed_cover_names:
+                            if not stat.S_ISREG(rst.st_mode):
+                                errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": f"Album cover '{rname}' is not a regular file."})
+                            seen_covers.append(rname)
+                        else:
+                            errors.append({
+                                "entry_id": None,
+                                "track_number": None,
+                                "track_id": None,
+                                "reason": f"Unexpected album root artifact '{rname}' prevents finalization.",
+                            })
+                    if len(seen_covers) > 1:
+                        errors.append({"entry_id": None, "track_number": None, "track_id": None, "reason": "Multiple cover artwork files present in album root."})
+
+                    if entries_fd is not None:
+                        expected_dirs = {get_album_entry_dir_name(eid) for eid in manifest_entry_ids if eid}
+                        for iname in os.listdir(entries_fd):
+                            ist = os.lstat(iname, dir_fd=entries_fd)
+                            if not stat.S_ISDIR(ist.st_mode) or iname not in expected_dirs:
+                                errors.append({
+                                    "entry_id": None,
+                                    "track_number": None,
+                                    "track_id": None,
+                                    "reason": f"Album storage directory '{iname}' is inconsistent with the manifest.",
+                                })
+
+                    if errors:
+                        raise AlbumFinalizationError(
+                            "Album cannot be finalized: " + " ".join(e["reason"] for e in errors),
+                            errors=errors,
+                        )
+
+                    now = time.time()
+                    new_rev = int(data.get("revision", 1)) + 1
+                    data["status"] = WorkspaceStatus.COMPLETED.value
+                    data["is_finalized"] = True
+                    data["finalized_at"] = now
+                    data["revision"] = new_rev
+                    data["updated_at"] = now
+                    if "revisions" not in data or not isinstance(data["revisions"], list):
+                        data["revisions"] = []
+                    data["revisions"].append({
+                        "revision": new_rev,
+                        "timestamp": now,
+                        "change_summary": "Finalized album release",
+                        "changed_fields": ["status", "is_finalized", "finalized_at"],
+                    })
+                    validated_album = AlbumMetadata(**data)
+                    _publish_manifest_atomic_in_dir(album_dir_fd, "album.json", data)
+                    return validated_album
+                finally:
+                    if entries_fd is not None:
+                        try:
+                            os.close(entries_fd)
+                        except OSError:
+                            pass
+            finally:
+                try:
+                    os.close(album_dir_fd)
+                except OSError:
+                    pass
+
+    def delete_album(self, user_id: str, album_id: str, expected_revision: int) -> bool:
+        """Delete a verified-empty draft album using retained dir_fds and non-following allowlist inspection."""
+        expected_revision = self._validate_expected_revision(expected_revision)
         try:
-            album_dir = self._get_album_dir(user_id, album_id)
+            self._get_album_dir_path(user_id, album_id)
         except ValueError:
             return False
-        manifest_path = album_dir / "album.json"
-        if not manifest_path.is_file():
-            return False
-        try:
-            shutil.rmtree(album_dir, ignore_errors=True)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to delete album {album_id}: {e}")
-            return False
+
+        album_dir_name = get_album_dir_name(album_id)
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+        with self._album_lock(user_id, album_id):
+            albums_root_fd = self._open_albums_root_fd_nofollow(user_id)
+            if albums_root_fd is None:
+                return False
+            album_dir_fd: Optional[int] = None
+            entries_fd: Optional[int] = None
+            try:
+                try:
+                    dir_st = os.lstat(album_dir_name, dir_fd=albums_root_fd)
+                except FileNotFoundError:
+                    return False
+                except OSError as e:
+                    raise ProjectStorageError(f"Cannot inspect album directory '{album_id}': {e}") from e
+                if not stat.S_ISDIR(dir_st.st_mode):
+                    raise AlbumManifestCorruptError(f"Album path '{album_id}' is not a regular directory.")
+
+                try:
+                    album_dir_fd = os.open(album_dir_name, dir_flags, dir_fd=albums_root_fd)
+                except OSError as e:
+                    raise AlbumManifestCorruptError(f"Cannot open album directory '{album_id}': {e}") from e
+
+                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True)
+                if not loaded:
+                    if os.listdir(album_dir_fd):
+                        raise AlbumManifestCorruptError(
+                            f"Album manifest '{album_id}' is missing while album files still exist; refusing deletion."
+                        )
+                    return False
+                album, _, manifest_st = loaded
+
+                if self._is_album_finalized(album):
+                    raise AlbumFinalizedError("Finalized albums are immutable and cannot be deleted.")
+                if int(expected_revision) != int(album.revision):
+                    raise AlbumRevisionConflictError(
+                        f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+                    )
+
+                placeholder_dir_names = set()
+                for entry in album.tracks:
+                    if entry.take_id is not None or entry.has_owned_audio or entry.snapshot is not None:
+                        raise AlbumReplacementDisabledError(
+                            "Deleting albums containing recordings is temporarily disabled in Phase 1A."
+                        )
+                    if entry.id:
+                        placeholder_dir_names.add(get_album_entry_dir_name(entry.id))
+
+                empty_entry_dirs_to_remove: List[str] = []
+                has_entries_root = False
+                try:
+                    for child_name in os.listdir(album_dir_fd):
+                        cst = os.lstat(child_name, dir_fd=album_dir_fd)
+                        if child_name == "album.json":
+                            if not stat.S_ISREG(cst.st_mode):
+                                raise AlbumManifestCorruptError("Album manifest is not a regular file.")
+                        elif child_name == "entries":
+                            if not stat.S_ISDIR(cst.st_mode):
+                                raise AlbumReplacementDisabledError(
+                                    "Album 'entries' path is not a regular directory; refusing deletion."
+                                )
+                            has_entries_root = True
+                            entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
+                            for sub_name in os.listdir(entries_fd):
+                                sst = os.lstat(sub_name, dir_fd=entries_fd)
+                                if not stat.S_ISDIR(sst.st_mode) or sub_name not in placeholder_dir_names:
+                                    raise AlbumReplacementDisabledError(
+                                        "Album contains unexpected or non-empty entry artifacts; deletion is blocked in Phase 1A."
+                                    )
+                                sub_fd = os.open(sub_name, dir_flags, dir_fd=entries_fd)
+                                try:
+                                    if os.listdir(sub_fd):
+                                        raise AlbumReplacementDisabledError(
+                                            "Album contains non-empty entry files; deletion is blocked in Phase 1A."
+                                        )
+                                finally:
+                                    os.close(sub_fd)
+                                empty_entry_dirs_to_remove.append(sub_name)
+                        else:
+                            raise AlbumReplacementDisabledError(
+                                f"Album contains '{child_name}' (artwork, artifacts, or unknown files); deletion is blocked in Phase 1A."
+                            )
+                except (AlbumReplacementDisabledError, AlbumManifestCorruptError):
+                    raise
+                except OSError as e:
+                    raise ProjectStorageError(f"Failed inspecting album '{album_id}' before deletion: {e}") from e
+
+                try:
+                    if entries_fd is not None:
+                        for empty_sub_name in empty_entry_dirs_to_remove:
+                            os.rmdir(empty_sub_name, dir_fd=entries_fd)
+                        os.close(entries_fd)
+                        entries_fd = None
+                    if has_entries_root:
+                        os.rmdir("entries", dir_fd=album_dir_fd)
+                    cur_mst = os.lstat("album.json", dir_fd=album_dir_fd)
+                    if not stat.S_ISREG(cur_mst.st_mode) or (cur_mst.st_dev, cur_mst.st_ino) != (manifest_st.st_dev, manifest_st.st_ino):
+                        raise AlbumManifestCorruptError("Album manifest identity changed prior to deletion.")
+                    os.unlink("album.json", dir_fd=album_dir_fd)
+                    os.close(album_dir_fd)
+                    album_dir_fd = None
+                    os.rmdir(album_dir_name, dir_fd=albums_root_fd)
+                    return True
+                except OSError as e:
+                    logger.error(f"Failed to delete album {album_id}: {e}")
+                    raise ProjectStorageError(f"Failed to completely delete album '{album_id}': {e}") from e
+            finally:
+                if entries_fd is not None:
+                    try:
+                        os.close(entries_fd)
+                    except OSError:
+                        pass
+                if album_dir_fd is not None:
+                    try:
+                        os.close(album_dir_fd)
+                    except OSError:
+                        pass
+                try:
+                    os.close(albums_root_fd)
+                except OSError:
+                    pass
 
     def save_album_cover(
         self,
         user_id: str,
         album_id: str,
         image_bytes: bytes,
+        expected_revision: int,
         extension: str = ".jpg",
-    ) -> bool:
-        """Save normalized album cover artwork."""
-        album = self.get_album(user_id, album_id)
-        if not album:
-            return False
-        if self._is_album_finalized(album):
-            raise AlbumFinalizedError("Cannot update cover artwork on a finalized album.")
-
-        self.ensure_quota_available(user_id, len(image_bytes))
-
-        album_dir = self._get_album_dir(user_id, album_id)
-        # Remove old cover files
-        for old_ext in (".jpg", ".jpeg", ".png", ".webp"):
-            old_file = album_dir / f"cover{old_ext}"
-            if old_file.is_file():
-                try:
-                    old_file.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-        target_ext = ".png" if extension.lower() == ".png" else ".jpg"
-        cover_path = album_dir / f"cover{target_ext}"
-        tmp_cover = album_dir / f".tmp_cover{target_ext}"
-
-        with open(tmp_cover, "wb") as f:
-            f.write(image_bytes)
-        os.replace(tmp_cover, cover_path)
+    ) -> Optional[AlbumMetadata]:
+        """Save initial album cover artwork safely under lock; replacing existing covers is disabled in Phase 1A."""
+        expected_revision = self._validate_expected_revision(expected_revision)
         try:
-            os.chmod(cover_path, 0o600)
-        except Exception:
-            pass
+            album_dir = self._get_album_dir_path(user_id, album_id)
+        except ValueError:
+            return None
 
-        # Update album revision for cover artwork change
-        manifest_path = album_dir / "album.json"
-        if manifest_path.is_file():
+        with self._album_lock(user_id, album_id):
+            album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
+            if album_dir_fd is None:
+                return None
+
             try:
-                with file_lock(manifest_path):
-                    with open(manifest_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True)
+                if not loaded:
+                    return None
+                album, data, _ = loaded
+                if self._is_album_finalized(album):
+                    raise AlbumFinalizedError("Cannot update cover artwork on a finalized album.")
+                if int(expected_revision) != int(album.revision):
+                    raise AlbumRevisionConflictError(
+                        f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+                    )
+
+                existing_cover = False
+                for ext in (".jpg", ".jpeg", ".png", ".webp"):
+                    try:
+                        os.lstat(f"cover{ext}", dir_fd=album_dir_fd)
+                        existing_cover = True
+                        break
+                    except FileNotFoundError:
+                        continue
+                if album.has_cover or existing_cover:
+                    raise AlbumReplacementDisabledError(
+                        "Replacing existing album cover artwork is temporarily disabled in Phase 1A."
+                    )
+
+                self.ensure_quota_available(user_id, len(image_bytes))
+
+                target_ext = ".png" if extension.lower() == ".png" else ".jpg"
+                cover_name = f"cover{target_ext}"
+                tmp_cover_name = f".staging_cover_{secrets.token_hex(8)}{target_ext}"
+
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                fd = os.open(tmp_cover_name, flags, 0o600, dir_fd=album_dir_fd)
+                tmp_exists = True
+                cover_promoted = False
+                manifest_published = False
+                try:
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(image_bytes)
+                        f.flush()
+                        os.fsync(f.fileno())
+                        os.fchmod(f.fileno(), 0o600)
+
+                    try:
+                        os.lstat(cover_name, dir_fd=album_dir_fd)
+                        raise AlbumReplacementDisabledError(
+                            "Replacing existing album cover artwork is temporarily disabled in Phase 1A."
+                        )
+                    except FileNotFoundError:
+                        pass
+
+                    os.replace(tmp_cover_name, cover_name, src_dir_fd=album_dir_fd, dst_dir_fd=album_dir_fd)
+                    tmp_exists = False
+                    cover_promoted = True
+
+                    data = dict(data)
                     new_rev = int(data.get("revision", 1)) + 1
                     data["revision"] = new_rev
                     data["has_cover"] = True
@@ -2126,18 +3591,51 @@ class ProjectStorageManager:
                         "change_summary": "Updated album cover artwork",
                         "changed_fields": ["cover_art"],
                     })
-                    atomic_json(manifest_path, data)
-            except Exception as e:
-                logger.warning(f"Failed to record revision for album cover update: {e}")
+                    _publish_manifest_atomic_in_dir(album_dir_fd, "album.json", data)
+                    manifest_published = True
+                except ManifestPublishError as mpe:
+                    if cover_promoted and mpe.publish_state == ManifestPublishState.NOT_PUBLISHED:
+                        try:
+                            os.unlink(cover_name, dir_fd=album_dir_fd)
+                        except Exception:
+                            pass
+                    raise (mpe.cause or mpe)
+                except Exception:
+                    if tmp_exists and not cover_promoted:
+                        try:
+                            os.unlink(tmp_cover_name, dir_fd=album_dir_fd)
+                        except Exception:
+                            pass
+                    elif cover_promoted and not manifest_published:
+                        try:
+                            os.unlink(cover_name, dir_fd=album_dir_fd)
+                        except Exception:
+                            pass
+                    raise
+            finally:
+                try:
+                    os.close(album_dir_fd)
+                except OSError:
+                    pass
 
-        return True
+            return self._read_album_unlocked(user_id, album_id)
 
     def get_album_cover_path(self, user_id: str, album_id: str) -> Optional[Path]:
-        """Return path to album cover artwork if it exists."""
+        """Return path to album cover artwork if it exists (side-effect-free, non-following)."""
         album = self.get_album(user_id, album_id)
         if not album:
             return None
-        album_dir = self._get_album_dir(user_id, album_id)
+        rel_parts = [
+            get_tenant_storage_dir_name(user_id),
+            "albums",
+            get_album_dir_name(album_id),
+        ]
+        try:
+            if not self._verify_ancestors_nofollow(rel_parts, allow_missing=True):
+                return None
+        except AlbumManifestCorruptError:
+            return None
+        album_dir = self._get_album_dir_path(user_id, album_id)
         for ext in (".jpg", ".jpeg", ".png"):
             cover_path = album_dir / f"cover{ext}"
             if cover_path.is_file() and not cover_path.is_symlink():
