@@ -21,6 +21,15 @@ MP3MetaFix processes audio files in-place without re-encoding the underlying aud
 
 ## ✨ Core Features & Workflow
 
+### Start, edit, and save
+
+1. Open an MP3, M4A, or WAV file in the Editor. Inspect its tags, artwork, and audio before making changes.
+2. Edit the fields you want to change. Preview filename patterns before downloading; clicking a pattern tag inserts it at the cursor.
+3. Download the edited file. Tag editing preserves the audio stream rather than re-encoding it.
+4. The standalone `/app` Editor uses a temporary editing session and **Save & Download**; it does not provide **Save to Project**. The embedded editors within Manager and Projects provide that control for persistent Track/Take copies. When using those editors with a loaded project Take, check whether you are updating that Take or saving a new one.
+
+An editing session is temporary; a browser session is not a backup. Keep downloaded originals and independent backups of important project data. Updating a source Take does not update recordings already copied into an Album. See the [MP3Projects guide](/docs/#projects) for explicit Album refresh.
+
 ### 1. Tagging & Metadata Editor
 - **Full Tag Suite**: Track Title, Artist, Album, Album Artist, Genre, Year / Date, Track Number / Total Tracks, Disc Number / Total Discs, BPM, Composer, Comments, and Lyrics.
 - **Dynamic Filename Formatter**: One-click pattern-based renaming (`%artist% - %title%.mp3`, `%track% - %title%.mp3`, etc.) applied automatically upon download.

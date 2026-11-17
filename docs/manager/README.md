@@ -1,8 +1,8 @@
 # MP3MetaManager (`/manager`) — Desktop Power-User Workspace Guide
 
 > [!NOTE]
-> **Status: Active Development (Integrated Editor & Synced Lyrics / SYLT Live)**  
-> MP3MetaManager includes the multi-panel desktop shell, embedded MP3MetaFix single-track metadata editor, and the complete Synced Lyrics / Tap-to-Sync Karaoke Studio. Batch spreadsheet editing, deep raw ID3 frame management, and stem bundling are in active development.
+> **Status: Active Development**
+> MP3MetaManager includes the integrated single-track editor, Synced Lyrics / Tap-to-Sync studio, persistent Track Workspaces, and separated stem upload, mixing preview, and ZIP download. Batch spreadsheet tagging and the universal raw-frame inspector remain planned.
 
 ---
 
@@ -44,6 +44,12 @@ As an architectural standard, **MP3MetaManager is a functional superset of `/app
 
 ---
 
+### 3. Track Workspaces and Stems Manager
+
+- **Track Workspaces**: Create a persistent song workspace, upload multiple Takes, designate a master Take, stream or download stored audio, and load a Take into the integrated editor. **Save to Project** can save a new Take or update the loaded Take; check the selected destination before saving.
+- **Stems Manager**: Select a Track and Take, batch-upload separated stem files, review detected roles, and preview stems together using mute, solo, per-stem volume, master volume, and seek controls. Download individual stems or the Take's Stem Pack ZIP.
+- These tools organize supplied recordings and stems; they do not perform automatic stem separation. Album release workflows are described in the [MP3Projects guide](/docs/#projects).
+
 ## 📋 Backlog & Future Vision
 
 ### 3. High-Density Spreadsheet Batch Editor
@@ -56,10 +62,9 @@ As an architectural standard, **MP3MetaManager is a functional superset of `/app
 - **Comprehensive Frame Manager**: View, add, edit, and delete standard and specialized ID3v2.3 / ID3v2.4 frames (`TXXX`, `COMM`, `USLT`, `SYLT`, `ETCO`, `APIC`, `PRIV`, `GEOB`, `UFID`, `POPM`, `RVA2`).
 - **MPEG & Container Byte Inspector**: MPEG audio layers, VBR headers, ID3 flags, and raw byte hex payloads.
 
-### 5. Stem Pack Bundler & AI Generation Tree
-- Ingest separated stems (Vocals, Instrumental, Bass, Drums) and stamp shared track metadata with role identifiers.
-- Package into DAW-ready directories or structured `.zip` archives.
-- Visual parent/child lineage graph for variations and extensions.
+### 5. Additional Stem Automation & AI Generation Tree
+- Shared metadata stamping and additional DAW-oriented packaging remain planned beyond the existing stem upload, mixer preview, and ZIP download tools.
+- A visual parent/child lineage graph for variations and extensions remains planned.
 
 ### 6. Custom Lyric Video Studio & MP4 Generator (`.mp4`)
 - Generate vertical (9:16) and widescreen (16:9) animated lyric videos from audio + SYLT/LRC lyrics.

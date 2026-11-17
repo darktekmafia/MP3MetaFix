@@ -21,6 +21,8 @@ def test_docs_list_endpoint():
     assert "projects" in ids
     assert "admin" in ids
     assert "deployment" in ids
+    assert len(ids) == len(set(ids))
+    assert all(section["available"] for section in data["sections"])
 
 
 def test_docs_get_single_topic():
@@ -46,6 +48,141 @@ def test_docs_404_and_traversal_protection():
 
     res_traversal = client.get("/api/docs/..%2F..%2Fconfig.py")
     assert res_traversal.status_code in (404, 422)
+
+
+def test_docs_missing_source_never_substitutes_another_readme(tmp_path, monkeypatch):
+    from backend import main
+
+    # Reproduce a separately installed service lacking docs/app/README.md.
+    # Its root README must not be returned as the Editor guide.
+    (tmp_path / "README.md").write_text("Unrelated project overview", encoding="utf-8")
+    monkeypatch.setattr(main, "BASE_DIR", tmp_path)
+    monkeypatch.setitem(main.DOCS_REGISTRY, "app", {
+        **main.DOCS_REGISTRY["app"], "path": tmp_path / "docs/app/README.md",
+    })
+    sections = client.get("/api/docs/list").json()["sections"]
+    assert next(s for s in sections if s["id"] == "app")["available"] is False
+    response = client.get("/api/docs/app")
+    assert response.status_code == 404
+    assert str(tmp_path) not in response.text
+    assert "Unrelated project overview" not in response.text
+
+
+def test_docs_component_mount_layout_and_unrelated_working_directory(tmp_path, monkeypatch):
+    """Reproduce the service's component-only /opt layout, then expose its docs."""
+    from backend import main
+
+    source_root = main.BASE_DIR
+    runtime_root = tmp_path / "opt/mp3metafix"
+    runtime_root.mkdir(parents=True)
+    for component in ("backend", "frontend", "assets"):
+        (runtime_root / component).symlink_to(source_root / component, target_is_directory=True)
+    unrelated_cwd = tmp_path / "unrelated"
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+    monkeypatch.setattr(main, "BASE_DIR", runtime_root)
+    monkeypatch.setattr(main, "DOCS_DIR", runtime_root / "docs")
+    monkeypatch.setattr(main, "DOCS_REGISTRY", {
+        key: {**meta, "path": runtime_root / meta["path"].relative_to(source_root)}
+        for key, meta in main.DOCS_REGISTRY.items()
+    })
+
+    catalog = client.get("/api/docs/list").json()["sections"]
+    assert len(catalog) == 17
+    assert not any(section["available"] for section in catalog)
+    assert client.get("/api/docs/app").status_code == 404
+
+    # Simulate only the already-supported read-only documentation mounts;
+    # never run the service migration or change the real installation.
+    for name in ("docs", "README.md", "ROADMAP.md", "CHANGELOG.md", "VISION.md", "GOVERNANCE.md"):
+        source = source_root / name
+        (runtime_root / name).symlink_to(source, target_is_directory=source.is_dir())
+    catalog = client.get("/api/docs/list").json()["sections"]
+    assert all(section["available"] for section in catalog)
+    for section in catalog:
+        response = client.get(f'/api/docs/{section["id"]}')
+        assert response.status_code == 200
+        relative = main.DOCS_REGISTRY[section["id"]]["path"].relative_to(runtime_root)
+        assert response.json()["content"] == (source_root / relative).read_text(encoding="utf-8")
+
+
+def test_docs_portal_renders_default_hash_and_all_sidebar_topics():
+    """Execute the real portal controller with API-served Markdown, not string checks."""
+    import json
+    from pathlib import Path
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    assert node is not None
+    sections = client.get("/api/docs/list").json()["sections"]
+    articles = {}
+    for section in sections:
+        response = client.get(f'/api/docs/{section["id"]}')
+        assert response.status_code == 200
+        articles[section["id"]] = response.json()
+    assert "Confirm & Refresh Copy" in articles["projects"]["content"]
+    assert "Play/Pause" in articles["projects"]["content"]
+    script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const assert = require('assert');
+const data = JSON.parse(fs.readFileSync(0, 'utf8'));
+class Element {
+  constructor(tag = 'div') { this.tagName = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.value = ''; this._text = ''; this._classes = new Set();
+    this.classList = { add: c => this._classes.add(c), remove: c => this._classes.delete(c), toggle: (c, force) => { if (force === true || (force === undefined && !this._classes.has(c))) this._classes.add(c); else this._classes.delete(c); } }; }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text + this.children.map(c => c.textContent).join(' '); }
+  set innerHTML(v) { this._text = ''; this.children = []; }
+  appendChild(c) { this.children.push(c); return c; }
+  replaceChildren(...cs) { this._text = ''; this.children = cs; }
+  addEventListener(ev, fn) { this.listeners[ev] = fn; }
+  focus() {}
+}
+const flush = () => new Promise(r => setImmediate(r));
+async function run(hash) {
+  const els = {};
+  const get = id => els[id] || (els[id] = new Element());
+  const events = {};
+  const calls = [];
+  const walk = el => [el, ...el.children.flatMap(walk)];
+  const context = {
+    console: {error() {}}, setTimeout, clearTimeout, navigator: {clipboard: {writeText: async () => {}}},
+    window: {location: {hash}, scrollTo() {}, addEventListener: (ev, fn) => events[ev] = fn},
+    document: {readyState: 'loading', getElementById: get, createElement: tag => new Element(tag), createTextNode: t => { const e = new Element('#text'); e.textContent = t; return e; },
+      querySelectorAll: () => walk(get('docsNavContainer')).filter(e => e.dataset.id),
+      addEventListener: (ev, fn) => events[ev] = fn},
+    fetch: async url => { calls.push(url); if (url === '/api/docs/list') return {ok: true, json: async () => ({sections: data.sections})};
+      const id = decodeURIComponent(url.slice('/api/docs/'.length));
+      return {ok: !!data.articles[id], json: async () => data.articles[id]}; }
+  };
+  vm.runInNewContext(data.source, context);
+  await events.DOMContentLoaded(); await flush();
+  assert.strictEqual(get('docsArticleTitle').textContent, data.articles.app.title);
+  assert(get('docsArticleBody').textContent.includes('MP3MetaFix Editor'));
+  const links = walk(get('docsNavContainer')).filter(e => e.dataset.id);
+  assert.deepStrictEqual(links.map(e => e.dataset.id), data.sections.map(s => s.id));
+  for (const link of links) {
+    link.listeners.click({preventDefault() {}}); await flush();
+    assert.strictEqual(get('docsArticleTitle').textContent, data.articles[link.dataset.id].title);
+    assert(get('docsArticleBody').children.length > 0);
+    assert(!get('docsArticleBody').textContent.includes('Could not load documentation'));
+  }
+  context.window.location.hash = '#<img src=x onerror=alert(1)>';
+  events.hashchange(); await flush();
+  assert.strictEqual(get('docsArticleTitle').textContent, 'Document Not Found');
+  assert(get('docsArticleBody').textContent.includes('was not found'));
+  assert.strictEqual(get('docsArticleBody').children[0].children.length, 0);
+  assert(calls.at(-1).includes('%3Cimg'));
+}
+(async () => { await run(''); await run('#app'); console.log('DOCS_PORTAL_OK'); })().catch(e => { console.error(e); process.exit(1); });
+"""
+    source = (Path(__file__).resolve().parents[1] / "frontend/docs/docs.js").read_text()
+    result = subprocess.run([node, "-e", script], input=json.dumps({
+        "sections": sections, "articles": articles, "source": source,
+    }), text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert "DOCS_PORTAL_OK" in result.stdout
 
 
 def test_docs_portal_static_page():

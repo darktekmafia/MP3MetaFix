@@ -128,7 +128,7 @@ The editor version badge and dialog query the public read-only `/api/version` en
   - Constrained album artwork preview dimensions (`max-width: 210px` on mobile phones) to prevent massive vertical scrolling.
   - Balanced 2-column workspace on tablets ($\ge 720\text{px}$) keeping artwork and metadata forms immediately accessible.
   - Responsive button label typography (`.btn-txt-full` / `.btn-txt-short`).
-- **Core Capabilities**: Editing the supported normalized fields in native MP3/M4A/WAV tags, Web Audio dynamic waveform canvas rendering, APIC cover art processing, canned comment presets, dynamic filename formatting, Suno link parsing, one-click promotion to persistent project workspaces (`Save to Project`), and File System Access API save integration.
+- **Core Capabilities**: Editing the supported normalized fields in native MP3/M4A/WAV tags, Web Audio dynamic waveform canvas rendering, APIC cover art processing, canned comment presets, dynamic filename formatting, Suno link parsing, and File System Access API save integration. The standalone `/app` Editor provides temporary session editing and file download. Persistent project saving (`Save to Project`) is available through the embedded editors within Manager and Projects.
 
 ### 3. MP3MetaManager Desktop Workspace (`/manager`)
 - **Target Persona**: Desktop Power Users, DJs, Album Curators, Batch Producers.
@@ -156,32 +156,25 @@ The editor version badge and dialog query the public read-only `/api/version` en
   - **Release Packaging & Export**: One-click structured ZIP export containing sequenced, tag-sanitized audio files and companion `.cue` / tracklist sheets.
   - **Lyrics Version Management**: Historical lyric revision storage, comparison, and restoration across tracks and takes.
 
-#### Album, Track, Take Ownership & Phase 1A Safety Boundaries
+#### Album, Track, Take Ownership & v2 Durability Architecture
 
 - **Established Requirements**:
   - **Recording Ownership Separation**: Track/Take workspaces and Album entries own separate audio artifacts. Source Take edits or deletions must not corrupt Album-owned audio, and Album operations must not delete source Takes.
   - **Optimistic Concurrency & Finalization**: Existing-Album mutations must validate revision preconditions under the Album lock, and finalized Albums must remain immutable and protected from deletion.
   - **Read Purity**: Read (`GET` and listing) operations must remain side-effect-free and must not rewrite manifests or delete storage artifacts.
 
-- **Current Implementation (Phase 1A)**:
+- **Current Implementation (v2 Journal & Enrolled Album Workflows)**:
   - **Independent Recording & Snapshot Storage**: Assigning a Take to an Album entry copies the source audio into the entry's isolated storage directory alongside a descriptor-extracted metadata/provenance snapshot (`_stage_entry_audio_copy`, `_build_take_snapshot`, `extract_metadata_from_fd`).
-  - **Entry Identity & Legacy Compatibility**: Album normalization uses a shared two-pass mechanism across detail, listing, and mutation reads (`_normalize_album_entries_shared`, `_normalize_album_data_from_dir_fd`, `_normalize_album_data`): valid persisted entry IDs are reserved first (failing closed on duplicate persisted IDs), and missing legacy IDs are derived deterministically without rewriting `album.json` on `GET`.
-  - **State Transitions & Lock Boundaries**: Existing-Album mutations acquire a per-Album lock (`_album_lock`) and require a positive integer `expected_revision` (`422` if missing/malformed, `409` on stale revision). Finalized Albums reject mutations and deletion (`finalize_album`, `AlbumFinalizedError`, `409`).
-  - **Publication Outcomes & Verified Cleanup**: Manifest publication distinguishes `NOT_PUBLISHED`, `UNCERTAIN`, and `PUBLISHED` outcomes (`_publish_manifest_atomic_in_dir`). Staging and rollback operate through `O_NOFOLLOW`/`dir_fd` descriptors and remove empty transaction-created directories only after `(st_dev, st_ino)` identity verification (`_open_or_create_subdir_fd_tracked`, `_cleanup_newly_created_subdir`, `_rmdir_if_created_empty`), preserving artifacts when ownership is unverified or publication is `UNCERTAIN`.
-  - **Temporarily Disabled Destructive Operations (`409`)**: Replacing existing Album-owned audio, clearing populated entries to placeholders, confirming refresh over existing recordings, replacing existing cover artwork, and deleting non-empty or ambiguous Albums are blocked (`AlbumReplacementDisabledError`); only verified empty draft Albums may be deleted (`delete_album`).
-
-- **Relevant Existing Tests (Identified by Static Inspection)**:
-  - Ownership independence, snapshot fidelity, and rounding: `test_album_owned_audio_independence_multi_entry_and_identity`, `test_phase1a6_snapshot_metadata_fidelity_and_duration_rounding`.
-  - Legacy identity, persisted ID reservation, and duplicate rejection: `test_phase1a7_deterministic_legacy_album_entry_identity`, `test_phase1a8_persisted_entry_id_protection_and_duplicate_rejection`.
-  - Locking, revision conflicts, finalization, and disabled operations: `test_phase1a_cross_process_album_locking_and_deletion_race`, `test_phase1a1_api_optimistic_concurrency_implicit_clear_and_corrupt_manifest`, `test_phase1a2_artwork_safety_containment_finalization_and_concurrency`.
-  - Publication outcomes, fault injection, and verified directory cleanup: `test_phase1a3_post_pub_artwork_non_finite_snapshots_and_dir_fd_containment`, `test_phase1a6_snapshot_staging_faults_separate`, `test_phase1a7_subdir_acquisition_exception_safety`, `test_phase1a8_verified_directory_ownership_cleanup`.
-
-- **Proposed Phase 1B Design Considerations (Not Yet Implemented)**:
-  - Two-phase replacement workflows for existing Album-owned audio and cover artwork (retaining prior artifacts until manifest publication is `PUBLISHED`, with defined recovery for `UNCERTAIN` outcomes).
-  - Safe clearing/removal of populated Album entries and deletion/recovery workflows for non-empty draft Albums.
+  - **v2 Transaction Journal (`ENFORCED_V2`)**: Metadata/reorder changes, finalization, recording replacement, explicit source refresh, recorded-entry removal, artwork upload/replacement, and draft deletion use the v2 lifecycle (`PREPARED` -> `PUBLISH_INTENT` -> manifest publication -> `COMMITTED` receipt). Entry addition and initial Take assignment also use this path on already-enrolled v2 Albums. Journaled operations use descriptor-relative containment and synchronization, with explicit recovery evaluating their transaction evidence.
+  - **Journal-less Compatibility Paths**: Entry addition, initial Take assignment and other non-replacement entry edits, and placeholder removal on journal-less Albums use `_update_album_locked_with_fd` and direct atomic manifest publication. These paths retain their existing validation and publication handling but do not create v2 transaction receipts and are not reconciled by the v2 recovery coordinator. They do not have the same journal-backed recovery evidence as v2 transactions; support for an operation must not imply that every invocation uses v2.
+  - **Generation-Aware Retention**: Recording replacement and source refresh create new audio/snapshot generations (`audio_g<N>.<ext>`, `snapshot_g<N>.json`); artwork upload/replacement creates cover generations (`cover_g<N>.<ext>`). Superseded artifacts remain on disk, authenticated by `retained_artifacts` and `COMMITTED` `superseded_refs`. Recorded-entry removal retains the entry's existing artifacts without allocating new generation filenames. Finalization seals active artifacts and authenticates retained artifacts.
+  - **Resumable Draft Album Deletion**: `delete_album` commits an authenticated `is_deleted=True` tombstone via `_execute_v2_album_tx_locked` first (making the Album immediately unavailable to `get_album`, `list_albums`, and media readers), then performs descriptor-relative cleanup with `album.json` unlinked before `journal.json` so interrupted deletions can be retried cleanly.
+  - **Entry Identity & Legacy Compatibility**: Album normalization uses a shared two-pass mechanism across detail, listing, and mutation reads (`_normalize_album_entries_shared`): valid persisted entry IDs are reserved first (failing closed on duplicate persisted IDs), and missing legacy IDs are derived deterministically without rewriting `album.json` on `GET`.
+  - **Shared-Player Album Entry Preview**: `/projects` previews Album-owned entry audio (`/api/projects/albums/{id}/entries/{entry_id}/stream`) through the single shared `#audioElement` with generation-invalidated `WaveformVisualizer` state and explicit source ownership.
+  - *(Historical Note)*: Prior Phase 1A guardrails temporarily blocked replacing recordings, refreshing over recordings, replacing cover artwork, removing recorded entries, and deleting non-empty Albums; those restrictions have been superseded by the enrolled v2 workflows above.
 
 - **Unresolved Questions & Limitations**:
-  - Current protections target application-level exceptions and process interruption on Linux; full crash consistency, power-loss durability (e.g., parent-directory `fsync` on every rename/mkdir), and native Windows/macOS filesystem compatibility are not established.
+  - Current protections target application-level exceptions and process interruption on Linux; hardware failure, power-loss durability across every filesystem/controller configuration, and native Windows/macOS filesystem compatibility are not guaranteed.
   - Whether future migrations should persist deterministically derived legacy entry IDs upon explicit mutation or retain on-read derivation remains open.
 
 ### 5. Global App Switcher

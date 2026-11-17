@@ -220,6 +220,7 @@ The **Gateway Hub** is the compact front door for choosing a workspace. Detailed
   - Organize separated stems (`stm_...`) across 18 stem roles with filename auto-detection, synchronized multi-stem preview playback (Mute, Solo, per-stem volume, master seek), and one-click take Stem Pack ZIP export (`/stems/download-pack`).
 - [x] **Album / EP Release Organization & Tracklist Sequencing**:
   - Group tracks into named Album, EP, Single, or Compilation containers (`alb_...`) with track/disc order sequencing (`AlbumTrackEntry`), normalized cover art, and release metadata.
+  - Draft Albums support independent Take copies, explicit source refresh, recording replacement, entry removal, artwork replacement, and resumable draft deletion through the v2 journal. Finalization validates active and retained artifacts and makes the Album immutable. Recorded entries have shared-player Play/Pause preview without autoplay. See the [Album workflow guide](docs/projects/README.md).
 - [x] **Embedded Single-Track Editor View**:
   - In-place access to the single-track metadata and artwork editor view (`#viewEditor` using `frontend/js/app.js` and shared backend session APIs) without leaving `/projects`.
 

@@ -428,7 +428,7 @@
     bodyEl.innerHTML = '<div class="docs-loading-state"><div class="spinner"></div><span>Loading article...</span></div>';
 
     try {
-      const res = await fetch(`/api/docs/${docId}`);
+      const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
       if (!res.ok) {
         throw new Error(`Failed to load document (HTTP ${res.status})`);
       }
@@ -459,7 +459,15 @@
     } catch (err) {
       console.error(err);
       titleEl.textContent = 'Document Not Found';
-      bodyEl.innerHTML = `<div class="toast toast-error" style="position:static; margin: 1rem 0;"><span>Could not load documentation for "${docId}".</span></div>`;
+      bodyEl.replaceChildren();
+      const message = document.createElement('div');
+      message.className = 'toast toast-error';
+      message.style.position = 'static';
+      message.style.margin = '1rem 0';
+      message.textContent = docsList.some(doc => doc.id === docId)
+        ? 'This guide is unavailable on this installation. Its registered Markdown source must be included and readable by the application service.'
+        : `Documentation topic "${docId}" was not found.`;
+      bodyEl.appendChild(message);
     }
   }
 

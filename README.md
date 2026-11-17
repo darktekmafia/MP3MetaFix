@@ -2,43 +2,14 @@
 
 ---
 
-## DEVELOPMENT BRANCH — DATA SAFETY NOTICE
+## DEVELOPMENT BRANCH NOTICE
 
-**MP3MetaFix is under active development. Exercise caution when using this branch with irreplaceable audio recordings.**
+**MP3MetaFix is under active development. The `development` branch is intended for development and testing, not guaranteed production reliability.**
 
-### Phase 1A Recording Protection
-
-Commit `484f9df` introduces safeguards addressing previously identified Album data-integrity defects, including:
-
-- Protection against unintended deletion or replacement of existing Album recordings.
-- Revision checks to prevent conflicting Album updates.
-- Validation and protective handling of Album metadata, snapshots, and audio files.
-- Restrictions preventing modification or deletion of finalized Albums.
-- Improved compatibility with legacy Album entries.
-
-These corrections have undergone independent static code review. The implementation also passed 235 tests as reported by the development environment; those results were not independently reproduced.
-
-### Temporarily Unavailable Operations
-
-To protect existing recordings, the following Album operations remain disabled pending Phase 1B:
-
-- Replacing existing Album-owned audio recordings.
-- Clearing recordings from populated Album entries.
-- Confirming refresh operations that would replace existing recordings.
-- Replacing existing Album cover artwork.
-- Deleting Albums containing recordings or ambiguous storage artifacts.
-
-These restrictions are intentional. They are not indications that your recordings have been lost.
-
-### Important Limitations
-
-Phase 1A improves protection against application-level failures and unintended destructive operations. It does not guarantee recovery from hardware failure, power loss, external filesystem modifications, or every possible failure condition.
-
-**Maintain independent backups of important recordings and Album data.**
-
-The current protective implementation primarily targets Linux. Native Windows and macOS installation compatibility has not yet been established.
-
-Phase 1B will address safe replacement, recovery, and additional Album-management workflows.
+- **Current Baseline**: The `development` branch now provides a substantially more functional and tested baseline, including v2-journaled draft Album workflows (adding entries, replacing recordings, explicit source-Take refresh, removing entries, replacing cover artwork, resumable draft Album deletion, Album finalization, and shared-player entry preview).
+- **Ongoing Risk**: Bugs, incomplete features, and breaking changes remain possible.
+- **Data Safety & Backups**: Application-level safeguards do not guarantee recovery from hardware failure, power loss, external filesystem modifications, or every possible failure condition. **Maintain independent backups of important recordings and Album data.**
+- **Platform Support**: The current implementation primarily targets Linux. Native Windows and macOS installation compatibility has not yet been established.
 
 ---
 

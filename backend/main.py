@@ -521,7 +521,7 @@ DOCS_REGISTRY: Dict[str, Dict[str, Any]] = {
         "category": "Workspaces",
         "icon": "folder",
         "path": DOCS_DIR / "manager" / "README.md",
-        "summary": "Desktop batch editor, spreadsheet controls, stem pack bundler, and universal ID3 frame manager.",
+        "summary": "Integrated editor, synced lyrics, persistent Tracks and Takes, and separated stem tools; batch tagging remains planned.",
     },
     "projects": {
         "id": "projects",
@@ -529,7 +529,7 @@ DOCS_REGISTRY: Dict[str, Dict[str, Any]] = {
         "category": "Workspaces",
         "icon": "disc",
         "path": DOCS_DIR / "projects" / "README.md",
-        "summary": "Multi-track EP/LP bundling, album sequencing, unified artwork, and persistent sessions.",
+        "summary": "Tracks and Takes, independent Album recordings, explicit refresh, draft editing, finalization, and entry preview.",
     },
     "admin": {
         "id": "admin",
@@ -652,7 +652,7 @@ async def list_docs():
     sections = []
     for doc_id, doc in DOCS_REGISTRY.items():
         doc_path = doc["path"]
-        is_avail = doc_path.is_file() or (BASE_DIR / doc_path.name).is_file() or (DOCS_DIR / doc_path.name).is_file()
+        is_avail = doc_path.is_file()
         sections.append({
             "id": doc["id"],
             "title": doc["title"],
@@ -672,20 +672,8 @@ async def get_doc_content(doc_id: str):
     doc_meta = DOCS_REGISTRY[doc_id]
     doc_path = doc_meta["path"]
     if not doc_path.is_file():
-        # Fallback search if working directory or relative path differs
-        alt_paths = [
-            BASE_DIR / doc_path.name,
-            DOCS_DIR / doc_path.name,
-            BASE_DIR / "docs" / doc_path.name,
-            Path.cwd() / doc_path.name,
-            Path.cwd() / "docs" / doc_path.name,
-        ]
-        for alt in alt_paths:
-            if alt.is_file():
-                doc_path = alt
-                break
-        else:
-            raise HTTPException(404, f"Documentation file '{doc_path.name}' is not available on host")
+        # Each topic has one source. A different README is not a substitute.
+        raise HTTPException(404, "Documentation content is unavailable on this installation")
     
     try:
         content = doc_path.read_text(encoding="utf-8")
@@ -696,9 +684,9 @@ async def get_doc_content(doc_id: str):
             "icon": doc_meta.get("icon", "file-text"),
             "content": content,
         }
-    except Exception as e:
-        logger.error(f"Failed to read documentation file {doc_path}: {e}")
-        raise HTTPException(500, f"Could not load documentation content: {e}")
+    except OSError:
+        logger.exception("Failed to read registered documentation topic %s", doc_id)
+        raise HTTPException(500, "Could not load documentation content")
 
 
 @app.get("/api/updates/check")
