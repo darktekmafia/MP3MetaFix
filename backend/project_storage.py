@@ -5,6 +5,7 @@ cryptographic path hashing and strict POSIX 0700 filesystem isolation.
 """
 
 import os
+import copy
 import json
 import math
 import stat
@@ -147,6 +148,16 @@ class AlbumManifestCorruptError(ProjectStorageError):
 
 class AlbumDurabilityUncertainError(ProjectStorageError):
     """Raised when album durability or recovery evidence is ambiguous or un-synchronized."""
+    pass
+
+
+class AlbumMutationNotEnrolledError(ProjectStorageError):
+    """Raised when an operation is not yet enrolled for v2-journaled albums."""
+    pass
+
+
+class AlbumIdempotencyConflictError(ProjectStorageError):
+    """Raised when an Idempotency-Key conflicts with an existing transaction or receipt."""
     pass
 
 
@@ -1789,6 +1800,7 @@ class ProjectStorageManager:
         album_dir_fd: int,
         *,
         protect_finalized: bool = False,
+        raw_out: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Tuple[AlbumMetadata, Dict[str, Any], os.stat_result]]:
         """Read, inspect, normalize, and validate album.json strictly through album_dir_fd."""
         try:
@@ -1824,19 +1836,21 @@ class ProjectStorageManager:
                     pass
 
         self._inspect_raw_album_manifest(raw_data, album_id, protect_finalized=protect_finalized)
+        if raw_out is not None:
+            raw_out.append(raw_data)
 
         if protect_finalized and (
             bool(raw_data.get("is_finalized", False))
             or raw_data.get("status") == WorkspaceStatus.COMPLETED.value
         ):
             try:
-                norm_data = self._normalize_album_data_from_dir_fd(album_dir_fd, dict(raw_data))
+                norm_data = self._normalize_album_data_from_dir_fd(album_dir_fd, copy.deepcopy(raw_data))
                 return AlbumMetadata(**norm_data), norm_data, manifest_st
             except Exception as e:
                 raise AlbumFinalizedError("Finalized albums are immutable and cannot be modified or deleted.") from e
 
         try:
-            norm_data = self._normalize_album_data_from_dir_fd(album_dir_fd, dict(raw_data))
+            norm_data = self._normalize_album_data_from_dir_fd(album_dir_fd, copy.deepcopy(raw_data))
             return AlbumMetadata(**norm_data), norm_data, manifest_st
         except Exception as e:
             logger.error(f"Failed to validate album manifest {album_id}: {e}")
@@ -2436,6 +2450,68 @@ class ProjectStorageManager:
                 change_summary=change_summary,
             )
 
+    def _validate_album_evidence_phase_a_locked(
+        self,
+        album_id: str,
+        album_dir_fd: int,
+        *,
+        raw_album_data: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Dict[str, Any], Optional[AlbumJournal], RecoveryConsistency]:
+        """Phase A (read-only): validate manifest/journal structure and reject proven CORRUPT without blocking replayable UNCERTAIN/active_tx."""
+        if raw_album_data is None:
+            album_loaded = self._read_json_file_verified_in_dir(album_dir_fd, "album.json", sync_file=False, required=False)
+            if album_loaded is None:
+                raise AlbumManifestCorruptError(f"Album manifest 'album.json' is missing for '{album_id}'.")
+            album_data = album_loaded[0]
+        else:
+            album_data = raw_album_data
+
+        journal_loaded = self._read_json_file_verified_in_dir(album_dir_fd, "journal.json", sync_file=False, required=False)
+        journal: Optional[AlbumJournal] = None
+        if journal_loaded is not None:
+            journal_raw = journal_loaded[0]
+            try:
+                journal = AlbumJournal(**journal_raw)
+                if journal.album_id != album_id:
+                    raise AlbumManifestCorruptError(
+                        f"Album journal identity mismatch (expected '{album_id}', found '{journal.album_id}')."
+                    )
+            except AlbumManifestCorruptError:
+                raise
+            except Exception as exc:
+                raise AlbumManifestCorruptError(
+                    f"Album journal failed validation; preserving all artifacts: {exc}"
+                ) from exc
+
+        consistency = self._classify_album_consistency(album_data, journal)
+        if consistency == RecoveryConsistency.CORRUPT:
+            raise AlbumManifestCorruptError(f"Album '{album_id}' failed structural/consistency validation.")
+        return album_data, journal, consistency
+
+    @staticmethod
+    def _check_album_mutation_eligibility_phase_b_locked(
+        album_id: str,
+        journal: Optional[AlbumJournal],
+        consistency: RecoveryConsistency,
+        *,
+        is_enrolled: bool = False,
+    ) -> None:
+        """Phase B (read-only): reject UNCERTAIN/active_tx/v1 journals and unenrolled operations on idle v2 albums."""
+        if journal is None:
+            return
+        if journal.protocol == JournalProtocol.LEGACY_PROVISIONAL:
+            raise AlbumDurabilityUncertainError(
+                f"Album '{album_id}' has a legacy v1 journal; mutations are blocked pending explicit v1 handling."
+            )
+        if journal.active_tx is not None or consistency == RecoveryConsistency.UNCERTAIN:
+            raise AlbumDurabilityUncertainError(
+                f"Album '{album_id}' has an unresolved transaction or uncertain durability evidence."
+            )
+        if not is_enrolled:
+            raise AlbumMutationNotEnrolledError(
+                f"Operation is not enrolled in the v2 transaction writer for album '{album_id}'."
+            )
+
     def _update_album_locked(
         self,
         user_id: str,
@@ -2457,10 +2533,17 @@ class ProjectStorageManager:
         if album_dir_fd is None:
             return None
         try:
-            loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True)
+            raw_holder: List[Dict[str, Any]] = []
+            loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
             if not loaded:
                 return None
             album, data, _ = loaded
+            _, journal, consistency = self._validate_album_evidence_phase_a_locked(
+                album_id, album_dir_fd, raw_album_data=raw_holder[0]
+            )
+            self._check_album_mutation_eligibility_phase_b_locked(
+                album_id, journal, consistency, is_enrolled=False
+            )
 
             if self._is_album_finalized(album):
                 raise AlbumFinalizedError("Finalized albums are immutable and cannot be modified.")
@@ -2834,39 +2917,58 @@ class ProjectStorageManager:
             return None
 
         with self._album_lock(user_id, album_id):
-            album = self._read_album_unlocked(user_id, album_id, protect_finalized=True)
-            if not album:
+            album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
+            if album_dir_fd is None:
                 return None
-            if self._is_album_finalized(album):
-                raise AlbumFinalizedError("Cannot add tracks to a finalized album.")
-            if int(expected_revision) != int(album.revision):
-                raise AlbumRevisionConflictError(
-                    f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+            try:
+                raw_holder: List[Dict[str, Any]] = []
+                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
+                if not loaded:
+                    return None
+                album, norm_data, _ = loaded
+                _, journal, consistency = self._validate_album_evidence_phase_a_locked(
+                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
                 )
+                self._check_album_mutation_eligibility_phase_b_locked(
+                    album_id, journal, consistency, is_enrolled=False
+                )
+                if self._is_album_finalized(album):
+                    raise AlbumFinalizedError("Cannot add tracks to a finalized album.")
+                if int(expected_revision) != int(album.revision):
+                    raise AlbumRevisionConflictError(
+                        f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+                    )
 
-            new_entry_id = generate_album_entry_id()
-            new_entry = {
-                "id": new_entry_id,
-                "disc_number": disc_number,
-                "track_id": track_id,
-                "take_id": take_id,
-                "custom_title": custom_title,
-            }
-            tracks = [t.model_dump() for t in album.tracks]
-            if track_number is not None and 1 <= track_number <= len(tracks) + 1:
-                tracks.insert(track_number - 1, new_entry)
-            else:
-                tracks.append(new_entry)
+                new_entry_id = generate_album_entry_id()
+                new_entry = {
+                    "id": new_entry_id,
+                    "disc_number": disc_number,
+                    "track_id": track_id,
+                    "take_id": take_id,
+                    "custom_title": custom_title,
+                }
+                tracks = [t.model_dump() for t in album.tracks]
+                if track_number is not None and 1 <= track_number <= len(tracks) + 1:
+                    tracks.insert(track_number - 1, new_entry)
+                else:
+                    tracks.append(new_entry)
 
-            summary = f"Added track entry ({'placeholder' if take_id is None else take_id})"
-            return self._update_album_locked(
-                user_id,
-                album_id,
-                {"tracks": tracks},
-                expected_revision=expected_revision,
-                change_summary=summary,
-                allow_new_entry_id=new_entry_id,
-            )
+                summary = f"Added track entry ({'placeholder' if take_id is None else take_id})"
+                return self._update_album_locked_with_fd(
+                    album_dir_fd=album_dir_fd,
+                    user_id=user_id,
+                    album_id=album_id,
+                    album=album,
+                    data=norm_data,
+                    updates={"tracks": tracks},
+                    change_summary=summary,
+                    allow_new_entry_id=new_entry_id,
+                )
+            finally:
+                try:
+                    os.close(album_dir_fd)
+                except OSError:
+                    pass
 
     def update_album_entry(
         self,
@@ -2887,53 +2989,72 @@ class ProjectStorageManager:
             return None
 
         with self._album_lock(user_id, album_id):
-            album = self._read_album_unlocked(user_id, album_id, protect_finalized=True)
-            if not album:
+            album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
+            if album_dir_fd is None:
                 return None
-            if self._is_album_finalized(album):
-                raise AlbumFinalizedError("Cannot modify entries of a finalized album.")
-            if int(expected_revision) != int(album.revision):
-                raise AlbumRevisionConflictError(
-                    f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+            try:
+                raw_holder: List[Dict[str, Any]] = []
+                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
+                if not loaded:
+                    return None
+                album, norm_data, _ = loaded
+                _, journal, consistency = self._validate_album_evidence_phase_a_locked(
+                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
                 )
-
-            tracks = [t.model_dump() for t in album.tracks]
-            target = next((t for t in tracks if t.get("id") == entry_id), None)
-            if not target:
-                raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
-
-            has_existing_recording = bool(
-                target.get("take_id") is not None
-                or target.get("has_owned_audio")
-                or target.get("snapshot") is not None
-                or self._entry_has_filesystem_artifacts(user_id, album_id, entry_id)
-            )
-            if clear_take_to_placeholder:
-                if has_existing_recording:
-                    raise AlbumReplacementDisabledError(
-                        "Clearing an existing recording to a placeholder is temporarily disabled in Phase 1A."
+                self._check_album_mutation_eligibility_phase_b_locked(
+                    album_id, journal, consistency, is_enrolled=False
+                )
+                if self._is_album_finalized(album):
+                    raise AlbumFinalizedError("Cannot modify entries of a finalized album.")
+                if int(expected_revision) != int(album.revision):
+                    raise AlbumRevisionConflictError(
+                        f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
                     )
-                target["take_id"] = None
-            elif take_id is not None:
-                if has_existing_recording and take_id != target.get("take_id"):
-                    raise AlbumReplacementDisabledError(
-                        "Replacing existing album-owned audio is temporarily disabled while audio-replacement safety upgrades are in progress."
-                    )
-                target["take_id"] = take_id
 
-            if disc_number is not None:
-                target["disc_number"] = disc_number
-            if custom_title is not None:
-                target["custom_title"] = custom_title or None
+                tracks = [t.model_dump() for t in album.tracks]
+                target = next((t for t in tracks if t.get("id") == entry_id), None)
+                if not target:
+                    raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
 
-            return self._update_album_locked(
-                user_id,
-                album_id,
-                {"tracks": tracks},
-                expected_revision=expected_revision,
-                change_summary=f"Updated album entry {entry_id}",
-                allow_entry_take_assignment=True,
-            )
+                has_existing_recording = bool(
+                    target.get("take_id") is not None
+                    or target.get("has_owned_audio")
+                    or target.get("snapshot") is not None
+                    or self._entry_has_filesystem_artifacts(user_id, album_id, entry_id)
+                )
+                if clear_take_to_placeholder:
+                    if has_existing_recording:
+                        raise AlbumReplacementDisabledError(
+                            "Clearing an existing recording to a placeholder is temporarily disabled in Phase 1A."
+                        )
+                    target["take_id"] = None
+                elif take_id is not None:
+                    if has_existing_recording and take_id != target.get("take_id"):
+                        raise AlbumReplacementDisabledError(
+                            "Replacing existing album-owned audio is temporarily disabled while audio-replacement safety upgrades are in progress."
+                        )
+                    target["take_id"] = take_id
+
+                if disc_number is not None:
+                    target["disc_number"] = disc_number
+                if custom_title is not None:
+                    target["custom_title"] = custom_title or None
+
+                return self._update_album_locked_with_fd(
+                    album_dir_fd=album_dir_fd,
+                    user_id=user_id,
+                    album_id=album_id,
+                    album=album,
+                    data=norm_data,
+                    updates={"tracks": tracks},
+                    change_summary=f"Updated album entry {entry_id}",
+                    allow_entry_take_assignment=True,
+                )
+            finally:
+                try:
+                    os.close(album_dir_fd)
+                except OSError:
+                    pass
 
     def remove_album_entry(
         self,
@@ -2950,40 +3071,59 @@ class ProjectStorageManager:
             return None
 
         with self._album_lock(user_id, album_id):
-            album = self._read_album_unlocked(user_id, album_id, protect_finalized=True)
-            if not album:
+            album_dir_fd = self._open_album_dir_fd_nofollow(user_id, album_id)
+            if album_dir_fd is None:
                 return None
-            if self._is_album_finalized(album):
-                raise AlbumFinalizedError("Cannot remove entries from a finalized album.")
-            if int(expected_revision) != int(album.revision):
-                raise AlbumRevisionConflictError(
-                    f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+            try:
+                raw_holder: List[Dict[str, Any]] = []
+                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
+                if not loaded:
+                    return None
+                album, norm_data, _ = loaded
+                _, journal, consistency = self._validate_album_evidence_phase_a_locked(
+                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
                 )
-
-            target = next((t for t in album.tracks if t.id == entry_id), None)
-            if not target:
-                raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
-
-            has_existing_recording = bool(
-                target.take_id is not None
-                or target.has_owned_audio
-                or target.snapshot is not None
-                or self._entry_has_filesystem_artifacts(user_id, album_id, entry_id)
-            )
-            if has_existing_recording:
-                raise AlbumReplacementDisabledError(
-                    "Removing entries with recordings or existing artifacts is temporarily disabled in Phase 1A."
+                self._check_album_mutation_eligibility_phase_b_locked(
+                    album_id, journal, consistency, is_enrolled=False
                 )
+                if self._is_album_finalized(album):
+                    raise AlbumFinalizedError("Cannot remove entries from a finalized album.")
+                if int(expected_revision) != int(album.revision):
+                    raise AlbumRevisionConflictError(
+                        f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+                    )
 
-            remaining = [t.model_dump() for t in album.tracks if t.id != entry_id]
-            return self._update_album_locked(
-                user_id,
-                album_id,
-                {"tracks": remaining},
-                expected_revision=expected_revision,
-                change_summary=f"Removed album entry {entry_id}",
-                allow_remove_entry_id=entry_id,
-            )
+                target = next((t for t in album.tracks if t.id == entry_id), None)
+                if not target:
+                    raise ProjectValidationError(f"Album entry '{entry_id}' not found.")
+
+                has_existing_recording = bool(
+                    target.take_id is not None
+                    or target.has_owned_audio
+                    or target.snapshot is not None
+                    or self._entry_has_filesystem_artifacts(user_id, album_id, entry_id)
+                )
+                if has_existing_recording:
+                    raise AlbumReplacementDisabledError(
+                        "Removing entries with recordings or existing artifacts is temporarily disabled in Phase 1A."
+                    )
+
+                remaining = [t.model_dump() for t in album.tracks if t.id != entry_id]
+                return self._update_album_locked_with_fd(
+                    album_dir_fd=album_dir_fd,
+                    user_id=user_id,
+                    album_id=album_id,
+                    album=album,
+                    data=norm_data,
+                    updates={"tracks": remaining},
+                    change_summary=f"Removed album entry {entry_id}",
+                    allow_remove_entry_id=entry_id,
+                )
+            finally:
+                try:
+                    os.close(album_dir_fd)
+                except OSError:
+                    pass
 
     def preview_album_entry_refresh(
         self,
@@ -3116,10 +3256,17 @@ class ProjectStorageManager:
             if album_dir_fd is None:
                 return None
             try:
-                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True)
+                raw_holder: List[Dict[str, Any]] = []
+                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
                 if not loaded:
                     return None
                 album, _, _ = loaded
+                _, journal, consistency = self._validate_album_evidence_phase_a_locked(
+                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
+                )
+                self._check_album_mutation_eligibility_phase_b_locked(
+                    album_id, journal, consistency, is_enrolled=False
+                )
                 if self._is_album_finalized(album):
                     raise AlbumFinalizedError("Cannot refresh entries of a finalized album.")
                 if int(expected_revision) != int(album.revision):
@@ -3196,10 +3343,17 @@ class ProjectStorageManager:
             if album_dir_fd is None:
                 return None
             try:
-                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True)
+                raw_holder: List[Dict[str, Any]] = []
+                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
                 if not loaded:
                     return None
                 album, data, _ = loaded
+                _, journal, consistency = self._validate_album_evidence_phase_a_locked(
+                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
+                )
+                self._check_album_mutation_eligibility_phase_b_locked(
+                    album_id, journal, consistency, is_enrolled=False
+                )
 
                 if self._is_album_finalized(album):
                     raise AlbumFinalizedError("Album is already finalized.")
@@ -3453,7 +3607,8 @@ class ProjectStorageManager:
                 except OSError as e:
                     raise AlbumManifestCorruptError(f"Cannot open album directory '{album_id}': {e}") from e
 
-                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True)
+                raw_holder: List[Dict[str, Any]] = []
+                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
                 if not loaded:
                     if os.listdir(album_dir_fd):
                         raise AlbumManifestCorruptError(
@@ -3461,6 +3616,12 @@ class ProjectStorageManager:
                         )
                     return False
                 album, _, manifest_st = loaded
+                _, journal, consistency = self._validate_album_evidence_phase_a_locked(
+                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
+                )
+                self._check_album_mutation_eligibility_phase_b_locked(
+                    album_id, journal, consistency, is_enrolled=False
+                )
 
                 if self._is_album_finalized(album):
                     raise AlbumFinalizedError("Finalized albums are immutable and cannot be deleted.")
@@ -3573,10 +3734,17 @@ class ProjectStorageManager:
                 return None
 
             try:
-                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True)
+                raw_holder: List[Dict[str, Any]] = []
+                loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
                 if not loaded:
                     return None
                 album, data, _ = loaded
+                _, journal, consistency = self._validate_album_evidence_phase_a_locked(
+                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
+                )
+                self._check_album_mutation_eligibility_phase_b_locked(
+                    album_id, journal, consistency, is_enrolled=False
+                )
                 if self._is_album_finalized(album):
                     raise AlbumFinalizedError("Cannot update cover artwork on a finalized album.")
                 if int(expected_revision) != int(album.revision):

@@ -4918,6 +4918,285 @@ def test_phase1b_stage1_3b1_post_manifest_substitution_fd_cleanup_and_atomic_rep
     monkeypatch.undo()
 
 
+def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: ProjectStorageManager, monkeypatch):
+    """Phase 1B Stage 1.3B-2A-1: Phase A/B guard separation, coverage of all 8 writers, precedence, zero writes, and no FD leaks."""
+    import io
+    import json
+    import os
+    import wave
+    import backend.project_storage as ps_mod
+    from backend.project_models import (
+        ActiveTxRecord,
+        AlbumJournal,
+        JournalProtocol,
+        JournalTxState,
+        RecoveryConsistency,
+    )
+    from backend.project_storage import (
+        AlbumDurabilityUncertainError,
+        AlbumManifestCorruptError,
+        AlbumMutationNotEnrolledError,
+    )
+
+    user_id = "u_1b_s1_3b_2a1"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 400)
+    wav_ok = buf.getvalue()
+
+    trk = custom_storage.create_track(user_id=user_id, title="2A1 Track")
+    take = custom_storage.create_take(
+        user_id=user_id, track_id=trk.id, audio_bytes=wav_ok, original_filename="2a1.wav", extension=".wav"
+    )
+    alb = custom_storage.create_album(user_id=user_id, title="2A1 Album")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=take.id)
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=None)
+    entry_rec = alb.tracks[0]
+    entry_ph = alb.tracks[1]
+    assert entry_rec.id is not None and entry_ph.id is not None
+
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    manifest_path = alb_dir / "album.json"
+    journal_path = alb_dir / "journal.json"
+
+    # 1. Journal-less Album retains Phase 1A behavior
+    alb = custom_storage.update_album(user_id, alb.id, {"title": "2A1 Updated", "expected_revision": alb.revision})
+    assert alb is not None and alb.title == "2A1 Updated"
+    assert not journal_path.exists()
+
+    # Never invoke durability reconciliation during guards
+    reconcile_calls = {"n": 0}
+    monkeypatch.setattr(
+        custom_storage,
+        "reconcile_album_durability",
+        lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1),
+    )
+
+    def _run_all_8_writers(rev: int):
+        yield lambda: custom_storage.update_album(user_id, alb.id, {"title": "Nope", "expected_revision": rev})
+        yield lambda: custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=rev, take_id=None)
+        yield lambda: custom_storage.update_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev, custom_title="X")
+        yield lambda: custom_storage.remove_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev)
+        yield lambda: custom_storage.confirm_album_entry_refresh(user_id, alb.id, entry_rec.id, 1, "a" * 64, expected_revision=rev)
+        yield lambda: custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=rev, extension=".jpg")
+        yield lambda: custom_storage.finalize_album(user_id, alb.id, expected_revision=rev)
+        yield lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=rev)
+
+    # 2. Idle v2 Album -> AlbumMutationNotEnrolledError on all 8 writers, zero writes, guarded once
+    idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id)
+    journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
+    raw_m = manifest_path.read_bytes()
+    raw_j = journal_path.read_bytes()
+
+    phase_a_calls = {"n": 0}
+    orig_phase_a = ProjectStorageManager._validate_album_evidence_phase_a_locked
+
+    def _counted_phase_a(self_mgr, *args, **kwargs):
+        phase_a_calls["n"] += 1
+        return orig_phase_a(self_mgr, *args, **kwargs)
+
+    monkeypatch.setattr(ProjectStorageManager, "_validate_album_evidence_phase_a_locked", _counted_phase_a)
+    for op_fn in _run_all_8_writers(alb.revision):
+        phase_a_calls["n"] = 0
+        with pytest.raises(AlbumMutationNotEnrolledError):
+            op_fn()
+        assert phase_a_calls["n"] == 1
+        assert manifest_path.read_bytes() == raw_m
+        assert journal_path.read_bytes() == raw_j
+    monkeypatch.undo()
+    monkeypatch.setattr(
+        custom_storage,
+        "reconcile_album_durability",
+        lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1),
+    )
+
+    # 3. Active (PUBLISH_INTENT) & v1 journals -> AlbumDurabilityUncertainError, and Phase A itself permits active/uncertain for replay
+    active_v2 = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb.id,
+        active_tx=ActiveTxRecord(
+            tx_id="tx_2a1_act",
+            op="update_album",
+            state=JournalTxState.PUBLISH_INTENT,
+            expected_revision=alb.revision,
+            target_revision=alb.revision + 1,
+            payload_sha256="a" * 64,
+            intended_manifest_sha256="b" * 64,
+        ),
+    )
+    journal_path.write_text(json.dumps(active_v2.model_dump(mode="json")), encoding="utf-8")
+    raw_j_act = journal_path.read_bytes()
+
+    # Phase A alone succeeds on active/uncertain so future 2A-2 replay can run between Phase A and Phase B
+    with custom_storage._album_lock(user_id, alb.id):
+        dfd = custom_storage._open_album_dir_fd_nofollow(user_id, alb.id)
+        try:
+            _, p_journal, p_cons = custom_storage._validate_album_evidence_phase_a_locked(alb.id, dfd)
+            assert p_journal is not None and p_cons == RecoveryConsistency.UNCERTAIN
+        finally:
+            os.close(dfd)
+
+    # Track FDs across all 8 rejected calls
+    orig_open = os.open
+    orig_close = os.close
+    live_fds: set[int] = set()
+    monkeypatch.setattr(ps_mod.os, "open", lambda *a, **kw: (fd := orig_open(*a, **kw), live_fds.add(fd), fd)[2])
+    monkeypatch.setattr(ps_mod.os, "close", lambda fd: (live_fds.discard(fd), orig_close(fd))[1])
+
+    for op_fn in _run_all_8_writers(alb.revision):
+        with pytest.raises(AlbumDurabilityUncertainError):
+            op_fn()
+        assert live_fds == set()
+        assert manifest_path.read_bytes() == raw_m
+        assert journal_path.read_bytes() == raw_j_act
+    monkeypatch.undo()
+    monkeypatch.setattr(
+        custom_storage,
+        "reconcile_album_durability",
+        lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1),
+    )
+
+    # v1 journal -> AlbumDurabilityUncertainError
+    v1_j = AlbumJournal(album_id=alb.id)
+    journal_path.write_text(json.dumps(v1_j.model_dump(mode="json")), encoding="utf-8")
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.update_album(user_id, alb.id, {"title": "V1 Block", "expected_revision": alb.revision})
+
+    # 4. Proven CORRUPT journal -> AlbumManifestCorruptError (takes precedence over stale expected_revision / UNCERTAIN)
+    journal_path.write_text("{not valid json", encoding="utf-8")
+    for op_fn in _run_all_8_writers(alb.revision + 99):  # stale/wrong revision too -> CORRUPT still wins
+        with pytest.raises(AlbumManifestCorruptError):
+            op_fn()
+        assert manifest_path.read_bytes() == raw_m
+
+    assert reconcile_calls["n"] == 0
+
+
+def test_phase1b_stage1_3b_2a1_raw_manifest_evidence_and_precedence(custom_storage: ProjectStorageManager, monkeypatch):
+    """Phase 1B Stage 1.3B-2A-1 correction: Phase A uses unnormalized persisted album.json, plus precedence & edge cases."""
+    import io
+    import json
+    import os
+    import wave
+    import backend.project_storage as ps_mod
+    from backend.project_models import (
+        AlbumJournal,
+        JournalProtocol,
+        JournalTxState,
+        RecoveryConsistency,
+        TerminalTxReceipt,
+    )
+    from backend.project_storage import (
+        AlbumFinalizedError,
+        AlbumMutationNotEnrolledError,
+        AlbumReplacementDisabledError,
+        ProjectValidationError,
+    )
+
+    user_id = "u_1b_s1_3b_2a1_raw"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 400)
+    wav_ok = buf.getvalue()
+
+    trk = custom_storage.create_track(user_id=user_id, title="Raw 2A1 Track")
+    take = custom_storage.create_take(
+        user_id=user_id, track_id=trk.id, audio_bytes=wav_ok, original_filename="raw2a1.wav", extension=".wav"
+    )
+    alb = custom_storage.create_album(user_id=user_id, title="Raw 2A1 Album")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=take.id)
+    entry = alb.tracks[0]
+    assert entry.id is not None
+
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    manifest_path = alb_dir / "album.json"
+    journal_path = alb_dir / "journal.json"
+
+    reconcile_calls = {"n": 0}
+    monkeypatch.setattr(
+        custom_storage,
+        "reconcile_album_durability",
+        lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1),
+    )
+
+    # Persist a valid legacy-compatible manifest omitting redundant 'track_ids'
+    persisted_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    persisted_data.pop("track_ids", None)
+    persisted_data["last_tx_id"] = "tx_raw_01"
+    persisted_data["tx_history"] = ["tx_raw_01"]
+    manifest_path.write_text(json.dumps(persisted_data), encoding="utf-8")
+    persisted_sha = ProjectStorageManager._compute_canonical_manifest_sha256(persisted_data)
+
+    # Sanity check: normalized data would add 'track_ids' and hash differently
+    norm_check = dict(persisted_data, track_ids=[trk.id])
+    assert ProjectStorageManager._compute_canonical_manifest_sha256(norm_check) != persisted_sha
+
+    rcp = TerminalTxReceipt(
+        tx_id="tx_raw_01",
+        op="update_album",
+        outcome=JournalTxState.COMMITTED,
+        expected_revision=persisted_data["revision"] - 1,
+        result_revision=persisted_data["revision"],
+        payload_sha256="a" * 64,
+        intended_manifest_sha256=persisted_sha,
+    )
+    j = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb.id,
+        tx_receipts=[rcp],
+    )
+    journal_path.write_text(json.dumps(j.model_dump(mode="json")), encoding="utf-8")
+    raw_m = manifest_path.read_bytes()
+    raw_j = journal_path.read_bytes()
+    dir_inv_before = sorted(os.listdir(alb_dir))
+
+    # Direct Phase A classifies as CONSISTENT_IDLE (not CORRUPT)
+    with custom_storage._album_lock(user_id, alb.id):
+        dfd = custom_storage._open_album_dir_fd_nofollow(user_id, alb.id)
+        try:
+            _, _, direct_cons = custom_storage._validate_album_evidence_phase_a_locked(alb.id, dfd)
+            assert direct_cons == RecoveryConsistency.CONSISTENT_IDLE
+        finally:
+            os.close(dfd)
+
+    # Unenrolled mutation raises AlbumMutationNotEnrolledError (not CORRUPT), zero writes, zero FD leaks
+    orig_open = os.open
+    orig_close = os.close
+    live_fds: set[int] = set()
+    monkeypatch.setattr(ps_mod.os, "open", lambda *a, **kw: (fd := orig_open(*a, **kw), live_fds.add(fd), fd)[2])
+    monkeypatch.setattr(ps_mod.os, "close", lambda fd: (live_fds.discard(fd), orig_close(fd))[1])
+    with pytest.raises(AlbumMutationNotEnrolledError):
+        custom_storage.update_album(user_id, alb.id, {"title": "Changed", "expected_revision": alb.revision})
+    assert live_fds == set()
+    monkeypatch.setattr(ps_mod.os, "open", orig_open)
+    monkeypatch.setattr(ps_mod.os, "close", orig_close)
+    assert manifest_path.read_bytes() == raw_m
+    assert journal_path.read_bytes() == raw_j
+    assert sorted(os.listdir(alb_dir)) == dir_inv_before
+
+    # Journal-less targeted checks: replacement-disabled, invalid entry ID, finalized vs stale-revision precedence
+    journal_path.unlink()
+    with pytest.raises(AlbumReplacementDisabledError):
+        custom_storage.confirm_album_entry_refresh(user_id, alb.id, entry.id, 1, "a" * 64, expected_revision=alb.revision)
+    with pytest.raises(ProjectValidationError):
+        custom_storage.confirm_album_entry_refresh(user_id, alb.id, "bad_entry_id", 1, "a" * 64, expected_revision=alb.revision)
+
+    fin = custom_storage.finalize_album(user_id, alb.id, expected_revision=alb.revision)
+    assert fin is not None and fin.is_finalized is True
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.update_album(user_id, alb.id, {"title": "Stale Fin", "expected_revision": fin.revision - 1})
+
+    assert reconcile_calls["n"] == 0
+
+
 
 
 

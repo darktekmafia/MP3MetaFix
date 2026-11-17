@@ -3703,6 +3703,155 @@ vm.runInNewContext(code, context);
     assert "NODE_STAGE1_2_REFRESH_VM_OK" in proc.stdout
 
 
+def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp_path):
+    """Phase 1B Stage 1.3B-2A-1: all 8 Album mutation routes map 503 uncertain, 409 not_enrolled/revision, and 422 corrupt."""
+    import io
+    import json
+    import wave
+    from PIL import Image
+    import backend.projects_api as papi_mod
+    from backend.project_models import ActiveTxRecord, AlbumJournal, JournalProtocol, JournalTxState
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 400)
+    wav_ok = buf.getvalue()
+
+    img_buf = io.BytesIO()
+    Image.new("RGB", (64, 64), color=(10, 20, 30)).save(img_buf, format="JPEG")
+    jpg_bytes = img_buf.getvalue()
+
+    trk = client.post("/api/projects/tracks", json={"title": "API 2A1 Track"}, cookies=auth_cookies).json()
+    take = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        files={"file": ("api2a1.wav", wav_ok, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    alb = client.post("/api/projects/albums", json={"title": "API 2A1 Album"}, cookies=auth_cookies).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": take["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    entry_rec = alb["tracks"][0]
+    entry_ph = alb["tracks"][1]
+
+    status_json = client.get("/api/auth/status", cookies=auth_cookies).json()
+    user_id = status_json["user"]["id"]
+    alb_dir = papi_mod.project_storage_manager._get_album_dir(user_id, alb["id"])
+    journal_path = alb_dir / "journal.json"
+
+    def _call_all_8_routes(rev: int):
+        return [
+            ("patch_album", client.patch(f"/api/projects/albums/{alb['id']}", json={"title": "X", "expected_revision": rev}, cookies=auth_cookies)),
+            ("delete_album", client.delete(f"/api/projects/albums/{alb['id']}?expected_revision={rev}", cookies=auth_cookies)),
+            ("add_entry", client.post(f"/api/projects/albums/{alb['id']}/entries", json={"track_id": trk["id"], "expected_revision": rev}, cookies=auth_cookies)),
+            ("patch_entry", client.patch(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}", json={"custom_title": "Y", "expected_revision": rev}, cookies=auth_cookies)),
+            ("del_entry", client.delete(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}?expected_revision={rev}", cookies=auth_cookies)),
+            ("refresh", client.post(f"/api/projects/albums/{alb['id']}/entries/{entry_rec['id']}/refresh", json={"expected_revision": rev, "expected_source_revision": 1, "expected_source_audio_sha256": entry_rec["snapshot"]["audio_sha256"]}, cookies=auth_cookies)),
+            ("artwork", client.post(f"/api/projects/albums/{alb['id']}/artwork", data={"expected_revision": str(rev)}, files={"file": ("cover.jpg", jpg_bytes, "image/jpeg")}, cookies=auth_cookies)),
+            ("finalize", client.post(f"/api/projects/albums/{alb['id']}/finalize?expected_revision={rev}", cookies=auth_cookies)),
+        ]
+
+    # 1. Idle v2 journal -> 409 mutation_not_enrolled (and no reconciliation recommended)
+    idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb["id"])
+    journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
+    for name, res in _call_all_8_routes(alb["revision"]):
+        assert res.status_code == 409, f"{name} expected 409, got {res.status_code}: {res.text}"
+        assert res.headers.get("X-Error-Code") == "mutation_not_enrolled"
+        body = res.json()["detail"]
+        assert body["error_code"] == "mutation_not_enrolled"
+        assert "reconcil" not in body["message"].lower()
+
+    # 2. Active / uncertain v2 journal -> 503 durability_uncertain
+    act_v2 = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb["id"],
+        active_tx=ActiveTxRecord(
+            tx_id="tx_api_act",
+            op="update_album",
+            state=JournalTxState.PUBLISH_INTENT,
+            expected_revision=alb["revision"],
+            target_revision=alb["revision"] + 1,
+            payload_sha256="a" * 64,
+            intended_manifest_sha256="b" * 64,
+        ),
+    )
+    journal_path.write_text(json.dumps(act_v2.model_dump(mode="json")), encoding="utf-8")
+    for name, res in _call_all_8_routes(alb["revision"]):
+        assert res.status_code == 503, f"{name} expected 503, got {res.status_code}: {res.text}"
+        assert res.headers.get("X-Error-Code") == "durability_uncertain"
+        assert res.json()["detail"]["error_code"] == "durability_uncertain"
+
+    # GET remains 200 and side-effect-free
+    assert client.get(f"/api/projects/albums/{alb['id']}", cookies=auth_cookies).status_code == 200
+    assert client.get("/api/projects/albums", cookies=auth_cookies).status_code == 200
+
+    # 3. Corrupt journal -> 422 preserved across all 8 routes
+    journal_path.write_text("{corrupt", encoding="utf-8")
+    for name, res in _call_all_8_routes(alb["revision"]):
+        assert res.status_code == 422, f"{name} expected 422, got {res.status_code}: {res.text}"
+
+    # 4. Journal-less Album stale revision -> 409 with X-Error-Code: revision_conflict and string detail
+    journal_path.unlink()
+    stale_res = client.patch(
+        f"/api/projects/albums/{alb['id']}",
+        json={"title": "Stale", "expected_revision": alb["revision"] - 1},
+        cookies=auth_cookies,
+    )
+    assert stale_res.status_code == 409
+    assert stale_res.headers.get("X-Error-Code") == "revision_conflict"
+    assert isinstance(stale_res.json()["detail"], str)
+
+    # 5. Persisted manifest omitting redundant 'track_ids' with matching v2 receipt -> 409 mutation_not_enrolled (not 422)
+    from backend.project_models import TerminalTxReceipt
+    from backend.project_storage import ProjectStorageManager
+    manifest_path = alb_dir / "album.json"
+    persisted_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    persisted_data.pop("track_ids", None)
+    persisted_data["last_tx_id"] = "tx_api_raw"
+    persisted_data["tx_history"] = ["tx_api_raw"]
+    manifest_path.write_text(json.dumps(persisted_data), encoding="utf-8")
+    persisted_sha = ProjectStorageManager._compute_canonical_manifest_sha256(persisted_data)
+    raw_j = AlbumJournal(
+        schema_version=2,
+        protocol=JournalProtocol.ENFORCED_V2,
+        album_id=alb["id"],
+        tx_receipts=[
+            TerminalTxReceipt(
+                tx_id="tx_api_raw",
+                op="update_album",
+                outcome=JournalTxState.COMMITTED,
+                expected_revision=persisted_data["revision"] - 1,
+                result_revision=persisted_data["revision"],
+                payload_sha256="a" * 64,
+                intended_manifest_sha256=persisted_sha,
+            )
+        ],
+    )
+    journal_path.write_text(json.dumps(raw_j.model_dump(mode="json")), encoding="utf-8")
+    raw_m_bytes = manifest_path.read_bytes()
+    raw_j_bytes = journal_path.read_bytes()
+    raw_res = client.patch(
+        f"/api/projects/albums/{alb['id']}",
+        json={"title": "Raw Test", "expected_revision": persisted_data["revision"]},
+        cookies=auth_cookies,
+    )
+    assert raw_res.status_code == 409
+    assert raw_res.headers.get("X-Error-Code") == "mutation_not_enrolled"
+    assert manifest_path.read_bytes() == raw_m_bytes
+    assert journal_path.read_bytes() == raw_j_bytes
+
+
 
 
 

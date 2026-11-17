@@ -67,9 +67,44 @@ from backend.project_storage import (
     AlbumReplacementDisabledError,
     AlbumRevisionConflictError,
     AlbumManifestCorruptError,
+    AlbumDurabilityUncertainError,
+    AlbumMutationNotEnrolledError,
+    AlbumIdempotencyConflictError,
     AlbumRefreshConflictError,
     AlbumFinalizationError,
 )
+
+
+def _raise_album_durability_or_conflict_http_error(exc: Exception) -> None:
+    """Translate Stage 1.3B durability, enrollment, idempotency, and revision errors consistently."""
+    if isinstance(exc, AlbumDurabilityUncertainError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": str(exc),
+                "error_code": "durability_uncertain",
+                "guidance": "Do not resubmit with a new Idempotency-Key; run durability reconciliation or retry with the same Idempotency-Key after reconciliation.",
+            },
+            headers={"X-Error-Code": "durability_uncertain"},
+        )
+    if isinstance(exc, AlbumMutationNotEnrolledError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": str(exc), "error_code": "mutation_not_enrolled"},
+            headers={"X-Error-Code": "mutation_not_enrolled"},
+        )
+    if isinstance(exc, AlbumIdempotencyConflictError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": str(exc), "error_code": "idempotency_conflict"},
+            headers={"X-Error-Code": "idempotency_conflict"},
+        )
+    if isinstance(exc, AlbumRevisionConflictError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+            headers={"X-Error-Code": "revision_conflict"},
+        )
 
 projects_router = APIRouter(prefix="/api/projects", tags=["projects"])
 storage_router = APIRouter(prefix="/api/storage", tags=["storage"])
@@ -811,7 +846,9 @@ async def update_album(
     updates = payload.model_dump(exclude_unset=True)
     try:
         updated = project_storage_manager.update_album(user["id"], album_id, updates)
-    except (AlbumFinalizedError, AlbumReplacementDisabledError, AlbumRevisionConflictError) as e:
+    except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumRevisionConflictError) as e:
+        _raise_album_durability_or_conflict_http_error(e)
+    except (AlbumFinalizedError, AlbumReplacementDisabledError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -836,7 +873,9 @@ async def delete_album(
         success = project_storage_manager.delete_album(
             user["id"], album_id, expected_revision=rev
         )
-    except (AlbumFinalizedError, AlbumRevisionConflictError, AlbumReplacementDisabledError) as e:
+    except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumRevisionConflictError) as e:
+        _raise_album_durability_or_conflict_http_error(e)
+    except (AlbumFinalizedError, AlbumReplacementDisabledError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -867,7 +906,9 @@ async def add_album_entry(
             track_number=payload.track_number,
             custom_title=payload.custom_title,
         )
-    except (AlbumFinalizedError, AlbumReplacementDisabledError, AlbumRevisionConflictError) as e:
+    except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumRevisionConflictError) as e:
+        _raise_album_durability_or_conflict_http_error(e)
+    except (AlbumFinalizedError, AlbumReplacementDisabledError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -902,7 +943,9 @@ async def update_album_entry(
             disc_number=payload.disc_number,
             custom_title=payload.custom_title,
         )
-    except (AlbumFinalizedError, AlbumReplacementDisabledError, AlbumRevisionConflictError) as e:
+    except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumRevisionConflictError) as e:
+        _raise_album_durability_or_conflict_http_error(e)
+    except (AlbumFinalizedError, AlbumReplacementDisabledError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -931,7 +974,9 @@ async def remove_album_entry(
         updated = project_storage_manager.remove_album_entry(
             user["id"], album_id, entry_id, expected_revision=rev
         )
-    except (AlbumFinalizedError, AlbumReplacementDisabledError, AlbumRevisionConflictError) as e:
+    except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumRevisionConflictError) as e:
+        _raise_album_durability_or_conflict_http_error(e)
+    except (AlbumFinalizedError, AlbumReplacementDisabledError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -1043,7 +1088,9 @@ async def confirm_album_entry_refresh(
             expected_source_updated_at=payload.expected_source_updated_at,
             expected_revision=payload.expected_revision,
         )
-    except (AlbumFinalizedError, AlbumRevisionConflictError, AlbumRefreshConflictError, AlbumReplacementDisabledError) as e:
+    except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumRevisionConflictError) as e:
+        _raise_album_durability_or_conflict_http_error(e)
+    except (AlbumFinalizedError, AlbumRefreshConflictError, AlbumReplacementDisabledError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -1071,7 +1118,9 @@ async def finalize_album(
         finalized = project_storage_manager.finalize_album(
             user["id"], album_id, expected_revision=rev
         )
-    except (AlbumFinalizedError, AlbumRevisionConflictError) as e:
+    except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumRevisionConflictError) as e:
+        _raise_album_durability_or_conflict_http_error(e)
+    except AlbumFinalizedError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -1107,7 +1156,9 @@ async def upload_album_artwork(
             extension=ext,
         )
         return {"status": "saved", "mime_type": mime_type, "album": updated_album}
-    except (AlbumFinalizedError, AlbumRevisionConflictError, AlbumReplacementDisabledError) as e:
+    except (AlbumDurabilityUncertainError, AlbumMutationNotEnrolledError, AlbumIdempotencyConflictError, AlbumRevisionConflictError) as e:
+        _raise_album_durability_or_conflict_http_error(e)
+    except (AlbumFinalizedError, AlbumReplacementDisabledError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except AlbumManifestCorruptError as e:
         raise HTTPException(status_code=422, detail=str(e))
