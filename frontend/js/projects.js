@@ -777,11 +777,7 @@
     headerActions.appendChild(btnInspect);
 
     const isFinalized = !!(album.is_finalized || album.status === 'completed');
-    const hasProtectedContent = !!(
-      album.has_cover
-      || (Array.isArray(album.tracks) && album.tracks.some(t => !t.is_placeholder || t.has_owned_audio || t.take_id))
-    );
-    if (!isFinalized && !hasProtectedContent) {
+    if (!isFinalized) {
       const btnDelete = document.createElement('button');
       btnDelete.className = 'btn btn-secondary btn-sm btn-icon-only btn-delete-track';
       btnDelete.title = 'Delete Album';
@@ -2114,13 +2110,17 @@
   }
 
   async function confirmDeleteAlbum(albumId, title, expectedRevision = 1) {
-    if (!confirm(`Are you sure you want to delete Album Release "${title}"?`)) return;
+    if (!confirm(`Are you sure you want to delete Album Release "${title}"?\n\nSource Tracks and Takes will not be deleted.`)) return;
     const revParam = encodeURIComponent(expectedRevision || 1);
     try {
       const res = await fetch(`/api/projects/albums/${albumId}?expected_revision=${revParam}`, {
         method: 'DELETE',
       });
       if (res.ok) {
+        if (state.activeAlbum && state.activeAlbum.id === albumId) {
+          state.activeAlbum = null;
+          if (dom.modalAlbumDetail) dom.modalAlbumDetail.classList.add('hidden');
+        }
         showToast('Album Release deleted', 'info');
         fetchAlbums();
         fetchQuota();

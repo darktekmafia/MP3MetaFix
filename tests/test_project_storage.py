@@ -327,12 +327,6 @@ def test_album_workspace_management(custom_storage):
     album_with_cover = custom_storage.get_album(user_id, album.id)
     assert album_with_cover.has_cover is True
 
-    # Deleting albums that are v2-enrolled (from save_album_cover) raises AlbumMutationNotEnrolledError
-    from backend.project_storage import AlbumMutationNotEnrolledError
-    with pytest.raises(AlbumMutationNotEnrolledError):
-        custom_storage.delete_album(user_id, album.id, expected_revision=album_with_cover.revision)
-    assert custom_storage.get_album(user_id, album.id) is not None
-
     # Update album metadata (enrolls into v2 journal)
     updated_album = custom_storage.update_album(
         user_id,
@@ -342,6 +336,10 @@ def test_album_workspace_management(custom_storage):
     assert len(updated_album.tracks) == 2
     assert updated_album.tracks[0].track_number == 1
     assert updated_album.tracks[0].custom_title == "Track One (Remix)"
+
+    # Deleting a draft album with recordings & artwork succeeds and removes it from lookup
+    assert custom_storage.delete_album(user_id, album.id, expected_revision=updated_album.revision) is True
+    assert custom_storage.get_album(user_id, album.id) is None
 
     # Empty draft album deletion succeeds with matching expected_revision
     empty_album = custom_storage.create_album(user_id=user_id, title="Empty Draft")
@@ -1147,11 +1145,8 @@ def test_album_finalization_validation_locking_and_completion(custom_storage):
         custom_storage.remove_album_entry(user_id, album.id, r_id, expected_revision=finalized.revision)
     with pytest.raises(AlbumFinalizedError):
         custom_storage.save_album_cover(user_id, album.id, b"\xff\xd8\xff\xe0", expected_revision=finalized.revision, extension=".jpg")
-    for unenrolled_call in (
-        lambda: custom_storage.delete_album(user_id, album.id, expected_revision=finalized.revision),
-    ):
-        with pytest.raises(AlbumMutationNotEnrolledError):
-            unenrolled_call()
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.delete_album(user_id, album.id, expected_revision=finalized.revision)
     assert custom_storage.get_album(user_id, album.id) is not None
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, r_id).read_bytes() == wav_ok
 
@@ -1430,9 +1425,13 @@ def test_phase1a_cross_process_album_locking_and_deletion_race(tmp_path):
     assert p_fin2.exitcode == 0 and p_del2.exitcode == 0
 
     fd_outcomes = dict(q_fd.get(timeout=5) for _ in range(2))
-    assert fd_outcomes["finalize"] == "finalized"
-    assert fd_outcomes["delete"] in ("blocked_finalized", "blocked_non_empty", "not_enrolled")
-    assert mgr.get_album(user_id, race_del_album.id).is_finalized is True
+    if fd_outcomes["finalize"] == "finalized":
+        assert fd_outcomes["delete"] in ("blocked_finalized", "revision_conflict")
+        assert mgr.get_album(user_id, race_del_album.id).is_finalized is True
+    else:
+        assert fd_outcomes["delete"] == "deleted"
+        assert fd_outcomes["finalize"] in ("missing", "revision_conflict")
+        assert mgr.get_album(user_id, race_del_album.id) is None
 
     # 4. Concurrent delete_album vs update_album on an empty unfinalized album -> lockfile stays stable, no phantom dir
     draft_album = mgr.create_album(user_id=user_id, title="Delete Race LP")
@@ -1447,19 +1446,18 @@ def test_phase1a_cross_process_album_locking_and_deletion_race(tmp_path):
     assert p_del.exitcode == 0 and p_upd2.exitcode == 0
 
     del_outcomes = dict(q_del.get(timeout=5) for _ in range(2))
-    assert del_outcomes["delete"] in ("deleted", "revision_conflict", "not_enrolled")
+    assert del_outcomes["delete"] in ("deleted", "revision_conflict")
     if del_outcomes["delete"] == "deleted":
         assert del_outcomes["update"] == "missing"
         assert mgr.get_album(user_id, draft_album.id) is None
         assert not mgr._get_album_dir(user_id, draft_album.id).exists()
     else:
-        from backend.project_storage import AlbumMutationNotEnrolledError
-
         assert del_outcomes["update"] == "updated"
         updated_draft = mgr.get_album(user_id, draft_album.id)
         assert updated_draft is not None
-        with pytest.raises(AlbumMutationNotEnrolledError):
-            mgr.delete_album(user_id, draft_album.id, expected_revision=updated_draft.revision)
+        assert mgr.delete_album(user_id, draft_album.id, expected_revision=updated_draft.revision) is True
+        assert mgr.get_album(user_id, draft_album.id) is None
+        assert not mgr._get_album_dir(user_id, draft_album.id).exists()
     assert mgr._get_album_lock_path(user_id, draft_album.id).is_file()
 
 
@@ -1633,21 +1631,14 @@ def test_phase1a_final_predictive_storage_safeguards(custom_storage, tmp_path):
     with pytest.raises(AlbumRevisionConflictError):
         custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision - 1)
 
-    # 3. Empty-album deletion allowlist rejects unknown files, hidden files, and symlinks
+    # 3. Deletion rejects symlinks inside album directory without touching external target
     alb_dir = custom_storage._get_album_dir(user_id, alb.id)
-    stray = alb_dir / ".hidden_artifact"
-    stray.write_bytes(b"keep")
-    with pytest.raises(AlbumReplacementDisabledError):
-        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision)
-    assert (alb_dir / "album.json").is_file()
-    stray.unlink()
-
     ext_target = tmp_path / "outside.txt"
     ext_target.write_text("outside", encoding="utf-8")
     symlink_path = alb_dir / "entries" / "symlink_probe"
     symlink_path.parent.mkdir(parents=True, exist_ok=True)
     symlink_path.symlink_to(ext_target)
-    with pytest.raises(AlbumReplacementDisabledError):
+    with pytest.raises(AlbumManifestCorruptError):
         custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision)
     assert ext_target.read_text(encoding="utf-8") == "outside"
     symlink_path.unlink()
@@ -5045,9 +5036,6 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1),
     )
 
-    def _run_1_unenrolled_writer(rev: int):
-        yield lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=rev)
-
     def _run_all_8_writers(rev: int):
         yield lambda: custom_storage.update_album(user_id, alb.id, {"title": "Nope", "expected_revision": rev})
         yield lambda: custom_storage.finalize_album(user_id, alb.id, expected_revision=rev)
@@ -5056,30 +5044,14 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         yield lambda: custom_storage.confirm_album_entry_refresh(user_id, alb.id, entry_rec.id, 1, "a" * 64, expected_revision=rev, expected_source_metadata_fingerprint="a" * 64)
         yield lambda: custom_storage.remove_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev)
         yield lambda: custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=rev, extension=".jpg")
-        yield from _run_1_unenrolled_writer(rev)
+        yield lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=rev)
 
-    # 2. Idle v2 Album -> AlbumMutationNotEnrolledError on remaining unenrolled writer, zero writes, guarded once
+    # 2. All 8 writers are enrolled; update_album succeeds on idle v2 Album with a committed receipt
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id)
     journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
     raw_m = manifest_path.read_bytes()
     raw_j = journal_path.read_bytes()
 
-    phase_a_calls = {"n": 0}
-    orig_phase_a = ProjectStorageManager._validate_album_evidence_phase_a_locked
-
-    def _counted_phase_a(self_mgr, *args, **kwargs):
-        phase_a_calls["n"] += 1
-        return orig_phase_a(self_mgr, *args, **kwargs)
-
-    monkeypatch.setattr(ProjectStorageManager, "_validate_album_evidence_phase_a_locked", _counted_phase_a)
-    for op_fn in _run_1_unenrolled_writer(alb.revision):
-        phase_a_calls["n"] = 0
-        with pytest.raises(AlbumMutationNotEnrolledError):
-            op_fn()
-        assert phase_a_calls["n"] == 1
-        assert manifest_path.read_bytes() == raw_m
-        assert journal_path.read_bytes() == raw_j
-    monkeypatch.undo()
     monkeypatch.setattr(
         custom_storage,
         "reconcile_album_durability",
@@ -5245,14 +5217,15 @@ def test_phase1b_stage1_3b_2a1_raw_manifest_evidence_and_precedence(custom_stora
         finally:
             os.close(dfd)
 
-    # Unenrolled mutation raises AlbumMutationNotEnrolledError (not CORRUPT), zero writes, zero FD leaks
+    # Stale revision on raw manifest raises AlbumRevisionConflictError (not CORRUPT), zero writes, zero FD leaks
+    from backend.project_storage import AlbumRevisionConflictError
     orig_open = os.open
     orig_close = os.close
     live_fds: set[int] = set()
     monkeypatch.setattr(ps_mod.os, "open", lambda *a, **kw: (fd := orig_open(*a, **kw), live_fds.add(fd), fd)[2])
     monkeypatch.setattr(ps_mod.os, "close", lambda fd: (live_fds.discard(fd), orig_close(fd))[1])
-    with pytest.raises(AlbumMutationNotEnrolledError):
-        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision)
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision - 1)
     assert live_fds == set()
     monkeypatch.setattr(ps_mod.os, "open", orig_open)
     monkeypatch.setattr(ps_mod.os, "close", orig_close)
@@ -6608,13 +6581,6 @@ def test_phase1b_stage1_3b_2b1a_generation_readers_provenance_and_snapshot_matri
     assert c_path.name == "cover_g1.webp" and csize == len(webp_ok)
     assert reconcile_calls["n"] == 0
     assert manifest_path.read_bytes() == good_m4_bytes and journal_path.read_bytes() == good_j4_bytes
-
-    # Remaining unenrolled writer remains blocked
-    for blocked in (
-        lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=4),
-    ):
-        with pytest.raises(AlbumMutationNotEnrolledError):
-            blocked()
 
     # 3. Raw generation & ownership contradictions rejected before normalization (both get_album and list_albums)
     good_m4 = json.loads(good_m4_bytes)
@@ -8041,10 +8007,6 @@ def test_feature5_save_and_replace_album_cover_and_finalization(custom_storage: 
     assert custom_storage.get_album_cover_path(user_id, alb.id) == alb_dir / "cover_g1.jpg"
     assert custom_storage.get_album_entry_audio_path(user_id, alb.id, entry_id).read_bytes() == wav_ok
 
-    # delete_album remains unenrolled
-    with pytest.raises(AlbumMutationNotEnrolledError):
-        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision)
-
     # 2. Initial artwork on already-enrolled draft Album
     alb_enr = custom_storage.create_album(user_id=user_id, title="F5 Enrolled")
     alb_enr = custom_storage.update_album(user_id, alb_enr.id, {"title": "F5 Enrolled v2", "expected_revision": alb_enr.revision})
@@ -8119,3 +8081,270 @@ def test_feature5_save_and_replace_album_cover_and_finalization(custom_storage: 
         os.close(cfd)
     with pytest.raises(AlbumFinalizedError):
         custom_storage.save_album_cover(user_id, alb.id, cov1, expected_revision=fin.revision, extension=".jpg")
+
+
+def test_feature6_delete_draft_album_lifecycle_and_safety(custom_storage: ProjectStorageManager, tmp_path, monkeypatch):
+    """Feature 6: safe draft Album deletion across empty, populated/retained, legacy, v2, I/O interruption, and security guards."""
+    import errno
+    import io
+    import wave
+    import backend.project_storage as ps_mod
+    from backend.project_storage import (
+        AlbumFinalizedError,
+        AlbumManifestCorruptError,
+        AlbumRevisionConflictError,
+        ProjectStorageError,
+    )
+
+    def _make_wav(marker: bytes) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(marker * 300)
+        return buf.getvalue()
+
+    wav_1 = _make_wav(b"\x11\x12")
+    wav_2 = _make_wav(b"\x21\x22")
+    cov_1 = b"\xff\xd8\xff\xe0\x00\x10JFIF_F6_1"
+    cov_2 = b"\x89PNG\r\n\x1a\nPNG_F6_2"
+
+    user_id = "u_feature6_delete"
+    trk = custom_storage.create_track(user_id=user_id, title="F6 Track")
+    tk1 = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_1, original_filename="1.wav", extension=".wav")
+    tk2 = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_2, original_filename="2.wav", extension=".wav")
+
+    # Sibling unrelated Album that must remain completely untouched
+    sibling = custom_storage.create_album(user_id=user_id, title="Sibling LP")
+    sibling = custom_storage.add_album_entry(user_id, sibling.id, trk.id, expected_revision=sibling.revision, take_id=tk1.id)
+    sibling_dir = custom_storage._get_album_dir(user_id, sibling.id)
+    sibling_entry_id = sibling.tracks[0].id
+
+    # 1. Empty draft Album deletion
+    empty_alb = custom_storage.create_album(user_id=user_id, title="Empty F6")
+    empty_dir = custom_storage._get_album_dir(user_id, empty_alb.id)
+    assert custom_storage.delete_album(user_id, empty_alb.id, expected_revision=empty_alb.revision) is True
+    assert not empty_dir.exists()
+    assert custom_storage.get_album(user_id, empty_alb.id) is None
+
+    # 2. Invalid / nonexistent / path-traversal Album IDs
+    assert custom_storage.delete_album(user_id, "alb_nonexistent001", expected_revision=1) is False
+    assert custom_storage.delete_album(user_id, "../escape", expected_revision=1) is False
+
+    # 3. Legacy (journal-less) draft Album with entry
+    leg_alb = custom_storage.create_album(user_id=user_id, title="Legacy F6")
+    leg_alb = custom_storage.add_album_entry(user_id, leg_alb.id, trk.id, expected_revision=leg_alb.revision, take_id=tk1.id)
+    leg_dir = custom_storage._get_album_dir(user_id, leg_alb.id)
+    assert not (leg_dir / "journal.json").exists()
+    assert custom_storage.delete_album(user_id, leg_alb.id, expected_revision=leg_alb.revision) is True
+    assert not leg_dir.exists()
+
+    # 4. v2-journaled draft Album with multiple entries (same Track, different Takes), retained audio/snapshots, and retained covers
+    alb = custom_storage.create_album(user_id=user_id, title="Full F6 LP")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk1.id)
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk2.id)
+    e1_id = alb.tracks[0].id
+    alb = custom_storage.update_album_entry(user_id, alb.id, e1_id, expected_revision=alb.revision, take_id=tk2.id)
+    alb = custom_storage.save_album_cover(user_id, alb.id, cov_1, expected_revision=alb.revision, extension=".jpg")
+    alb = custom_storage.save_album_cover(user_id, alb.id, cov_2, expected_revision=alb.revision, extension=".png")
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+
+    # Stale revision rejected
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision - 1)
+    assert custom_storage.get_album(user_id, alb.id) is not None
+
+    # Symlink escape inside Album directory rejected without touching external target
+    ext_file = tmp_path / "external_keep.txt"
+    ext_file.write_text("keep", encoding="utf-8")
+    sym = alb_dir / "escape_link"
+    sym.symlink_to(ext_file)
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision)
+    assert ext_file.read_text(encoding="utf-8") == "keep"
+    sym.unlink()
+
+    # 5. Inject I/O failure during Phase 2 physical cleanup -> ProjectStorageError, tombstoned (hidden), retry completes cleanup
+    orig_unlink = ps_mod.os.unlink
+    unlink_hits = {"n": 0}
+
+    def _fail_first_unlink(path, *args, **kwargs):
+        unlink_hits["n"] += 1
+        if unlink_hits["n"] == 1:
+            raise OSError(errno.EIO, "Simulated unlink EIO during album cleanup")
+        return orig_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.os, "unlink", _fail_first_unlink)
+    with pytest.raises(ProjectStorageError):
+        custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision)
+    monkeypatch.undo()
+    assert unlink_hits["n"] == 1
+    assert custom_storage.get_album(user_id, alb.id) is None
+    assert all(a.id != alb.id for a in custom_storage.list_albums(user_id))
+
+    # Retry succeeds and removes directory completely
+    assert custom_storage.delete_album(user_id, alb.id, expected_revision=alb.revision) is True
+    assert not alb_dir.exists()
+    assert custom_storage.get_album(user_id, alb.id) is None
+    assert all(a.id != alb.id for a in custom_storage.list_albums(user_id))
+
+    # 6. Source Track, Takes, and sibling Album remain intact; finalized sibling rejects deletion
+    assert custom_storage.get_track(user_id, trk.id).title == "F6 Track"
+    assert len(custom_storage.list_takes(user_id, trk.id)) == 2
+    assert sibling_dir.exists()
+    assert custom_storage.get_album_entry_audio_path(user_id, sibling.id, sibling_entry_id).read_bytes() == wav_1
+
+    fin_sib = custom_storage.finalize_album(user_id, sibling.id, expected_revision=sibling.revision)
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.delete_album(user_id, sibling.id, expected_revision=fin_sib.revision)
+    assert custom_storage.get_album(user_id, sibling.id) is not None
+
+
+def test_feature6_resumable_cleanup_fault_injection_and_tombstone_auth(custom_storage: ProjectStorageManager, monkeypatch):
+    """Feature 6 blocker regression: interrupted cleanup across audio, nested dir, retained cover, and final metadata boundaries."""
+    import errno
+    import io
+    import json
+    import wave
+    import backend.project_storage as ps_mod
+    from backend.project_storage import (
+        AlbumDurabilityUncertainError,
+        AlbumManifestCorruptError,
+        ProjectStorageError,
+    )
+
+    def _make_wav(marker: bytes) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(marker * 300)
+        return buf.getvalue()
+
+    wav_1 = _make_wav(b"\x11\x12")
+    wav_2 = _make_wav(b"\x21\x22")
+    cov_1 = b"\xff\xd8\xff\xe0\x00\x10JFIF_F6_REC_1"
+    cov_2 = b"\x89PNG\r\n\x1a\nPNG_F6_REC_2"
+
+    user_id = "u_feature6_resume"
+    trk = custom_storage.create_track(user_id=user_id, title="F6 Resume Track")
+    tk1 = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_1, original_filename="1.wav", extension=".wav")
+    tk2 = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_2, original_filename="2.wav", extension=".wav")
+
+    sibling = custom_storage.create_album(user_id=user_id, title="F6 Sibling Preserved")
+    sibling = custom_storage.add_album_entry(user_id, sibling.id, trk.id, expected_revision=sibling.revision, take_id=tk1.id)
+    sib_eid = sibling.tracks[0].id
+
+    def _make_populated_album(title: str):
+        a = custom_storage.create_album(user_id=user_id, title=title)
+        a = custom_storage.add_album_entry(user_id, a.id, trk.id, expected_revision=a.revision, take_id=tk1.id)
+        eid = a.tracks[0].id
+        a = custom_storage.update_album_entry(user_id, a.id, eid, expected_revision=a.revision, take_id=tk2.id)
+        a = custom_storage.save_album_cover(user_id, a.id, cov_1, expected_revision=a.revision, extension=".jpg")
+        a = custom_storage.save_album_cover(user_id, a.id, cov_2, expected_revision=a.revision, extension=".png")
+        return a, custom_storage._get_album_dir(user_id, a.id)
+
+    # A. Inject EIO immediately AFTER unlinking active generated audio (audio_g1.wav)
+    alb_a, dir_a = _make_populated_album("F6 Fault A")
+    orig_unlink = ps_mod.os.unlink
+    a_state = {"saw_audio": False}
+
+    def _fail_after_active_audio_unlink(path, *args, **kwargs):
+        if str(path).startswith("audio_g1"):
+            orig_unlink(path, *args, **kwargs)
+            a_state["saw_audio"] = True
+            raise OSError(errno.EIO, "Simulated EIO after active audio unlink")
+        return orig_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.os, "unlink", _fail_after_active_audio_unlink)
+    with pytest.raises(ProjectStorageError):
+        custom_storage.delete_album(user_id, alb_a.id, expected_revision=alb_a.revision)
+    monkeypatch.undo()
+    assert a_state["saw_audio"] is True
+    assert custom_storage.get_album(user_id, alb_a.id) is None
+    assert all(x.id != alb_a.id for x in custom_storage.list_albums(user_id))
+    assert custom_storage.delete_album(user_id, alb_a.id, expected_revision=alb_a.revision) is True
+    assert not dir_a.exists()
+
+    # B. Nested entry-directory rmdir interruption
+    alb_b, dir_b = _make_populated_album("F6 Fault B")
+    orig_rmdir = ps_mod.os.rmdir
+    b_state = {"hit": False}
+
+    def _fail_entry_rmdir(path, *args, **kwargs):
+        if not b_state["hit"]:
+            b_state["hit"] = True
+            raise OSError(errno.EIO, "Simulated EIO on entry rmdir")
+        return orig_rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.os, "rmdir", _fail_entry_rmdir)
+    with pytest.raises(ProjectStorageError):
+        custom_storage.delete_album(user_id, alb_b.id, expected_revision=alb_b.revision)
+    monkeypatch.undo()
+    assert b_state["hit"] is True
+    assert custom_storage.get_album(user_id, alb_b.id) is None
+    assert custom_storage.delete_album(user_id, alb_b.id, expected_revision=alb_b.revision) is True
+    assert not dir_b.exists()
+
+    # C. Retained artwork (cover_g1.jpg) unlink interruption
+    alb_c, dir_c = _make_populated_album("F6 Fault C")
+    c_state = {"hit": False}
+
+    def _fail_retained_cover_unlink(path, *args, **kwargs):
+        if str(path) == "cover_g1.jpg" and not c_state["hit"]:
+            c_state["hit"] = True
+            raise OSError(errno.EIO, "Simulated EIO on retained cover unlink")
+        return orig_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(ps_mod.os, "unlink", _fail_retained_cover_unlink)
+    with pytest.raises(ProjectStorageError):
+        custom_storage.delete_album(user_id, alb_c.id, expected_revision=alb_c.revision)
+    monkeypatch.undo()
+    assert c_state["hit"] is True
+    assert custom_storage.get_album(user_id, alb_c.id) is None
+    assert custom_storage.delete_album(user_id, alb_c.id, expected_revision=alb_c.revision) is True
+    assert not dir_c.exists()
+
+    # D. Final metadata boundaries: EIO on unlink("album.json"), unlink("journal.json"), and rmdir(album_dir)
+    for target_name in ("album.json", "journal.json"):
+        alb_d, dir_d = _make_populated_album(f"F6 Fault D {target_name}")
+        d_state = {"hit": False}
+
+        def _fail_meta_unlink(path, *args, tgt=target_name, st=d_state, **kwargs):
+            if str(path) == tgt and not st["hit"]:
+                st["hit"] = True
+                raise OSError(errno.EIO, f"Simulated EIO on {tgt} unlink")
+            return orig_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(ps_mod.os, "unlink", _fail_meta_unlink)
+        with pytest.raises(ProjectStorageError):
+            custom_storage.delete_album(user_id, alb_d.id, expected_revision=alb_d.revision)
+        monkeypatch.undo()
+        assert d_state["hit"] is True
+        assert custom_storage.get_album(user_id, alb_d.id) is None
+        assert all(x.id != alb_d.id for x in custom_storage.list_albums(user_id))
+        assert custom_storage.delete_album(user_id, alb_d.id, expected_revision=alb_d.revision) is True
+        assert not dir_d.exists()
+
+    # E. Non-deleted corruption & forged tombstone remain detectable
+    alb_e, dir_e = _make_populated_album("F6 Active Corrupt")
+    active_audio = custom_storage.get_album_entry_audio_path(user_id, alb_e.id, alb_e.tracks[0].id)
+    active_audio.unlink()
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.get_album(user_id, alb_e.id)
+
+    # Forged is_deleted=True without COMMITTED delete_album receipt -> AlbumManifestCorruptError
+    raw_e = json.loads((dir_e / "album.json").read_text(encoding="utf-8"))
+    raw_e["is_deleted"] = True
+    raw_e["delete_tx_id"] = "tx_forged_delete"
+    raw_e["last_tx_id"] = "tx_forged_delete"
+    (dir_e / "album.json").write_text(json.dumps(raw_e), encoding="utf-8")
+    with pytest.raises(AlbumManifestCorruptError):
+        custom_storage.get_album(user_id, alb_e.id)
+
+    # Source Track/Takes and sibling Album remain intact
+    assert custom_storage.get_track(user_id, trk.id).title == "F6 Resume Track"
+    assert len(custom_storage.list_takes(user_id, trk.id)) == 2
+    assert custom_storage.get_album_entry_audio_path(user_id, sibling.id, sib_eid).read_bytes() == wav_1

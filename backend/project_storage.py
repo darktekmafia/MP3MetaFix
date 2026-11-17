@@ -1643,6 +1643,13 @@ class ProjectStorageManager:
                             f"Album '{album_id}' manifest and journal evidence are contradictory."
                         )
 
+            if album.is_deleted:
+                try:
+                    os.close(album_dir_fd)
+                except OSError:
+                    pass
+                return None
+
             return _AlbumReadContext(
                 album_id=album_id,
                 album_dir=album_dir,
@@ -2705,6 +2712,19 @@ class ProjectStorageManager:
         if raw_out is not None:
             raw_out.append(raw_data)
 
+        if raw_data.get("is_deleted") is True:
+            if protect_finalized and (
+                bool(raw_data.get("is_finalized", False))
+                or raw_data.get("status") == WorkspaceStatus.COMPLETED.value
+            ):
+                raise AlbumFinalizedError("Finalized albums are immutable and cannot be modified or deleted.")
+            self._authenticate_deleted_tombstone_in_dir(album_id, album_dir_fd, raw_data)
+            norm_data = copy.deepcopy(raw_data)
+            norm_tracks = self._normalize_album_entries_shared(album_id, norm_data)
+            norm_data["tracks"] = norm_tracks
+            norm_data["track_ids"] = [t["track_id"] for t in norm_tracks if t.get("track_id")]
+            return AlbumMetadata(**norm_data), norm_data, manifest_st
+
         if protect_finalized and (
             bool(raw_data.get("is_finalized", False))
             or raw_data.get("status") == WorkspaceStatus.COMPLETED.value
@@ -3319,7 +3339,10 @@ class ProjectStorageManager:
 
     def get_album(self, user_id: str, album_id: str) -> Optional[AlbumMetadata]:
         """Retrieve album metadata, failing closed if an existing manifest is corrupt."""
-        return self._read_album_unlocked(user_id, album_id)
+        meta = self._read_album_unlocked(user_id, album_id)
+        if meta is None or meta.is_deleted:
+            return None
+        return meta
 
     def list_albums(self, user_id: str, status: Optional[WorkspaceStatus] = None) -> List[AlbumMetadata]:
         """List all album workspaces for a user using descriptor-safe reads (side-effect-free)."""
@@ -3370,6 +3393,8 @@ class ProjectStorageManager:
                     if loaded is None:
                         continue
                     meta, _norm, _st = loaded
+                    if meta.is_deleted:
+                        continue
                     if not is_valid_project_id(meta.id, expected_prefix="alb") or get_album_dir_name(meta.id) != dname:
                         raise AlbumManifestCorruptError(
                             f"Album directory '{dname}' manifest id '{meta.id}' mismatch."
@@ -3888,6 +3913,10 @@ class ProjectStorageManager:
         target_revision = int(target_data["revision"])
         target_data = dict(target_data)
         target_data["last_tx_id"] = tx_id
+        if op == "delete_album":
+            target_data["is_deleted"] = True
+            target_data["deleted_at"] = target_data.get("deleted_at") or time.time()
+            target_data["delete_tx_id"] = tx_id
         tx_hist = list(target_data.get("tx_history") or [])
         tx_hist.append(tx_id)
         target_data["tx_history"] = tx_hist
@@ -6701,8 +6730,115 @@ class ProjectStorageManager:
                 except OSError:
                     pass
 
+    def _authenticate_deleted_tombstone_in_dir(
+        self,
+        album_id: str,
+        album_dir_fd: int,
+        raw_data: Dict[str, Any],
+    ) -> AlbumJournal:
+        """Verify that an is_deleted=True manifest is backed by a COMMITTED delete_album receipt in journal.json."""
+        if bool(raw_data.get("is_finalized", False)) or raw_data.get("status") == WorkspaceStatus.COMPLETED.value:
+            raise AlbumManifestCorruptError(f"Finalized album '{album_id}' cannot carry is_deleted=True.")
+        delete_tx_id = raw_data.get("delete_tx_id")
+        if not isinstance(delete_tx_id, str) or not delete_tx_id or raw_data.get("last_tx_id") != delete_tx_id:
+            raise AlbumManifestCorruptError(f"Album '{album_id}' has unauthenticated deletion tombstone.")
+
+        journal_loaded = self._read_json_file_verified_in_dir(
+            album_dir_fd, "journal.json", sync_file=False, required=False
+        )
+        if journal_loaded is None:
+            raise AlbumManifestCorruptError(f"Album '{album_id}' deletion tombstone lacks journal evidence.")
+        journal_raw, _, _ = journal_loaded
+        try:
+            journal = AlbumJournal(**journal_raw)
+        except Exception as exc:
+            raise AlbumManifestCorruptError(
+                f"Album '{album_id}' journal failed validation during tombstone check: {exc}"
+            ) from exc
+
+        expected_album_id = raw_data.get("id")
+        if (
+            not isinstance(expected_album_id, str)
+            or not is_valid_project_id(expected_album_id, expected_prefix="alb")
+            or journal.album_id != expected_album_id
+            or journal.protocol != JournalProtocol.ENFORCED_V2
+            or journal.active_tx is not None
+            or self._classify_album_consistency(raw_data, journal) == RecoveryConsistency.CORRUPT
+        ):
+            raise AlbumManifestCorruptError(f"Album '{album_id}' deletion tombstone contradicts journal state.")
+
+        manifest_sha = self._compute_canonical_manifest_sha256(raw_data)
+        matching = [
+            rcp for rcp in journal.tx_receipts
+            if (
+                rcp.tx_id == delete_tx_id
+                and rcp.op == "delete_album"
+                and rcp.outcome == JournalTxState.COMMITTED
+                and rcp.result_revision == raw_data.get("revision")
+                and rcp.intended_manifest_sha256 == manifest_sha
+            )
+        ]
+        if not matching:
+            raise AlbumManifestCorruptError(
+                f"Album '{album_id}' deletion tombstone lacks matching COMMITTED delete_album receipt."
+            )
+        return journal
+
+    def _validate_and_delete_dir_contents_locked(self, dir_fd: int, *, defer_names: Tuple[str, ...] = ()) -> None:
+        """Validate no symlink escape inside an owned Album directory, then delete its contents descriptor-relatively."""
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+        def _validate_tree(cur_fd: int) -> None:
+            for name in os.listdir(cur_fd):
+                st = os.lstat(name, dir_fd=cur_fd)
+                if stat.S_ISLNK(st.st_mode):
+                    raise AlbumManifestCorruptError(f"Unsafe symlink '{name}' inside album directory; refusing deletion.")
+                if stat.S_ISDIR(st.st_mode):
+                    sub_fd = os.open(name, dir_flags, dir_fd=cur_fd)
+                    try:
+                        _validate_tree(sub_fd)
+                    finally:
+                        os.close(sub_fd)
+                elif not stat.S_ISREG(st.st_mode):
+                    raise AlbumManifestCorruptError(f"Unsafe non-regular artifact '{name}' inside album directory; refusing deletion.")
+
+        def _delete_tree(cur_fd: int, deferred: Tuple[str, ...] = ()) -> None:
+            sub_dirs: List[str] = []
+            reg_files: List[str] = []
+            deferred_files: List[str] = []
+            for name in os.listdir(cur_fd):
+                st = os.lstat(name, dir_fd=cur_fd)
+                if stat.S_ISLNK(st.st_mode):
+                    raise AlbumManifestCorruptError(f"Unsafe symlink '{name}' inside album directory; refusing deletion.")
+                if stat.S_ISDIR(st.st_mode):
+                    sub_dirs.append(name)
+                elif stat.S_ISREG(st.st_mode):
+                    if name in deferred:
+                        deferred_files.append(name)
+                    else:
+                        reg_files.append(name)
+                else:
+                    raise AlbumManifestCorruptError(f"Unsafe non-regular artifact '{name}' inside album directory; refusing deletion.")
+
+            for dname in sub_dirs:
+                sub_fd = os.open(dname, dir_flags, dir_fd=cur_fd)
+                try:
+                    _delete_tree(sub_fd)
+                finally:
+                    os.close(sub_fd)
+                os.rmdir(dname, dir_fd=cur_fd)
+
+            for fname in reg_files:
+                os.unlink(fname, dir_fd=cur_fd)
+            for fname in deferred:
+                if fname in deferred_files:
+                    os.unlink(fname, dir_fd=cur_fd)
+
+        _validate_tree(dir_fd)
+        _delete_tree(dir_fd, deferred=defer_names)
+
     def delete_album(self, user_id: str, album_id: str, expected_revision: int) -> bool:
-        """Delete a verified-empty draft album using retained dir_fds and non-following allowlist inspection."""
+        """Delete a draft album workspace and its Album-owned artifacts safely under lock."""
         expected_revision = self._validate_expected_revision(expected_revision)
         try:
             self._get_album_dir_path(user_id, album_id)
@@ -6717,7 +6853,6 @@ class ProjectStorageManager:
             if albums_root_fd is None:
                 return False
             album_dir_fd: Optional[int] = None
-            entries_fd: Optional[int] = None
             try:
                 try:
                     dir_st = os.lstat(album_dir_name, dir_fd=albums_root_fd)
@@ -6736,99 +6871,144 @@ class ProjectStorageManager:
                 raw_holder: List[Dict[str, Any]] = []
                 loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
                 if not loaded:
-                    if os.listdir(album_dir_fd):
+                    leftover = os.listdir(album_dir_fd)
+                    if leftover == ["journal.json"]:
+                        j_loaded = self._read_json_file_verified_in_dir(
+                            album_dir_fd, "journal.json", sync_file=False, required=False
+                        )
+                        if j_loaded is not None:
+                            try:
+                                j_obj = AlbumJournal(**j_loaded[0])
+                            except Exception as exc:
+                                raise AlbumManifestCorruptError(
+                                    f"Orphaned journal for '{album_id}' failed validation: {exc}"
+                                ) from exc
+                            if (
+                                j_obj.album_id == album_id
+                                and j_obj.protocol == JournalProtocol.ENFORCED_V2
+                                and j_obj.active_tx is None
+                                and j_obj.tx_receipts
+                                and j_obj.tx_receipts[-1].op == "delete_album"
+                                and j_obj.tx_receipts[-1].outcome == JournalTxState.COMMITTED
+                            ):
+                                try:
+                                    os.unlink("journal.json", dir_fd=album_dir_fd)
+                                    os.close(album_dir_fd)
+                                    album_dir_fd = None
+                                    os.rmdir(album_dir_name, dir_fd=albums_root_fd)
+                                    _fsync_dir_fd(albums_root_fd)
+                                    return True
+                                except OSError as e:
+                                    raise ProjectStorageError(
+                                        f"Failed to complete deletion of album '{album_id}': {e}"
+                                    ) from e
+                    if leftover:
                         raise AlbumManifestCorruptError(
                             f"Album manifest '{album_id}' is missing while album files still exist; refusing deletion."
                         )
+                    os.close(album_dir_fd)
+                    album_dir_fd = None
+                    os.rmdir(album_dir_name, dir_fd=albums_root_fd)
+                    _fsync_dir_fd(albums_root_fd)
                     return False
-                album, _, manifest_st = loaded
+
+                album, norm_data, manifest_st = loaded
+                evidence: Dict[str, Any] = {}
                 _, journal, consistency = self._validate_album_evidence_phase_a_locked(
-                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
+                    album_id,
+                    album_dir_fd,
+                    raw_album_data=raw_holder[0],
+                    raw_album_identity=(manifest_st.st_dev, manifest_st.st_ino),
+                    evidence_out=evidence,
                 )
                 self._check_album_mutation_eligibility_phase_b_locked(
-                    album_id, journal, consistency, is_enrolled=False
+                    album_id, journal, consistency, is_enrolled=True
                 )
 
                 if self._is_album_finalized(album):
                     raise AlbumFinalizedError("Finalized albums are immutable and cannot be deleted.")
-                if int(expected_revision) != int(album.revision):
+
+                if not album.is_deleted:
+                    if int(expected_revision) != int(album.revision):
+                        raise AlbumRevisionConflictError(
+                            f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
+                        )
+                elif int(expected_revision) not in (int(album.revision), int(album.revision) - 1):
                     raise AlbumRevisionConflictError(
                         f"Album was modified concurrently (expected revision {expected_revision}, current revision {album.revision}). Reload and try again."
                     )
 
-                placeholder_dir_names = set()
-                for entry in album.tracks:
-                    if entry.take_id is not None or entry.has_owned_audio or entry.snapshot is not None:
-                        raise AlbumReplacementDisabledError(
-                            "Deleting albums containing recordings is temporarily disabled in Phase 1A."
-                        )
-                    if entry.id:
-                        placeholder_dir_names.add(get_album_entry_dir_name(entry.id))
+                # Pre-validate directory tree for symlinks before committing tombstone
+                def _precheck_tree(cur_fd: int) -> None:
+                    for name in os.listdir(cur_fd):
+                        st = os.lstat(name, dir_fd=cur_fd)
+                        if stat.S_ISLNK(st.st_mode):
+                            raise AlbumManifestCorruptError(f"Unsafe symlink '{name}' inside album directory; refusing deletion.")
+                        if stat.S_ISDIR(st.st_mode):
+                            sub_fd = os.open(name, dir_flags, dir_fd=cur_fd)
+                            try:
+                                _precheck_tree(sub_fd)
+                            finally:
+                                os.close(sub_fd)
+                        elif not stat.S_ISREG(st.st_mode):
+                            raise AlbumManifestCorruptError(f"Unsafe non-regular artifact '{name}' inside album directory; refusing deletion.")
 
-                empty_entry_dirs_to_remove: List[str] = []
-                has_entries_root = False
                 try:
-                    for child_name in os.listdir(album_dir_fd):
-                        cst = os.lstat(child_name, dir_fd=album_dir_fd)
-                        if child_name == "album.json":
-                            if not stat.S_ISREG(cst.st_mode):
-                                raise AlbumManifestCorruptError("Album manifest is not a regular file.")
-                        elif child_name == "entries":
-                            if not stat.S_ISDIR(cst.st_mode):
-                                raise AlbumReplacementDisabledError(
-                                    "Album 'entries' path is not a regular directory; refusing deletion."
-                                )
-                            has_entries_root = True
-                            entries_fd = os.open("entries", dir_flags, dir_fd=album_dir_fd)
-                            for sub_name in os.listdir(entries_fd):
-                                sst = os.lstat(sub_name, dir_fd=entries_fd)
-                                if not stat.S_ISDIR(sst.st_mode) or sub_name not in placeholder_dir_names:
-                                    raise AlbumReplacementDisabledError(
-                                        "Album contains unexpected or non-empty entry artifacts; deletion is blocked in Phase 1A."
-                                    )
-                                sub_fd = os.open(sub_name, dir_flags, dir_fd=entries_fd)
-                                try:
-                                    if os.listdir(sub_fd):
-                                        raise AlbumReplacementDisabledError(
-                                            "Album contains non-empty entry files; deletion is blocked in Phase 1A."
-                                        )
-                                finally:
-                                    os.close(sub_fd)
-                                empty_entry_dirs_to_remove.append(sub_name)
-                        else:
-                            raise AlbumReplacementDisabledError(
-                                f"Album contains '{child_name}' (artwork, artifacts, or unknown files); deletion is blocked in Phase 1A."
-                            )
-                except (AlbumReplacementDisabledError, AlbumManifestCorruptError):
+                    _precheck_tree(album_dir_fd)
+                except AlbumManifestCorruptError:
                     raise
                 except OSError as e:
                     raise ProjectStorageError(f"Failed inspecting album '{album_id}' before deletion: {e}") from e
 
+                # Phase 1: Durable tombstone commit (makes Album immediately invisible to lookups/listings)
+                if not album.is_deleted:
+                    target_data = dict(norm_data)
+                    new_rev = int(target_data.get("revision", 1)) + 1
+                    target_data["revision"] = new_rev
+                    target_data["updated_at"] = time.time()
+                    revs = list(target_data.get("revisions") or [])
+                    revs.append({
+                        "revision": new_rev,
+                        "timestamp": time.time(),
+                        "change_summary": "Deleted draft album",
+                        "changed_fields": ["is_deleted"],
+                    })
+                    target_data["revisions"] = revs
+                    payload_sha256 = self._compute_update_album_payload_sha256(
+                        "delete_album",
+                        expected_revision,
+                        {"album_id": album_id},
+                    )
+                    self._execute_v2_album_tx_locked(
+                        album_id=album_id,
+                        album_dir_fd=album_dir_fd,
+                        evidence=evidence,
+                        target_data=target_data,
+                        op="delete_album",
+                        expected_revision=expected_revision,
+                        payload_sha256=payload_sha256,
+                        idempotency_key=None,
+                        new_refs=[],
+                        superseded_refs=[],
+                    )
+
+                # Phase 2: Descriptor-relative recursive cleanup (album.json unlinked before journal.json)
                 try:
-                    if entries_fd is not None:
-                        for empty_sub_name in empty_entry_dirs_to_remove:
-                            os.rmdir(empty_sub_name, dir_fd=entries_fd)
-                        os.close(entries_fd)
-                        entries_fd = None
-                    if has_entries_root:
-                        os.rmdir("entries", dir_fd=album_dir_fd)
-                    cur_mst = os.lstat("album.json", dir_fd=album_dir_fd)
-                    if not stat.S_ISREG(cur_mst.st_mode) or (cur_mst.st_dev, cur_mst.st_ino) != (manifest_st.st_dev, manifest_st.st_ino):
-                        raise AlbumManifestCorruptError("Album manifest identity changed prior to deletion.")
-                    os.unlink("album.json", dir_fd=album_dir_fd)
+                    self._validate_and_delete_dir_contents_locked(
+                        album_dir_fd,
+                        defer_names=("album.json", "journal.json"),
+                    )
                     os.close(album_dir_fd)
                     album_dir_fd = None
                     os.rmdir(album_dir_name, dir_fd=albums_root_fd)
+                    _fsync_dir_fd(albums_root_fd)
                     return True
+                except AlbumManifestCorruptError:
+                    raise
                 except OSError as e:
                     logger.error(f"Failed to delete album {album_id}: {e}")
                     raise ProjectStorageError(f"Failed to completely delete album '{album_id}': {e}") from e
             finally:
-                if entries_fd is not None:
-                    try:
-                        os.close(entries_fd)
-                    except OSError:
-                        pass
                 if album_dir_fd is not None:
                     try:
                         os.close(album_dir_fd)

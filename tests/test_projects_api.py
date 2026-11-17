@@ -430,10 +430,11 @@ def test_album_workspace_api(client, auth_cookies):
     albums = res.json()
     assert any(a["id"] == album_id for a in albums)
 
-    # 5. Phase 1A blocks deleting album with artwork (409), while empty draft album deletes cleanly (200)
+    # 5. Deleting draft album with artwork succeeds (200) and removes it from lookup (404), while empty draft album also deletes cleanly (200)
     cur_rev = client.get(f"/api/projects/albums/{album_id}", cookies=auth_cookies).json()["revision"]
     res = client.delete(f"/api/projects/albums/{album_id}?expected_revision={cur_rev}", cookies=auth_cookies)
-    assert res.status_code == 409
+    assert res.status_code == 200
+    assert client.get(f"/api/projects/albums/{album_id}", cookies=auth_cookies).status_code == 404
 
     empty_alb = client.post("/api/projects/albums", json={"title": "Empty Draft"}, cookies=auth_cookies).json()
     res_empty = client.delete(
@@ -2537,8 +2538,8 @@ vm.runInNewContext(code, context);
   const draftBtns = cards[0].querySelectorAll('button');
   const finalBtns = cards[1].querySelectorAll('button');
   const emptyBtns = cards[2].querySelectorAll('button');
-  if (draftBtns.some(b => (b.className || '').includes('btn-delete-track'))) {
-    throw new Error('Recorded draft album card must NOT render delete button in Phase 1A');
+  if (!draftBtns.some(b => (b.className || '').includes('btn-delete-track'))) {
+    throw new Error('Recorded draft album card must render delete button');
   }
   if (finalBtns.some(b => (b.className || '').includes('btn-delete-track'))) {
     throw new Error('Finalized album card must NOT render delete button');
@@ -3789,11 +3790,6 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
     alb_dir = papi_mod.project_storage_manager._get_album_dir(user_id, alb["id"])
     journal_path = alb_dir / "journal.json"
 
-    def _call_1_unenrolled_route(rev: int):
-        return [
-            ("delete_album", client.delete(f"/api/projects/albums/{alb['id']}?expected_revision={rev}", cookies=auth_cookies)),
-        ]
-
     def _call_all_8_routes(rev: int):
         return [
             ("patch_album", client.patch(f"/api/projects/albums/{alb['id']}", json={"title": "X", "expected_revision": rev}, cookies=auth_cookies)),
@@ -3803,18 +3799,12 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
             ("refresh", client.post(f"/api/projects/albums/{alb['id']}/entries/{entry_rec['id']}/refresh", json={"expected_revision": rev, "expected_source_revision": 1, "expected_source_audio_sha256": entry_rec["snapshot"]["audio_sha256"], "expected_source_metadata_fingerprint": "a" * 64}, cookies=auth_cookies)),
             ("del_entry", client.delete(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}?expected_revision={rev}", cookies=auth_cookies)),
             ("artwork", client.post(f"/api/projects/albums/{alb['id']}/artwork", data={"expected_revision": str(rev)}, files={"file": ("cover.jpg", jpg_bytes, "image/jpeg")}, cookies=auth_cookies)),
-            *_call_1_unenrolled_route(rev),
+            ("delete_album", client.delete(f"/api/projects/albums/{alb['id']}?expected_revision={rev}", cookies=auth_cookies)),
         ]
 
-    # 1. Idle v2 journal -> 409 mutation_not_enrolled on remaining unenrolled route (and no reconciliation recommended)
+    # 1. Idle v2 journal -> enrolled PATCH /albums/{id} succeeds on idle v2 journal
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb["id"])
     journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
-    for name, res in _call_1_unenrolled_route(alb["revision"]):
-        assert res.status_code == 409, f"{name} expected 409, got {res.status_code}: {res.text}"
-        assert res.headers.get("X-Error-Code") == "mutation_not_enrolled"
-        body = res.json()["detail"]
-        assert body["error_code"] == "mutation_not_enrolled"
-        assert "reconcil" not in body["message"].lower()
 
     # Enrolled PATCH /albums/{id} succeeds on idle v2 journal
     enrolled_patch = client.patch(
@@ -3896,11 +3886,11 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
     raw_m_bytes = manifest_path.read_bytes()
     raw_j_bytes = journal_path.read_bytes()
     raw_res = client.delete(
-        f"/api/projects/albums/{alb['id']}?expected_revision={persisted_data['revision']}",
+        f"/api/projects/albums/{alb['id']}?expected_revision={persisted_data['revision'] - 1}",
         cookies=auth_cookies,
     )
     assert raw_res.status_code == 409
-    assert raw_res.headers.get("X-Error-Code") == "mutation_not_enrolled"
+    assert raw_res.headers.get("X-Error-Code") == "revision_conflict"
     assert manifest_path.read_bytes() == raw_m_bytes
     assert journal_path.read_bytes() == raw_j_bytes
 
@@ -5175,3 +5165,208 @@ vm.runInNewContext(code, context);
     proc = subprocess.run([node_bin, "-e", js_script], capture_output=True, text=True, env=env)
     assert proc.returncode == 0, f"node failed: {proc.stderr}\n{proc.stdout}"
     assert "F5_UI_CHECK_OK" in proc.stdout
+
+
+def test_feature6_api_and_ui_delete_draft_album(client, auth_cookies):
+    """Feature 6: API draft Album deletion, 404/409 guards, source/sibling preservation, and frontend confirmation/error/success flow."""
+    import io
+    import os
+    from pathlib import Path
+    import shutil
+    import subprocess
+    import wave
+    from PIL import Image
+
+    wbuf = io.BytesIO()
+    with wave.open(wbuf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(b"\x31\x32" * 300)
+    wav_ok = wbuf.getvalue()
+
+    img = Image.new("RGB", (24, 24), color=(50, 100, 150))
+    ibuf = io.BytesIO()
+    img.save(ibuf, format="JPEG")
+    jpg_ok = ibuf.getvalue()
+
+    trk = client.post("/api/projects/tracks", json={"title": "API F6 Track"}, cookies=auth_cookies).json()
+    tk = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        files={"file": ("f6.wav", wav_ok, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    # Sibling finalized album (must remain undeletable and intact)
+    sib = client.post("/api/projects/albums", json={"title": "API F6 Sibling"}, cookies=auth_cookies).json()
+    sib = client.post(
+        f"/api/projects/albums/{sib['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk["id"], "expected_revision": sib["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    sib = client.post(f"/api/projects/albums/{sib['id']}/finalize?expected_revision={sib['revision']}", cookies=auth_cookies).json()
+    assert client.delete(f"/api/projects/albums/{sib['id']}?expected_revision={sib['revision']}", cookies=auth_cookies).status_code == 409
+
+    # Target draft album with entry + replaced cover
+    alb = client.post("/api/projects/albums", json={"title": "API F6 Target"}, cookies=auth_cookies).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/artwork",
+        data={"expected_revision": str(alb["revision"])},
+        files={"file": ("c1.jpg", io.BytesIO(jpg_ok), "image/jpeg")},
+        cookies=auth_cookies,
+    ).json()["album"]
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/artwork",
+        data={"expected_revision": str(alb["revision"])},
+        files={"file": ("c2.jpg", io.BytesIO(jpg_ok), "image/jpeg")},
+        cookies=auth_cookies,
+    ).json()["album"]
+
+    # Stale revision -> 409
+    assert client.delete(f"/api/projects/albums/{alb['id']}?expected_revision={alb['revision'] - 1}", cookies=auth_cookies).status_code == 409
+    # Nonexistent -> 404
+    assert client.delete("/api/projects/albums/alb_nonexistent001?expected_revision=1", cookies=auth_cookies).status_code == 404
+
+    # Delete draft album -> 200, removed from lookup & listing, source & sibling intact
+    r_del = client.delete(f"/api/projects/albums/{alb['id']}?expected_revision={alb['revision']}", cookies=auth_cookies)
+    assert r_del.status_code == 200 and r_del.json()["status"] == "deleted"
+    assert client.get(f"/api/projects/albums/{alb['id']}", cookies=auth_cookies).status_code == 404
+    assert all(a["id"] != alb["id"] for a in client.get("/api/projects/albums", cookies=auth_cookies).json())
+    assert len(client.get(f"/api/projects/tracks/{trk['id']}", cookies=auth_cookies).json()["takes"]) == 1
+    assert client.get(f"/api/projects/albums/{sib['id']}", cookies=auth_cookies).status_code == 200
+
+    # Frontend check: delete button shown on populated draft album, hidden on finalized, confirm/cancel/error/success behavior
+    node_bin = shutil.which("node")
+    assert node_bin is not None
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+    js_script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
+
+const elements = {};
+function findAll(root, pred, out = []) {
+  for (const c of (root.children || [])) {
+    if (pred(c)) out.push(c);
+    findAll(c, pred, out);
+  }
+  return out;
+}
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set();
+  const el = {
+    id, tagName: tag.toUpperCase(), value: '', name: '', type: '', textContent: '', className: '',
+    title: '', checked: false, disabled: false, files: [], listeners, dataset: {}, style: {}, children: [], _innerHTML: '',
+    classList: {
+      add: (c) => classSet.add(c),
+      remove: (c) => classSet.delete(c),
+      contains: (c) => classSet.has(c),
+      toggle: (c, force) => { if (force === true) classSet.add(c); else if (force === false) classSet.delete(c); else if (classSet.has(c)) classSet.delete(c); else classSet.add(c); },
+    },
+    set innerHTML(val) { this._innerHTML = val; if (val === '' || (typeof val === 'string' && val.startsWith('<option'))) this.children = []; },
+    get innerHTML() { return this._innerHTML; },
+    addEventListener: (ev, fn) => { if (!listeners[ev]) listeners[ev] = []; listeners[ev].push(fn); },
+    setAttribute: () => {},
+    appendChild: (child) => { el.children.push(child); return child; },
+    querySelector: () => null,
+    querySelectorAll: (sel) => findAll(el, c => sel === 'button' ? c.tagName === 'BUTTON' : false),
+    reset: () => {},
+    remove: () => {},
+  };
+  return el;
+}
+function getEl(id) {
+  if (!elements[id]) elements[id] = makeEl(id);
+  return elements[id];
+}
+
+const docListeners = {};
+const toasts = [];
+const deleteCalls = [];
+let confirmResult = false;
+let deleteOk = true;
+let albumsList = [
+  { id: 'alb_draft', title: 'Populated Draft', status: 'draft', is_finalized: false, has_cover: true, revision: 4, tracks: [{ id: 'ale_1', is_placeholder: false, has_owned_audio: true, take_id: 'tak_1' }] },
+  { id: 'alb_fin', title: 'Finalized LP', status: 'completed', is_finalized: true, has_cover: true, revision: 5, tracks: [{ id: 'ale_2', is_placeholder: false, has_owned_audio: true, take_id: 'tak_2' }] },
+];
+
+const context = {
+  console, Date, Math, JSON, Set, Map, Promise, URLSearchParams, encodeURIComponent, decodeURIComponent, setTimeout, clearTimeout,
+  document: {
+    getElementById: getEl,
+    createElement: (tag) => makeEl('', tag),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
+    body: makeEl('body', 'body'),
+  },
+  window: { location: { pathname: '/projects', search: '' }, addEventListener: () => {}, showToast: (msg, type) => toasts.push({ msg, type }) },
+  confirm: () => confirmResult,
+  alert: () => {},
+  fetch: async (url, opts) => {
+    if (url === '/api/projects/tracks') return { ok: true, status: 200, json: async () => [] };
+    if (url === '/api/projects/albums') return { ok: true, status: 200, json: async () => albumsList };
+    if (url === '/api/storage/quota') return { ok: true, status: 200, json: async () => ({ used_bytes: 0, limit_bytes: 1000, usage_percent: 0 }) };
+    if (opts && opts.method === 'DELETE' && url.startsWith('/api/projects/albums/alb_draft')) {
+      deleteCalls.push(url);
+      if (!deleteOk) return { ok: false, status: 500, json: async () => ({ detail: 'Server error' }) };
+      albumsList = albumsList.filter(a => a.id !== 'alb_draft');
+      return { ok: true, status: 200, json: async () => ({ status: 'deleted', id: 'alb_draft' }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+};
+context.window.window = context.window;
+
+vm.runInNewContext(code, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  await new Promise(r => setTimeout(r, 20));
+  const cards = getEl('albumsGridContainer').children;
+  if (cards.length !== 2) throw new Error('Expected 2 album cards');
+  const draftDelBtn = cards[0].querySelectorAll('button').find(b => (b.className || '').includes('btn-delete-track'));
+  const finDelBtn = cards[1].querySelectorAll('button').find(b => (b.className || '').includes('btn-delete-track'));
+  if (!draftDelBtn) throw new Error('Expected Delete Album button on populated draft album');
+  if (finDelBtn) throw new Error('Finalized album must NOT expose Delete Album button');
+
+  // Cancel confirm() -> zero DELETE requests
+  confirmResult = false;
+  await draftDelBtn.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (deleteCalls.length !== 0) throw new Error('Expected 0 DELETE calls when confirm() canceled');
+
+  // Failed DELETE -> error toast, album remains in list
+  confirmResult = true;
+  deleteOk = false;
+  await draftDelBtn.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (deleteCalls.length !== 1) throw new Error('Expected 1 DELETE call on failed delete');
+  if (!toasts.some(t => t.type === 'error' && t.msg.includes('Server error'))) throw new Error('Expected error toast on failed delete');
+  if (getEl('albumsGridContainer').children.length !== 2) throw new Error('Failed delete must not remove album from list');
+
+  // Successful DELETE -> sends expected_revision=4 and removes album from list
+  deleteOk = true;
+  await draftDelBtn.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (deleteCalls[1] !== '/api/projects/albums/alb_draft?expected_revision=4') {
+    throw new Error('Expected ?expected_revision=4, got ' + deleteCalls[1]);
+  }
+  if (getEl('albumsGridContainer').children.length !== 1) throw new Error('Expected deleted album removed from list');
+  console.log('F6_UI_CHECK_OK');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    env = os.environ.copy()
+    env["TARGET_JS_PATH"] = str(projects_js_path)
+    proc = subprocess.run([node_bin, "-e", js_script], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, f"node failed: {proc.stderr}\n{proc.stdout}"
+    assert "F6_UI_CHECK_OK" in proc.stdout
