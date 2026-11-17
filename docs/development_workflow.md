@@ -92,7 +92,7 @@ The `/app`, `/manager`, and `/projects` sections are specifically designed for d
 Before any changes are committed or merged:
 
 1. **Incremental Updates during Development (`development` branch)**:
-   - Every feature, security patch, bug fix, or dependency update must be documented in [CHANGELOG.md](../CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/), unless the founder explicitly authorizes deferral or omission. When a narrowly scoped task conflicts with a changelog requirement, identify the conflict and request clarification rather than silently expanding scope or omitting documentation.
+   - Every feature, security patch, bug fix, or dependency update must be documented in [CHANGELOG.md](../CHANGELOG.md) under `## [Unreleased]` following [Keep a Changelog](https://keepachangelog.com/) before committing or releasing, unless the founder explicitly authorizes deferral or omission. During explicitly authorized multi-pass corrective work, intermediate changelog updates may be deferred until the commit-ready milestone only when explicitly authorized. When an unauthorized narrowly scoped task conflicts with a changelog requirement, identify the conflict and request clarification rather than silently expanding scope or omitting documentation.
    - Keep [README.md](../README.md), [ROADMAP.md](../ROADMAP.md), [docs/ARCHITECTURE.md](ARCHITECTURE.md), [docs/DEPLOYMENT.md](DEPLOYMENT.md), and [docs/SECURITY_HARDENING.md](SECURITY_HARDENING.md) current with any newly implemented behaviors, architecture changes, and installer options. Routine documentation synchronization does not automatically authorize modifying [VISION.md](../VISION.md), [GOVERNANCE.md](../GOVERNANCE.md), `AGENTS.md`, or `docs/development_workflow.md`. Factual corrections to these documents may be performed when explicitly authorized, but such approval does not imply permission to alter project vision, governance, architectural commitments, or development policy beyond the approved scope.
 2. **Public vs. Internal Documentation Boundary**:
    - Treat documentation on every remote branch as public. Document installation, use, architecture, supported behavior, product plans, and relevant security/compatibility limitations. Exclude personal learning plans, environment-specific work logs, and agent/session handoffs.
@@ -106,6 +106,42 @@ Before any changes are committed or merged:
      - Execute the test suite (`./.venv/bin/pytest`) with 0 failures.
      - Commit the release preparation on `development` (`chore(release): prepare vX.Y.Z`).
      - Only then execute the fast-forward merge into `main` and tag the release (`git tag vX.Y.Z`).
+
+---
+
+## 🔍 7A. Risk-Based Pre-Implementation & Verification Workflow
+
+**Analyze beyond scope; implement within authorized scope.** **High-risk changes require approved plans before implementation.**
+
+1. **Request Interpretation & Risk Classification**:
+   - **Low-Risk**: Copy/documentation edits, isolated styling/layout tweaks, or pure helper fixes with no state, storage, auth, or API contract impact. Keep analysis lightweight while still checking obvious downstream dependencies.
+   - **Medium-Risk**: Changes touching API contracts, shared helpers, frontend/backend workflow wiring, metadata/tag handling, or non-destructive persistent state.
+   - **High-Risk**: Changes touching persistent audio/artwork/manifest storage, locking, revision/finalization boundaries, destructive/replacement operations, legacy data compatibility, auth/CSRF, installers, or privileged operations (Section 3).
+
+2. **Pre-Implementation Impact Report (Required for Medium and High)**:
+   - Before editing code, produce a concise impact report covering:
+     - Relevant callers, callees, shared helpers, and sibling paths (e.g., list vs. detail vs. mutation routes, backend vs. frontend callers).
+     - Data ownership (owned copies vs. referenced source artifacts) and established invariants (revisions, finalized immutability, legacy compatibility).
+     - Concurrency, partial-failure, interruption, and rollback/cleanup boundaries (`NOT_PUBLISHED` vs. `UNCERTAIN` vs. `PUBLISHED`).
+
+3. **Approval Gate (Required for High-Risk & Scope/Invariant Conflicts)**:
+   - **High-risk changes require explicit founder approval of the implementation plan before implementation begins**, even when no scope conflict is discovered. The implementation plan must identify intended changes, affected files and workflows, established invariants and data-preservation requirements, failure/recovery considerations, and proposed verification. Existing mandatory checkpoints (Section 3) remain in effect.
+   - For any risk level, if analysis reveals an invariant violation or shows that safe implementation requires modifying files or behaviors outside the authorized scope, **stop and request clarification or scope expansion** before editing.
+
+4. **Scoped Implementation**:
+   - Implement only within the authorized scope. Reuse shared helpers across sibling paths rather than duplicating logic that can diverge.
+
+5. **Risk-Appropriate Verification**:
+   - Risk-appropriate verification supplements, rather than replaces, the existing requirement in Stage 2 (Section 8) to run `./.venv/bin/pytest` successfully before committing.
+   - **Low-Risk**: Run targeted syntax/lint checks and relevant unit tests.
+   - **Medium-Risk**: Verify affected downstream/sibling workflows, negative/rejection cases, and relevant unit/API tests.
+   - **High-Risk**: Verify affected workflows end-to-end, negative/rejection cases, legacy compatibility, concurrency/locking, and relevant failure-injection/cleanup paths, alongside the full `./.venv/bin/pytest` suite before commit.
+
+6. **Developer Self-Audit (Before Declaring Ready)**:
+   - Review the diff against the pre-implementation impact report: check for descriptor leaks, unverified cleanup, `GET`/read side effects, missing precondition checks, and unintended edits outside scope.
+
+7. **Accurate Reporting**:
+   - Report exact commands executed and observed results, static inspection scope, remaining assumptions, and any untested or unverified conditions.
 
 ---
 
