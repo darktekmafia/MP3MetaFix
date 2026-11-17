@@ -4840,6 +4840,8 @@ class ProjectStorageManager:
         album_dir_fd: int,
         entry_id: str,
         entry_dict: Dict[str, Any],
+        *,
+        require_complete: bool = False,
     ) -> List[ArtifactRefRecord]:
         """Collect ArtifactRefRecord items for the current active audio and snapshot being superseded."""
         ehash = get_album_entry_dir_name(entry_id)
@@ -4871,16 +4873,36 @@ class ProjectStorageManager:
                     except FileNotFoundError:
                         continue
 
+            if require_complete and entry_dict.get("has_owned_audio") and not audio_name:
+                raise AlbumDurabilityUncertainError(
+                    f"Required audio artifact missing for Album entry '{entry_id}'."
+                )
+            if require_complete and gen_val is not None and not snap_name:
+                raise AlbumDurabilityUncertainError(
+                    f"Required snapshot artifact missing for Album entry '{entry_id}'."
+                )
+
             for role, fname in ((ArtifactRole.ENTRY_AUDIO, audio_name), (ArtifactRole.ENTRY_SNAPSHOT, snap_name)):
                 if not fname:
                     continue
                 try:
                     ffd = os.open(fname, file_flags, dir_fd=entry_fd)
-                except FileNotFoundError:
+                except FileNotFoundError as exc:
+                    if require_complete and (
+                        (role == ArtifactRole.ENTRY_AUDIO and (gen_val is not None or entry_dict.get("has_owned_audio")))
+                        or (role == ArtifactRole.ENTRY_SNAPSHOT and (gen_val is not None or entry_dict.get("snapshot") is not None))
+                    ):
+                        raise AlbumDurabilityUncertainError(
+                            f"Required retention artifact '{fname}' missing for Album entry '{entry_id}'."
+                        ) from exc
                     continue
                 try:
                     fst = os.fstat(ffd)
                     if not stat.S_ISREG(fst.st_mode):
+                        if require_complete:
+                            raise AlbumDurabilityUncertainError(
+                                f"Required retention artifact '{fname}' for Album entry '{entry_id}' is not a regular file."
+                            )
                         continue
                     h = hashlib.sha256()
                     total = 0
@@ -4905,8 +4927,11 @@ class ProjectStorageManager:
                         os.close(ffd)
                     except OSError:
                         pass
-        except OSError:
-            pass
+        except OSError as exc:
+            if require_complete:
+                raise AlbumDurabilityUncertainError(
+                    f"Failed to collect complete retention evidence for Album entry '{entry_id}': {exc}"
+                ) from exc
         finally:
             if entry_fd is not None:
                 try:
@@ -5130,7 +5155,7 @@ class ProjectStorageManager:
         entry_id: str,
         expected_revision: int,
     ) -> Optional[AlbumMetadata]:
-        """Remove an empty placeholder album entry (recorded/occupied entries are disabled in Phase 1A)."""
+        """Remove an entry from a draft album, retaining any album-owned audio and snapshots."""
         expected_revision = self._validate_expected_revision(expected_revision)
         try:
             self._get_album_dir_path(user_id, album_id)
@@ -5146,12 +5171,17 @@ class ProjectStorageManager:
                 loaded = self._read_album_from_dir_fd(album_id, album_dir_fd, protect_finalized=True, raw_out=raw_holder)
                 if not loaded:
                     return None
-                album, norm_data, _ = loaded
+                album, norm_data, manifest_st = loaded
+                evidence: Dict[str, Any] = {}
                 _, journal, consistency = self._validate_album_evidence_phase_a_locked(
-                    album_id, album_dir_fd, raw_album_data=raw_holder[0]
+                    album_id,
+                    album_dir_fd,
+                    raw_album_data=raw_holder[0],
+                    raw_album_identity=(manifest_st.st_dev, manifest_st.st_ino),
+                    evidence_out=evidence,
                 )
                 self._check_album_mutation_eligibility_phase_b_locked(
-                    album_id, journal, consistency, is_enrolled=False
+                    album_id, journal, consistency, is_enrolled=True
                 )
                 if self._is_album_finalized(album):
                     raise AlbumFinalizedError("Cannot remove entries from a finalized album.")
@@ -5170,21 +5200,70 @@ class ProjectStorageManager:
                     or target.snapshot is not None
                     or self._entry_has_filesystem_artifacts(user_id, album_id, entry_id)
                 )
-                if has_existing_recording:
-                    raise AlbumReplacementDisabledError(
-                        "Removing entries with recordings or existing artifacts is temporarily disabled in Phase 1A."
+
+                if journal is None and not has_existing_recording:
+                    remaining = [t.model_dump() for t in album.tracks if t.id != entry_id]
+                    return self._update_album_locked_with_fd(
+                        album_dir_fd=album_dir_fd,
+                        user_id=user_id,
+                        album_id=album_id,
+                        album=album,
+                        data=norm_data,
+                        updates={"tracks": remaining},
+                        change_summary=f"Removed album entry {entry_id}",
+                        allow_remove_entry_id=entry_id,
                     )
 
-                remaining = [t.model_dump() for t in album.tracks if t.id != entry_id]
-                return self._update_album_locked_with_fd(
-                    album_dir_fd=album_dir_fd,
-                    user_id=user_id,
+                superseded_refs = (
+                    self._collect_superseded_entry_refs_locked(
+                        album_dir_fd,
+                        entry_id,
+                        target.model_dump(),
+                        require_complete=True,
+                    )
+                    if has_existing_recording
+                    else []
+                )
+                tracks_list = [
+                    dict(t) if isinstance(t, dict) else t.model_dump()
+                    for t in (norm_data.get("tracks") or [])
+                    if (t.get("id") if isinstance(t, dict) else t.id) != entry_id
+                ]
+                for idx, t_item in enumerate(tracks_list):
+                    t_item["track_number"] = idx + 1
+
+                target_data = dict(norm_data)
+                new_rev = int(target_data.get("revision", 1)) + 1
+                revs = list(target_data.get("revisions") or [])
+                revs.append({
+                    "revision": new_rev,
+                    "timestamp": time.time(),
+                    "change_summary": f"Removed album entry {entry_id}",
+                    "changed_fields": ["tracks"],
+                })
+                target_data["tracks"] = tracks_list
+                target_data["track_ids"] = [t["track_id"] for t in tracks_list if t.get("track_id")]
+                target_data["revision"] = new_rev
+                target_data["revisions"] = revs
+                target_data["updated_at"] = time.time()
+
+                payload_sha256 = self._compute_update_album_payload_sha256(
+                    "remove_album_entry",
+                    expected_revision,
+                    {"entry_id": entry_id},
+                )
+
+                return self._execute_v2_album_tx_locked(
                     album_id=album_id,
-                    album=album,
-                    data=norm_data,
-                    updates={"tracks": remaining},
-                    change_summary=f"Removed album entry {entry_id}",
-                    allow_remove_entry_id=entry_id,
+                    album_dir_fd=album_dir_fd,
+                    evidence=evidence,
+                    target_data=target_data,
+                    op="remove_album_entry",
+                    expected_revision=expected_revision,
+                    payload_sha256=payload_sha256,
+                    idempotency_key=None,
+                    new_refs=[],
+                    superseded_refs=superseded_refs,
                 )
             finally:
                 try:
@@ -5979,6 +6058,12 @@ class ProjectStorageManager:
 
             if entries_fd is not None:
                 expected_dirs = {get_album_entry_dir_name(eid) for eid in manifest_entry_ids if eid}
+                committed_superseded_all: Dict[Tuple[str, str], ArtifactRefRecord] = {}
+                if journal is not None:
+                    for rcp in journal.tx_receipts:
+                        if rcp.outcome == JournalTxState.COMMITTED:
+                            for sref in rcp.superseded_refs:
+                                committed_superseded_all[(rcp.tx_id, sref.rel_path)] = sref
                 try:
                     entries_list = os.listdir(entries_fd)
                 except OSError as exc:
@@ -5992,13 +6077,99 @@ class ProjectStorageManager:
                         if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR):
                             raise AlbumManifestCorruptError(f"Unsafe entry directory '{iname}': {exc}") from exc
                         raise AlbumDurabilityUncertainError(f"Cannot stat entry directory '{iname}' during sealing: {exc}") from exc
-                    if not stat.S_ISDIR(ist.st_mode) or iname not in expected_dirs:
+                    if not stat.S_ISDIR(ist.st_mode):
                         errors.append({
                             "entry_id": None,
                             "track_number": None,
                             "track_id": None,
                             "reason": f"Album storage directory '{iname}' is inconsistent with the manifest.",
                         })
+                        continue
+                    if iname in expected_dirs:
+                        continue
+
+                    # Check if this directory belongs to a removed entry with authenticated retained artifacts
+                    rem_prefix = f"entries/{iname}/"
+                    rem_retained: Dict[str, Tuple[str, int, str]] = {}
+                    rem_valid = True
+                    if journal is not None and journal.retained_artifacts:
+                        for ret in journal.retained_artifacts:
+                            if not ret.rel_path.startswith(rem_prefix):
+                                continue
+                            if ret.kind not in (ArtifactRole.ENTRY_AUDIO.value, ArtifactRole.ENTRY_SNAPSHOT.value):
+                                rem_valid = False
+                                break
+                            rfname = ret.rel_path[len(rem_prefix):]
+                            sref = committed_superseded_all.get((ret.superseded_by_tx_id, ret.rel_path))
+                            if (
+                                not rfname
+                                or "/" in rfname
+                                or rfname.startswith((".staging_", ".tmp_", ".backup_"))
+                                or sref is None
+                                or sref.sha256 != ret.sha256
+                                or sref.role.value != ret.kind
+                                or sref.generation != ret.generation
+                            ):
+                                rem_valid = False
+                                break
+                            rem_retained[rfname] = (ret.sha256, int(sref.size_bytes), sref.entry_id or iname)
+                    if not rem_valid or not rem_retained:
+                        errors.append({
+                            "entry_id": None,
+                            "track_number": None,
+                            "track_id": None,
+                            "reason": f"Album storage directory '{iname}' is inconsistent with the manifest.",
+                        })
+                        continue
+
+                    rem_fd: Optional[int] = None
+                    try:
+                        rem_fd = os.open(iname, dir_flags, dir_fd=entries_fd)
+                        rem_st = os.fstat(rem_fd)
+                        rem_dir_id = (int(rem_st.st_dev), int(rem_st.st_ino))
+                        for cname in os.listdir(rem_fd):
+                            if cname.startswith((".staging_", ".tmp_", ".backup_")) or cname not in rem_retained:
+                                raise ValueError(f"Unexpected artifact '{cname}' in removed entry directory '{iname}'.")
+                        for rfname, (exp_sha, exp_size, rem_eid) in rem_retained.items():
+                            rfd = os.open(rfname, file_flags, dir_fd=rem_fd)
+                            try:
+                                pre_rst = os.fstat(rfd)
+                                if not stat.S_ISREG(pre_rst.st_mode) or int(pre_rst.st_size) != exp_size:
+                                    raise ValueError(f"Retained artifact '{rfname}' size mismatch in removed entry '{iname}'.")
+                                rh = hashlib.sha256()
+                                while True:
+                                    rchunk = os.read(rfd, 65536)
+                                    if not rchunk:
+                                        break
+                                    rh.update(rchunk)
+                                if rh.hexdigest() != exp_sha:
+                                    raise ValueError(f"Retained artifact '{rfname}' checksum mismatch in removed entry '{iname}'.")
+                                _fsync_file_fd(rfd)
+                                post_rst = os.fstat(rfd)
+                                dir_rst = os.lstat(rfname, dir_fd=rem_fd)
+                                pre_r_tup = self._seal_stat_tuple(pre_rst)
+                                if self._seal_stat_tuple(post_rst) != pre_r_tup or self._seal_stat_tuple(dir_rst) != pre_r_tup:
+                                    raise AlbumManifestCorruptError(
+                                        f"Retained artifact '{rfname}' changed during sealing in removed entry '{iname}'."
+                                    )
+                                sealed_retained_entries.append((rem_eid, iname, rem_dir_id, rfname, pre_r_tup, exp_sha))
+                            finally:
+                                os.close(rfd)
+                    except (AlbumDurabilityUncertainError, AlbumManifestCorruptError):
+                        raise
+                    except Exception as exc:
+                        errors.append({
+                            "entry_id": None,
+                            "track_number": None,
+                            "track_id": None,
+                            "reason": f"Removed entry directory '{iname}' failed retained artifact verification: {exc}",
+                        })
+                    finally:
+                        if rem_fd is not None:
+                            try:
+                                os.close(rem_fd)
+                            except OSError:
+                                pass
 
             if errors:
                 raise AlbumFinalizationError(

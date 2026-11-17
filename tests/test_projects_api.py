@@ -1570,7 +1570,7 @@ def test_album_entries_take_selection_streaming_and_isolation(client, auth_cooki
     assert dl_res.status_code == 200
     assert dl_res.content == wav_alt
 
-    # 5. Phase 1A blocks clearing or removing a recorded entry (409), while placeholder entry can still be removed (200)
+    # 5. Phase 1A blocks clearing a recorded entry (409), while placeholder and recorded entries can be removed (200)
     p_res = client.patch(
         f"/api/projects/albums/{album_id}/entries/{e_alt['id']}",
         json={"expected_revision": a3["revision"], "clear_take_to_placeholder": True},
@@ -1579,18 +1579,19 @@ def test_album_entries_take_selection_streaming_and_isolation(client, auth_cooki
     assert p_res.status_code == 409
     assert client.get(f"/api/projects/albums/{album_id}/entries/{e_alt['id']}/stream", cookies=auth_cookies).status_code == 200
 
-    d_rec_res = client.delete(
-        f"/api/projects/albums/{album_id}/entries/{e_alt['id']}?expected_revision={a3['revision']}",
-        cookies=auth_cookies,
-    )
-    assert d_rec_res.status_code == 409
-
     d_ph_res = client.delete(
         f"/api/projects/albums/{album_id}/entries/{e_placeholder['id']}?expected_revision={a3['revision']}",
         cookies=auth_cookies,
     )
     assert d_ph_res.status_code == 200
     assert len(d_ph_res.json()["tracks"]) == 2
+
+    d_rec_res = client.delete(
+        f"/api/projects/albums/{album_id}/entries/{e_alt['id']}?expected_revision={d_ph_res.json()['revision']}",
+        cookies=auth_cookies,
+    )
+    assert d_rec_res.status_code == 200
+    assert len(d_rec_res.json()["tracks"]) == 1
 
 
 def test_album_entries_cross_track_and_cross_tenant_rejected(client, setup_auth_environment, auth_cookies):
@@ -3779,10 +3780,9 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
     alb_dir = papi_mod.project_storage_manager._get_album_dir(user_id, alb["id"])
     journal_path = alb_dir / "journal.json"
 
-    def _call_3_unenrolled_routes(rev: int):
+    def _call_2_unenrolled_routes(rev: int):
         return [
             ("delete_album", client.delete(f"/api/projects/albums/{alb['id']}?expected_revision={rev}", cookies=auth_cookies)),
-            ("del_entry", client.delete(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}?expected_revision={rev}", cookies=auth_cookies)),
             ("artwork", client.post(f"/api/projects/albums/{alb['id']}/artwork", data={"expected_revision": str(rev)}, files={"file": ("cover.jpg", jpg_bytes, "image/jpeg")}, cookies=auth_cookies)),
         ]
 
@@ -3793,13 +3793,14 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
             ("add_entry", client.post(f"/api/projects/albums/{alb['id']}/entries", json={"track_id": trk["id"], "expected_revision": rev}, cookies=auth_cookies)),
             ("patch_entry", client.patch(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}", json={"custom_title": "Y", "expected_revision": rev}, cookies=auth_cookies)),
             ("refresh", client.post(f"/api/projects/albums/{alb['id']}/entries/{entry_rec['id']}/refresh", json={"expected_revision": rev, "expected_source_revision": 1, "expected_source_audio_sha256": entry_rec["snapshot"]["audio_sha256"], "expected_source_metadata_fingerprint": "a" * 64}, cookies=auth_cookies)),
-            *_call_3_unenrolled_routes(rev),
+            ("del_entry", client.delete(f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}?expected_revision={rev}", cookies=auth_cookies)),
+            *_call_2_unenrolled_routes(rev),
         ]
 
-    # 1. Idle v2 journal -> 409 mutation_not_enrolled on the 3 remaining unenrolled routes (and no reconciliation recommended)
+    # 1. Idle v2 journal -> 409 mutation_not_enrolled on the 2 remaining unenrolled routes (and no reconciliation recommended)
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb["id"])
     journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
-    for name, res in _call_3_unenrolled_routes(alb["revision"]):
+    for name, res in _call_2_unenrolled_routes(alb["revision"]):
         assert res.status_code == 409, f"{name} expected 409, got {res.status_code}: {res.text}"
         assert res.headers.get("X-Error-Code") == "mutation_not_enrolled"
         body = res.json()["detail"]
@@ -3885,8 +3886,10 @@ def test_phase1b_stage1_3b_2a1_api_route_error_mapping(client, auth_cookies, tmp
     journal_path.write_text(json.dumps(raw_j.model_dump(mode="json")), encoding="utf-8")
     raw_m_bytes = manifest_path.read_bytes()
     raw_j_bytes = journal_path.read_bytes()
-    raw_res = client.delete(
-        f"/api/projects/albums/{alb['id']}/entries/{entry_ph['id']}?expected_revision={persisted_data['revision']}",
+    raw_res = client.post(
+        f"/api/projects/albums/{alb['id']}/artwork",
+        data={"expected_revision": str(persisted_data["revision"])},
+        files={"file": ("cover.jpg", jpg_bytes, "image/jpeg")},
         cookies=auth_cookies,
     )
     assert raw_res.status_code == 409
@@ -4536,6 +4539,8 @@ def test_feature1_api_add_album_entry_v2_and_multi_take(client, auth_cookies):
 def test_feature2_api_and_ui_confirm_recording_replacement(client, auth_cookies):
     """Feature 2 API + UI: PATCH /entries/{id} replaces recording, retains prior generation, and UI cancel sends no PATCH."""
     import io
+    import os
+    from pathlib import Path
     import shutil
     import subprocess
     import wave
@@ -4707,3 +4712,211 @@ def test_feature3_api_refresh_finalize_and_stream(client, auth_cookies):
     assert r_fin.status_code == 200
     s_fin = client.get(f"/api/projects/albums/{alb['id']}/entries/{eid}/stream", cookies=auth_cookies)
     assert s_fin.status_code == 200 and s_fin.content == wav_2
+
+
+def test_feature4_api_and_ui_remove_album_entry(client, auth_cookies):
+    """Feature 4: DELETE /entries/{entry_id} on recorded draft entries, finalize, stream, 409 guards, and frontend confirmation."""
+    import io
+    import os
+    from pathlib import Path
+    import shutil
+    import subprocess
+    import wave
+
+    def _make_wav(marker: bytes) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(marker * 300)
+        return buf.getvalue()
+
+    wav_1 = _make_wav(b"\x41\x42")
+    wav_2 = _make_wav(b"\x43\x44")
+
+    trk = client.post("/api/projects/tracks", json={"title": "API F4 Track"}, cookies=auth_cookies).json()
+    tk1 = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        files={"file": ("t1.wav", wav_1, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+    tk2 = client.post(
+        f"/api/projects/tracks/{trk['id']}/takes",
+        files={"file": ("t2.wav", wav_2, "audio/wav")},
+        cookies=auth_cookies,
+    ).json()
+
+    alb = client.post("/api/projects/albums", json={"title": "API F4 Album"}, cookies=auth_cookies).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk1["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    alb = client.post(
+        f"/api/projects/albums/{alb['id']}/entries",
+        json={"track_id": trk["id"], "take_id": tk2["id"], "expected_revision": alb["revision"]},
+        cookies=auth_cookies,
+    ).json()
+    e1, e2 = alb["tracks"]
+
+    # Stale revision -> 409
+    r_stale = client.delete(
+        f"/api/projects/albums/{alb['id']}/entries/{e1['id']}?expected_revision={alb['revision'] - 1}",
+        cookies=auth_cookies,
+    )
+    assert r_stale.status_code == 409
+
+    # Remove recorded entry e1 -> 200, e2 remains, source Track & Takes untouched
+    r_del = client.delete(
+        f"/api/projects/albums/{alb['id']}/entries/{e1['id']}?expected_revision={alb['revision']}",
+        cookies=auth_cookies,
+    )
+    assert r_del.status_code == 200, r_del.text
+    alb_after = r_del.json()
+    assert [t["id"] for t in alb_after["tracks"]] == [e2["id"]]
+    assert alb_after["revision"] == alb["revision"] + 1
+    assert len(client.get(f"/api/projects/tracks/{trk['id']}", cookies=auth_cookies).json()["takes"]) == 2
+
+    # Finalize and stream remaining entry e2
+    r_fin = client.post(f"/api/projects/albums/{alb['id']}/finalize?expected_revision={alb_after['revision']}", cookies=auth_cookies)
+    assert r_fin.status_code == 200, r_fin.text
+    fin_alb = r_fin.json()
+    s_e2 = client.get(f"/api/projects/albums/{alb['id']}/entries/{e2['id']}/stream", cookies=auth_cookies)
+    assert s_e2.status_code == 200 and s_e2.content == wav_2
+
+    # Finalized Album rejects DELETE entry -> 409
+    r_fin_del = client.delete(
+        f"/api/projects/albums/{alb['id']}/entries/{e2['id']}?expected_revision={fin_alb['revision']}",
+        cookies=auth_cookies,
+    )
+    assert r_fin_del.status_code == 409
+
+    # Frontend check: ✕ remove button renders for recorded draft entries and confirm() gates DELETE
+    node_bin = shutil.which("node")
+    assert node_bin is not None
+    projects_js_path = Path(__file__).resolve().parent.parent / "frontend" / "js" / "projects.js"
+    js_script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const code = fs.readFileSync(process.env.TARGET_JS_PATH, 'utf8');
+
+const elements = {};
+function findAll(root, pred, out = []) {
+  for (const c of (root.children || [])) {
+    if (pred(c)) out.push(c);
+    findAll(c, pred, out);
+  }
+  return out;
+}
+function makeEl(id, tag = 'div') {
+  const listeners = {};
+  const classSet = new Set();
+  const el = {
+    id, tagName: tag.toUpperCase(), value: '', name: '', type: '', textContent: '', className: '',
+    title: '', checked: false, disabled: false, files: [], listeners, dataset: {}, style: {}, children: [], _innerHTML: '',
+    classList: {
+      add: (c) => classSet.add(c),
+      remove: (c) => classSet.delete(c),
+      contains: (c) => classSet.has(c),
+      toggle: (c, force) => { if (force === true) classSet.add(c); else if (force === false) classSet.delete(c); else if (classSet.has(c)) classSet.delete(c); else classSet.add(c); },
+    },
+    set innerHTML(val) { this._innerHTML = val; if (val === '' || (typeof val === 'string' && val.startsWith('<option'))) this.children = []; },
+    get innerHTML() { return this._innerHTML; },
+    addEventListener: (ev, fn) => { if (!listeners[ev]) listeners[ev] = []; listeners[ev].push(fn); },
+    dispatchEvent: async (ev) => { if (!ev.target) ev.target = el; for (const fn of (listeners[ev.type] || [])) await fn(ev); },
+    setAttribute: () => {},
+    appendChild: (child) => { el.children.push(child); return child; },
+    querySelector: () => null,
+    querySelectorAll: (sel) => findAll(el, c => sel === 'button' ? c.tagName === 'BUTTON' : false),
+    reset: () => {},
+    remove: () => {},
+  };
+  return el;
+}
+function getEl(id) {
+  if (!elements[id]) elements[id] = makeEl(id);
+  return elements[id];
+}
+
+const docListeners = {};
+const mutationCalls = [];
+let confirmResult = false;
+const albumObj = {
+  id: 'alb_f4',
+  title: 'F4 Album',
+  status: 'draft',
+  is_finalized: false,
+  revision: 2,
+  tracks: [{
+    id: 'ale_rec_1',
+    track_id: 'trk_1',
+    take_id: 'tak_1',
+    has_owned_audio: true,
+    is_placeholder: false,
+    track_number: 1,
+    snapshot: { source_track_title: 'Recorded Song' },
+  }],
+};
+
+const context = {
+  console, Date, Math, JSON, Set, Map, Promise, URLSearchParams, encodeURIComponent, decodeURIComponent, setTimeout, clearTimeout,
+  document: {
+    getElementById: getEl,
+    createElement: (tag) => makeEl('', tag),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: (ev, fn) => { if (!docListeners[ev]) docListeners[ev] = []; docListeners[ev].push(fn); },
+    body: makeEl('body', 'body'),
+  },
+  window: { location: { pathname: '/projects', search: '' }, addEventListener: () => {} },
+  confirm: () => confirmResult,
+  alert: () => {},
+  fetch: async (url, opts) => {
+    if (opts && (opts.method === 'POST' || opts.method === 'PATCH' || opts.method === 'DELETE')) {
+      mutationCalls.push({ url, method: opts.method });
+    }
+    if (url === '/api/projects/tracks') return { ok: true, status: 200, json: async () => [] };
+    if (url === '/api/projects/albums') return { ok: true, status: 200, json: async () => [albumObj] };
+    if (url === '/api/projects/albums/alb_f4') return { ok: true, status: 200, json: async () => albumObj };
+    if (url === '/api/storage/quota') return { ok: true, status: 200, json: async () => ({ used_bytes: 0, limit_bytes: 1000, usage_percent: 0 }) };
+    if (opts && opts.method === 'DELETE') return { ok: true, status: 200, json: async () => ({ ...albumObj, revision: 3, tracks: [] }) };
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+};
+context.window.window = context.window;
+
+vm.runInNewContext(code, context);
+(docListeners['DOMContentLoaded'] || []).forEach(fn => fn());
+
+(async () => {
+  await new Promise(r => setTimeout(r, 20));
+  const cards = getEl('albumsGridContainer').children;
+  await cards[0].querySelectorAll('button')[0].listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+
+  const rowBtns = getEl('albumSequencerTbody').children[0].querySelectorAll('button');
+  const btnRemove = rowBtns.find(b => b.textContent === '✕' && b.title === 'Remove from Album');
+  if (!btnRemove) throw new Error('Expected remove button (✕) for recorded entry on draft Album');
+
+  confirmResult = false;
+  await btnRemove.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  if (mutationCalls.length !== 0) throw new Error('Expected 0 DELETE calls when confirm() canceled');
+
+  confirmResult = true;
+  await btnRemove.listeners['click'][0]();
+  await new Promise(r => setTimeout(r, 20));
+  const delCalls = mutationCalls.filter(c => c.method === 'DELETE' && c.url.includes('/entries/ale_rec_1'));
+  if (delCalls.length !== 1) throw new Error('Expected 1 DELETE call when confirm() accepted');
+  console.log('UI_CHECK_OK');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    env = os.environ.copy()
+    env["TARGET_JS_PATH"] = str(projects_js_path)
+    proc = subprocess.run([node_bin, "-e", js_script], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, f"node failed: {proc.stderr}\n{proc.stdout}"
+    assert "UI_CHECK_OK" in proc.stdout

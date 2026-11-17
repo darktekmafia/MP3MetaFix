@@ -818,15 +818,11 @@ def test_album_owned_audio_independence_multi_entry_and_identity(custom_storage)
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, e2.id).read_bytes() == wav_2
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id).read_bytes() == wav_2
 
-    # Phase 1A blocks clearing or removing a recorded entry, preserving e3's owned audio
+    # Phase 1A blocks clearing a recorded entry to placeholder, preserving e3's owned audio
     with pytest.raises(AlbumReplacementDisabledError):
         custom_storage.update_album_entry(
             user_id, album.id, e3.id, expected_revision=album.revision, clear_take_to_placeholder=True
         )
-    assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id).read_bytes() == wav_2
-
-    with pytest.raises(AlbumReplacementDisabledError):
-        custom_storage.remove_album_entry(user_id, album.id, e3.id, expected_revision=album.revision)
     assert custom_storage.get_album_entry_audio_path(user_id, album.id, e3.id).read_bytes() == wav_2
 
     # Placeholder entries can still be added and removed cleanly without affecting e1/e2/e3
@@ -1146,8 +1142,9 @@ def test_album_finalization_validation_locking_and_completion(custom_storage):
         custom_storage.confirm_album_entry_refresh(
             user_id, album.id, r_id, 1, "sha", expected_revision=finalized.revision, expected_source_metadata_fingerprint="a" * 64
         )
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.remove_album_entry(user_id, album.id, r_id, expected_revision=finalized.revision)
     for unenrolled_call in (
-        lambda: custom_storage.remove_album_entry(user_id, album.id, r_id, expected_revision=finalized.revision),
         lambda: custom_storage.save_album_cover(user_id, album.id, b"\xff\xd8\xff\xe0", expected_revision=finalized.revision, extension=".jpg"),
         lambda: custom_storage.delete_album(user_id, album.id, expected_revision=finalized.revision),
     ):
@@ -5053,8 +5050,7 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         lambda *_a, **_kw: reconcile_calls.__setitem__("n", reconcile_calls["n"] + 1),
     )
 
-    def _run_3_unenrolled_writers(rev: int):
-        yield lambda: custom_storage.remove_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev)
+    def _run_2_unenrolled_writers(rev: int):
         yield lambda: custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=rev, extension=".jpg")
         yield lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=rev)
 
@@ -5064,9 +5060,10 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         yield lambda: custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=rev, take_id=None)
         yield lambda: custom_storage.update_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev, custom_title="X")
         yield lambda: custom_storage.confirm_album_entry_refresh(user_id, alb.id, entry_rec.id, 1, "a" * 64, expected_revision=rev, expected_source_metadata_fingerprint="a" * 64)
-        yield from _run_3_unenrolled_writers(rev)
+        yield lambda: custom_storage.remove_album_entry(user_id, alb.id, entry_ph.id, expected_revision=rev)
+        yield from _run_2_unenrolled_writers(rev)
 
-    # 2. Idle v2 Album -> AlbumMutationNotEnrolledError on all 6 unenrolled writers, zero writes, guarded once
+    # 2. Idle v2 Album -> AlbumMutationNotEnrolledError on all 2 unenrolled writers, zero writes, guarded once
     idle_v2 = AlbumJournal(schema_version=2, protocol=JournalProtocol.ENFORCED_V2, album_id=alb.id)
     journal_path.write_text(json.dumps(idle_v2.model_dump(mode="json")), encoding="utf-8")
     raw_m = manifest_path.read_bytes()
@@ -5080,7 +5077,7 @@ def test_phase1b_stage1_3b_2a1_mutation_guards_and_precedence(custom_storage: Pr
         return orig_phase_a(self_mgr, *args, **kwargs)
 
     monkeypatch.setattr(ProjectStorageManager, "_validate_album_evidence_phase_a_locked", _counted_phase_a)
-    for op_fn in _run_3_unenrolled_writers(alb.revision):
+    for op_fn in _run_2_unenrolled_writers(alb.revision):
         phase_a_calls["n"] = 0
         with pytest.raises(AlbumMutationNotEnrolledError):
             op_fn()
@@ -5260,7 +5257,7 @@ def test_phase1b_stage1_3b_2a1_raw_manifest_evidence_and_precedence(custom_stora
     monkeypatch.setattr(ps_mod.os, "open", lambda *a, **kw: (fd := orig_open(*a, **kw), live_fds.add(fd), fd)[2])
     monkeypatch.setattr(ps_mod.os, "close", lambda fd: (live_fds.discard(fd), orig_close(fd))[1])
     with pytest.raises(AlbumMutationNotEnrolledError):
-        custom_storage.remove_album_entry(user_id, alb.id, entry.id, expected_revision=alb.revision)
+        custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=alb.revision, extension=".jpg")
     assert live_fds == set()
     monkeypatch.setattr(ps_mod.os, "open", orig_open)
     monkeypatch.setattr(ps_mod.os, "close", orig_close)
@@ -6620,9 +6617,8 @@ def test_phase1b_stage1_3b_2b1a_generation_readers_provenance_and_snapshot_matri
     assert reconcile_calls["n"] == 0
     assert manifest_path.read_bytes() == good_m4_bytes and journal_path.read_bytes() == good_j4_bytes
 
-    # All 3 remaining unenrolled writers remain blocked
+    # All 2 remaining unenrolled writers remain blocked
     for blocked in (
-        lambda: custom_storage.remove_album_entry(user_id, alb.id, eid, expected_revision=4),
         lambda: custom_storage.save_album_cover(user_id, alb.id, b"\xff\xd8\xff\xe0", expected_revision=4, extension=".jpg"),
         lambda: custom_storage.delete_album(user_id, alb.id, expected_revision=4),
     ):
@@ -7783,3 +7779,225 @@ def test_feature3_mandatory_fingerprint_rejects_omission_and_none(custom_storage
     assert (alb_dir / "album.json").read_bytes() == before_m
     assert not (alb_dir / "journal.json").exists()
     assert custom_storage.get_album(user_id, alb.id).tracks[0].snapshot.source_track_title == "Title A"
+
+
+def test_feature4_remove_album_entry_and_retention(custom_storage: ProjectStorageManager, monkeypatch):
+    """Feature 4: remove_album_entry on journal-less & v2-journaled draft Albums, retention, finalization, and error guards."""
+    import io
+    import json
+    import wave
+    from backend.project_storage import (
+        AlbumDurabilityUncertainError,
+        AlbumFinalizedError,
+        AlbumRevisionConflictError,
+    )
+
+    def _make_wav(marker: bytes) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(marker * 300)
+        return buf.getvalue()
+
+    wav_a = _make_wav(b"\x11\x12")
+    wav_b = _make_wav(b"\x21\x22")
+    wav_c = _make_wav(b"\x31\x32")
+
+    user_id = "u_feature4_remove"
+    trk = custom_storage.create_track(user_id=user_id, title="F4 Track")
+    tk_a = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_a, original_filename="a.wav", extension=".wav")
+    tk_b = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_b, original_filename="b.wav", extension=".wav")
+
+    # 1. Journal-less draft Album with two entries from same Track/Take (e1, e2) and a third entry (e3)
+    alb = custom_storage.create_album(user_id=user_id, title="F4 Album")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk_a.id)
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk_a.id)
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk_b.id)
+    e1, e2, e3 = alb.tracks
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    e1_audio_path = custom_storage.get_album_entry_audio_path(user_id, alb.id, e1.id)
+    e1_snap_path = e1_audio_path.parent / "snapshot.json"
+    assert e1_audio_path.read_bytes() == wav_a
+
+    # Stale expected_revision rejected
+    with pytest.raises(AlbumRevisionConflictError):
+        custom_storage.remove_album_entry(user_id, alb.id, e1.id, expected_revision=alb.revision - 1)
+
+    # Remove e1 from journal-less Album
+    rev_before = alb.revision
+    alb = custom_storage.remove_album_entry(user_id, alb.id, e1.id, expected_revision=alb.revision)
+    assert alb.revision == rev_before + 1
+    assert [t.id for t in alb.tracks] == [e2.id, e3.id]
+    assert [t.track_number for t in alb.tracks] == [1, 2]
+    assert e1_audio_path.read_bytes() == wav_a
+    assert e1_snap_path.exists()
+    # Source Track and Take untouched
+    assert custom_storage.get_track(user_id, trk.id).title == "F4 Track"
+    assert len(custom_storage.list_takes(user_id, trk.id)) == 2
+
+    # 2. Replace e2 and refresh e2, then remove e2 on v2-journaled Album -> all generations retained
+    alb = custom_storage.update_album_entry(user_id, alb.id, e2.id, expected_revision=alb.revision, take_id=tk_b.id)
+    custom_storage.update_take_audio(user_id, trk.id, tk_b.id, wav_c, extension=".wav")
+    prev = custom_storage.preview_album_entry_refresh(user_id, alb.id, e2.id)
+    alb = custom_storage.confirm_album_entry_refresh(
+        user_id,
+        alb.id,
+        e2.id,
+        expected_source_revision=prev.expected_source_revision,
+        expected_source_audio_sha256=prev.expected_source_audio_sha256,
+        expected_source_updated_at=prev.expected_source_updated_at,
+        expected_revision=alb.revision,
+        expected_source_metadata_fingerprint=custom_storage.compute_refresh_source_metadata_fingerprint(prev.source_snapshot),
+    )
+    e2_dir = custom_storage.get_album_entry_audio_path(user_id, alb.id, e2.id).parent
+    e2_audio_files = sorted(p for p in e2_dir.iterdir() if p.name.startswith("audio") and p.suffix == ".wav")
+    assert len(e2_audio_files) == 3
+
+    alb = custom_storage.remove_album_entry(user_id, alb.id, e2.id, expected_revision=alb.revision)
+    assert [t.id for t in alb.tracks] == [e3.id]
+    assert [t.track_number for t in alb.tracks] == [1]
+    assert all(p.exists() for p in e2_audio_files)
+
+    journal_data = json.loads((alb_dir / "journal.json").read_text(encoding="utf-8"))
+    retained_paths = {r["rel_path"] for r in journal_data.get("retained_artifacts", [])}
+    for p in e2_audio_files:
+        assert any(p.name in rp for rp in retained_paths)
+
+    # 3. Finalize Album with retained removed-entry directories and stream remaining active entry e3
+    fin = custom_storage.finalize_album(user_id, alb.id, expected_revision=alb.revision)
+    assert fin.is_finalized is True
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, e3.id).read_bytes() == wav_b
+    with pytest.raises(AlbumFinalizedError):
+        custom_storage.remove_album_entry(user_id, alb.id, e3.id, expected_revision=fin.revision)
+
+    # 4. Removing last entry on a draft Album leaves empty draft; failed tx preserves entry & bytes
+    alb2 = custom_storage.create_album(user_id=user_id, title="F4 Empty & Uncertainty")
+    alb2 = custom_storage.add_album_entry(user_id, alb2.id, trk.id, expected_revision=alb2.revision, take_id=tk_a.id)
+    last_id = alb2.tracks[0].id
+    last_audio = custom_storage.get_album_entry_audio_path(user_id, alb2.id, last_id)
+
+    orig_write_j = custom_storage._write_album_journal_atomic_in_dir
+    calls = {"n": 0}
+
+    def _fail_on_journal_publish(album_dir_fd, journal):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise OSError("simulated journal publish failure")
+        return orig_write_j(album_dir_fd, journal)
+
+    monkeypatch.setattr(custom_storage, "_write_album_journal_atomic_in_dir", _fail_on_journal_publish)
+    with pytest.raises(OSError):
+        custom_storage.remove_album_entry(user_id, alb2.id, last_id, expected_revision=alb2.revision)
+    monkeypatch.undo()
+    assert calls["n"] >= 2
+    assert last_audio.read_bytes() == wav_a
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.remove_album_entry(user_id, alb2.id, last_id, expected_revision=alb2.revision)
+    assert last_audio.read_bytes() == wav_a
+
+    # Fresh draft Album: removing last entry leaves empty draft
+    alb3 = custom_storage.create_album(user_id=user_id, title="F4 Last Entry")
+    alb3 = custom_storage.add_album_entry(user_id, alb3.id, trk.id, expected_revision=alb3.revision, take_id=tk_a.id)
+    alb3 = custom_storage.remove_album_entry(user_id, alb3.id, alb3.tracks[0].id, expected_revision=alb3.revision)
+    assert alb3.tracks == []
+    assert alb3.is_finalized is False
+
+
+def test_feature4_remove_album_entry_eio_prevents_incomplete_retention(custom_storage: ProjectStorageManager, monkeypatch):
+    """Feature 4 blocker regression: EIO during retention artifact read aborts removal before publication and allows clean retry."""
+    import errno
+    import io
+    import json
+    import wave
+    import backend.project_storage as ps_mod
+    from backend.project_storage import AlbumDurabilityUncertainError
+
+    def _make_wav(marker: bytes) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(marker * 300)
+        return buf.getvalue()
+
+    wav_1 = _make_wav(b"\x51\x52")
+    wav_2 = _make_wav(b"\x61\x62")
+
+    user_id = "u_feature4_eio"
+    trk = custom_storage.create_track(user_id=user_id, title="F4 EIO Track")
+    tk1 = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_1, original_filename="1.wav", extension=".wav")
+    tk2 = custom_storage.create_take(user_id=user_id, track_id=trk.id, audio_bytes=wav_2, original_filename="2.wav", extension=".wav")
+
+    # 1. Draft Album with two recorded entries
+    alb = custom_storage.create_album(user_id=user_id, title="F4 EIO Album")
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk1.id)
+    alb = custom_storage.add_album_entry(user_id, alb.id, trk.id, expected_revision=alb.revision, take_id=tk2.id)
+    e1, e2 = alb.tracks
+
+    alb_dir = custom_storage._get_album_dir(user_id, alb.id)
+    manifest_path = alb_dir / "album.json"
+    journal_path = alb_dir / "journal.json"
+    manifest_before = manifest_path.read_bytes()
+    assert not journal_path.exists()
+
+    e1_audio_path = custom_storage.get_album_entry_audio_path(user_id, alb.id, e1.id)
+    e1_snap_path = e1_audio_path.parent / "snapshot.json"
+    e2_audio_path = custom_storage.get_album_entry_audio_path(user_id, alb.id, e2.id)
+    e2_snap_path = e2_audio_path.parent / "snapshot.json"
+    e1_snap_before = e1_snap_path.read_bytes()
+    e2_snap_before = e2_snap_path.read_bytes()
+    e1_audio_ino = e1_audio_path.stat().st_ino
+
+    # 2. Inject os.read(EIO) specifically when reading e1's audio artifact during retention collection
+    orig_read = os.read
+    eio_hits = {"n": 0}
+
+    def _fail_eio_on_target_artifact(fd: int, n: int) -> bytes:
+        try:
+            if os.fstat(fd).st_ino == e1_audio_ino:
+                eio_hits["n"] += 1
+                raise OSError(errno.EIO, "Simulated I/O error reading retention artifact")
+        except OSError as exc:
+            if exc.errno == errno.EIO:
+                raise
+        return orig_read(fd, n)
+
+    monkeypatch.setattr(ps_mod.os, "read", _fail_eio_on_target_artifact)
+
+    # 3-4. Attempt removal -> AlbumDurabilityUncertainError, and confirm the injection hit e1's artifact read
+    with pytest.raises(AlbumDurabilityUncertainError):
+        custom_storage.remove_album_entry(user_id, alb.id, e1.id, expected_revision=alb.revision)
+    assert eio_hits["n"] == 1
+
+    # 5-8. Unchanged revision, manifest, journal evidence, visible entries, and artifact bytes
+    assert manifest_path.read_bytes() == manifest_before
+    assert not journal_path.exists()
+    reloaded = custom_storage.get_album(user_id, alb.id)
+    assert reloaded.revision == alb.revision
+    assert [t.id for t in reloaded.tracks] == [e1.id, e2.id]
+    assert e1_audio_path.read_bytes() == wav_1
+    assert e1_snap_path.read_bytes() == e1_snap_before
+    assert e2_audio_path.read_bytes() == wav_2
+    assert e2_snap_path.read_bytes() == e2_snap_before
+
+    # 9-10. Remove fault injection and retry removal successfully
+    monkeypatch.undo()
+    after_remove = custom_storage.remove_album_entry(user_id, alb.id, e1.id, expected_revision=alb.revision)
+    assert after_remove.revision == alb.revision + 1
+    assert [t.id for t in after_remove.tracks] == [e2.id]
+
+    # 11-12. Finalize Album with surviving entry, verify only e2 is playable, and e1's retained artifacts are authenticated
+    finalized = custom_storage.finalize_album(user_id, alb.id, expected_revision=after_remove.revision)
+    assert finalized.is_finalized is True
+    assert custom_storage.get_album_entry_audio_path(user_id, alb.id, e2.id).read_bytes() == wav_2
+    assert custom_storage.open_album_entry_audio_for_read(user_id, alb.id, e1.id) is None
+
+    journal_data = json.loads(journal_path.read_text(encoding="utf-8"))
+    retained_paths = {r["rel_path"] for r in journal_data.get("retained_artifacts", [])}
+    assert any(p.endswith(e1_audio_path.name) for p in retained_paths)
+    assert any(p.endswith("snapshot.json") for p in retained_paths)
+    assert e1_audio_path.read_bytes() == wav_1
+    assert e1_snap_path.read_bytes() == e1_snap_before

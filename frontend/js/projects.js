@@ -1037,16 +1037,13 @@
           actionGroup.appendChild(btnDown);
         }
 
-        const isEntryRecorded = !entry.is_placeholder || entry.has_owned_audio || entry.take_id;
-        if (!isEntryRecorded) {
-          const btnRemove = document.createElement('button');
-          btnRemove.type = 'button';
-          btnRemove.className = 'btn btn-ghost btn-xs text-danger';
-          btnRemove.title = 'Remove from Album';
-          btnRemove.textContent = '✕';
-          btnRemove.addEventListener('click', () => removeAlbumTrack(entry));
-          actionGroup.appendChild(btnRemove);
-        }
+        const btnRemove = document.createElement('button');
+        btnRemove.type = 'button';
+        btnRemove.className = 'btn btn-ghost btn-xs text-danger';
+        btnRemove.title = 'Remove from Album';
+        btnRemove.textContent = '✕';
+        btnRemove.addEventListener('click', () => removeAlbumTrack(entry));
+        actionGroup.appendChild(btnRemove);
       }
 
       if (entry.has_owned_audio && entry.id) {
@@ -1088,6 +1085,15 @@
   async function removeAlbumTrack(entry) {
     if (!state.activeAlbum || !entry || !entry.id) return;
     if (state.activeAlbum.is_finalized || state.activeAlbum.status === 'completed') return;
+    if (
+      !confirm(
+        'Remove this entry from the Album?\n\n' +
+        '• Only this Album entry will be removed.\n' +
+        '• Source Track and Take files will not be deleted.'
+      )
+    ) {
+      return;
+    }
     const albumId = state.activeAlbum.id;
     const expectedRevision = encodeURIComponent(state.activeAlbum.revision || 1);
     try {
